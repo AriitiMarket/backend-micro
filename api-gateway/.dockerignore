@@ -1,0 +1,21 @@
+# Build-context hygiene (mirrors the repository root .dockerignore).
+#
+# Without this, `COPY . .` bakes the developer's node_modules AND the local
+# `.env` into the image. A baked `.env` is not just a secret leak: it adds
+# INTERNAL_SERVICE_TOKEN (the legacy shared cluster credential) to the container
+# environment, which would re-enable the shared-credential fallback and silently
+# bypass the per-service INTERNAL_SERVICE_TOKENS map that docker-compose injects
+# at runtime. Configuration must come from the orchestrator, never from the image.
+node_modules
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+README.md
+*.md
+coverage
+.nyc_output
+dist
+build
