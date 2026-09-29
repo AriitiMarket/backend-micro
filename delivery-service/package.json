@@ -1,0 +1,19 @@
+{
+  "name": "delivery-service",
+  "version": "2.0.0",
+  "description": "Aritii Market Delivery Service — modular MVP with GeoJSON-ready architecture",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "seed": "node src/seed/seed.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.0"
+  }
+}
