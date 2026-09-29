@@ -1,0 +1,17 @@
+# Build-context hygiene for the identity image (mirrors the repository root
+# .dockerignore). Without this, `COPY . .` bakes the developer's node_modules and
+# local .env (DATABASE_URL=...@localhost) into the image, where they can shadow
+# the values docker-compose injects at runtime.
+node_modules
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+README.md
+*.md
+coverage
+.nyc_output
+dist
+build

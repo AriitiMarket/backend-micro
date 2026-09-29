@@ -1,0 +1,63 @@
+# Identity Service (Express + PostgreSQL + Multer + Cloudinary)
+# https://github.com/gitignore/blob/main/node.gitignore
+
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Build outputs ---
+dist/
+build/
+.cache/
+
+# --- Environment & secrets ---
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+.env.staging
+.env.staging.local
+
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# --- Uploads & generated media ---
+uploads/
+public/uploads/
+media/
+assets/uploads/
+
+# --- OS & editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+
+# --- Testing & coverage ---
+coverage/
+.nyc_output/
+.pytest_cache/
+.eslintcache
+
+# --- Database ---
+*.db
+*.sqlite
+*.sqlite3
+dump/
+
+# --- Misc ---
+*.pem
+*.key
+secret*
+*secret*
