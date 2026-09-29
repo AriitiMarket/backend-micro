@@ -1,0 +1,261 @@
+# Aritii Market — local/deployment composition.
+#
+# Security posture:
+#   * Only the API Gateway publishes a port. Identity, Commerce and Delivery are
+#     reachable exclusively on the private bridge network, so the gateway's
+#     authentication/authorization cannot be bypassed.
+#   * Service-to-service traffic is authenticated with PER-CALLER credentials
+#     (INTERNAL_SERVICE_TOKENS), never the JWT signing key. A service only ever
+#     sends its own secret, so a leaked credential cannot be used to impersonate
+#     another service, and internal credentials are never committed: they are
+#     read from the git-ignored `./.env` next to this file (see .env.example).
+#   * No cookies are used anywhere: the platform is Bearer-token based
+#     (OAuth 2.1 authorization code + PKCE S256).
+#
+# Hardening note: `security_opt: [no-new-privileges:true]` was trialled on every
+# service and had to be removed — in this Docker runtime it makes the images'
+# entrypoints fail with "exec /usr/local/bin/docker-entrypoint.sh: operation not
+# permitted" and the containers restart forever. Enable it in a production
+# orchestrator (where the runtime supports it) and re-verify the healthchecks
+# there rather than shipping a compose file that cannot come up.
+#
+# Service discovery: every peer URL comes from the environment, so the same
+# images run in local Docker, CI, staging and cloud without a source change.
+#   docker compose up            # uses ./.env (copy .env.example)
+#
+# Health model:
+#   * /health/live  — is the process up?  (what a restart policy should watch)
+#   * /health/ready — can it serve traffic (database reachable)? What Compose
+#                     and the gateway watch before routing traffic here.
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aritii_identity
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aritii_identity"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      # initdb and crash recovery can exceed the retry budget on a cold PC.
+      start_period: 30s
+      start_interval: 5s
+    restart: unless-stopped
+    networks:
+      - aritii-network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mongo:
+    image: mongo:7
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+      start_interval: 5s
+    restart: unless-stopped
+    networks:
+      - aritii-network
+    volumes:
+      - mongo_data:/data/db
+
+  identity:
+    build:
+      context: ./identity-service
+      dockerfile: Dockerfile
+    # No published port on purpose — only the gateway may reach this service.
+    expose:
+      - "8001"
+    environment:
+      PORT: 8001
+      NODE_ENV: development
+      # `pg` does not read libpq's `connect_timeout` / `connection_limit` query
+      # params — they used to be silently dropped, leaving the pool on a
+      # hard-coded 5s socket timeout that a cold boot easily exceeds. The knobs
+      # below are the ones src/config/env.js and src/config/database.js honour.
+      DATABASE_URL: ${IDENTITY_DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/aritii_identity}
+      DB_CONNECT_TIMEOUT_MS: 30000
+      DB_POOL_MAX: 5
+      DB_IDLE_TIMEOUT_MS: 30000
+      DB_QUERY_TIMEOUT_MS: 30000
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: 30000
+      DB_CONNECT_RETRY_DELAY_MS: 3000
+      DB_CONNECT_RETRY_MAX_DELAY_MS: 15000
+      DB_CONNECT_NOTICE_ATTEMPTS: 10
+      # OAuth 2.1 / OIDC
+      ACCESS_TOKEN_EXPIRES_IN: 10m
+      ACCESS_TOKEN_EXPIRES_IN_SEC: 600
+      AUTH_CODE_EXPIRES_IN_SEC: 300
+      REFRESH_TOKEN_EXPIRES_IN_DAYS: 30
+      ISSUER: aritii-identity
+      AUDIENCE: aritii-market
+      OAUTH_CLIENTS: aritii-eshop,aritii-admin-web
+      # ── Service topology & cluster credentials ────────────────────────────
+      # Identity makes no outbound service calls, so it needs no peer URLs — only
+      # its own name and the credential map it validates inbound requests with.
+      INTERNAL_SERVICE_NAME: identity
+      INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set — copy .env.example to .env}'
+      CORS_ORIGIN: "http://localhost:8000"
+    healthcheck:
+      # Readiness: PostgreSQL and the Express app must both be up, else the
+      # gateway could route traffic to an instance that only answers 503.
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:8001/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      # Cold-boot budget. Before this change the container was declared unhealthy
+      # after ~3 min (start_period 60s + 12 * 10s) while a cold PC may legitimately
+      # need longer, which aborted `docker compose up` with
+      # "dependency failed to start: container aritii-market-identity-1 is unhealthy".
+      # Worst case is now start_period + retries * interval ≈ 7 min, and the
+      # service still flips to healthy on the first passing probe.
+      retries: 30
+      start_period: 120s
+      start_interval: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      aritii-network:
+        # Stable, environment-independent alias: `http://identity:8001` resolves
+        # here exactly as it does in CI and in the cloud.
+        aliases:
+          - identity.internal
+
+  commerce-service:
+    build:
+      context: ./commerce-service
+      dockerfile: Dockerfile
+    expose:
+      - "8002"
+    environment:
+      PORT: 8002
+      NODE_ENV: development
+      MONGODB_URI: ${COMMERCE_DATABASE_URL:-mongodb://mongo:27017/ariti_commerce}
+      # ── Service topology ──────────────────────────────────────────────────
+      # Peer addresses are configuration, never source: the same image runs in
+      # CI (compose network) and in the cloud (private endpoints) unchanged.
+      INTERNAL_SERVICE_NAME: commerce
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity:8001}
+      DELIVERY_SERVICE_URL: ${DELIVERY_SERVICE_URL:-http://delivery-service:8003}
+      GATEWAY_URL: ${GATEWAY_URL:-http://api-gateway:8000}
+      INTERNAL_CALL_TIMEOUT_MS: ${INTERNAL_CALL_TIMEOUT_MS:-5000}
+      # Per-caller cluster credentials (never the JWT signing key).
+      INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set — copy .env.example to .env}'
+      CORS_ORIGIN: "http://localhost:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:8002/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      mongo:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+      identity:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      aritii-network:
+        aliases:
+          - commerce
+
+  delivery-service:
+    build:
+      context: ./delivery-service
+      dockerfile: Dockerfile
+    expose:
+      - "8003"
+    environment:
+      PORT: 8003
+      NODE_ENV: development
+      MONGODB_URI: ${DELIVERY_DATABASE_URL:-mongodb://mongo:27017/ariti_delivery}
+      # ── Service topology ──────────────────────────────────────────────────
+      INTERNAL_SERVICE_NAME: delivery
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity:8001}
+      COMMERCE_SERVICE_URL: ${COMMERCE_SERVICE_URL:-http://commerce-service:8002}
+      GATEWAY_URL: ${GATEWAY_URL:-http://api-gateway:8000}
+      INTERNAL_CALL_TIMEOUT_MS: ${INTERNAL_CALL_TIMEOUT_MS:-5000}
+      INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set — copy .env.example to .env}'
+      CORS_ORIGIN: "http://localhost:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:8003/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      mongo:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+      identity:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      aritii-network:
+        aliases:
+          - delivery
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    # The only public entry point.
+    ports:
+      - "${API_GATEWAY_PORT:-8000}:8000"
+    environment:
+      PORT: 8000
+      NODE_ENV: development
+      # ── Service topology ──────────────────────────────────────────────────
+      # Every upstream is resolved from these three variables. Changing an
+      # environment (local Docker → CI → staging → cloud) changes only values.
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity:8001}
+      COMMERCE_SERVICE_URL: ${COMMERCE_SERVICE_URL:-http://commerce-service:8002}
+      DELIVERY_SERVICE_URL: ${DELIVERY_SERVICE_URL:-http://delivery-service:8003}
+      INTERNAL_SERVICE_NAME: gateway
+      # The gateway signs every downstream request with its OWN credential and
+      # drops any client-supplied x-internal-service, so a client can never
+      # impersonate another service or assert a user identity.
+      INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set — copy .env.example to .env}'
+      GATEWAY_HEALTH_TIMEOUT_MS: ${GATEWAY_HEALTH_TIMEOUT_MS:-3000}
+      CORS_ORIGIN: "http://localhost:3000,http://localhost:4000,http://127.0.0.1:3000,http://127.0.0.1:4000"
+    healthcheck:
+      # LIVENESS, not readiness. The gateway is a proxy, so it is legitimate for
+      # it to be up while a downstream service is still starting; gating this on
+      # /health/ready would abort `docker compose up` whenever any backend is
+      # slow. Downstream readiness is reported by /health/ready and enforced per
+      # request by the proxy (503 + Retry-After once a service is marked down).
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:8000/health/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      identity:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      aritii-network:
+        aliases:
+          - gateway
+
+networks:
+  # A private bridge network: service names (and the aliases above) resolve here
+  # and nowhere else, so the backend services are not reachable from outside.
+  aritii-network:
+    driver: bridge
+
+volumes:
+  # Explicit names so the stack keeps the data created by the original
+  # `aritii-market` composition instead of starting from an empty database.
+  postgres_data:
+    name: aritii-market_postgres_data
+  mongo_data:
+    name: aritii-market_mongo_data
