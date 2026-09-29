@@ -5,6 +5,7 @@ const locationsService = require('../../locations-expansion/services/locations.s
 const assignmentsRepo = require('../../operations/repositories/assignmentBatches.repository');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const { ok, created } = require('../../../shared/utils/response');
+const { isAdmin } = require('../../../shared/utils/access');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
 
 // Providers that can be given new work. `pending` providers are not yet approved.
@@ -74,7 +75,7 @@ async function setProviderStatus(req, res, next) {
 async function setOnline(req, res, next) {
   try {
     const provider = await svc.getProvider(req.params.id);
-    if (req.user && req.user.role !== 'ADMIN' && provider.identityUserId !== req.user.id) {
+    if (req.user && !isAdmin(req.user) && provider.identityUserId !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Not authorized to update another provider' });
     }
     return ok(res, { provider: await svc.setOnline(req.params.id, req.body.isOnline, getAdminFromReq(req)) });
@@ -84,7 +85,7 @@ async function setOnline(req, res, next) {
 async function updateLocation(req, res, next) {
   try {
     const provider = await svc.getProvider(req.params.id);
-    if (req.user && req.user.role !== 'ADMIN' && provider.identityUserId !== req.user.id) {
+    if (req.user && !isAdmin(req.user) && provider.identityUserId !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Not authorized to update another provider' });
     }
     return ok(res, { provider: await svc.updateLocation(req.params.id, req.body.coordinates) });

@@ -49,6 +49,17 @@ async function start() {
 
   await connectWithRetry();
   console.log('[delivery] Database ready');
+  const deliveryOutbox = require('./modules/delivery-fulfillment/services/delivery-outbox.service');
+  let outboxDrainRunning = false;
+  const drainDeliveryOutbox = async () => {
+    if (outboxDrainRunning) return;
+    outboxDrainRunning = true;
+    try { await deliveryOutbox.drain(50); }
+    catch (err) { console.warn('[delivery] Outbox drain failed:', err.message || err); }
+    finally { outboxDrainRunning = false; }
+  };
+  setTimeout(drainDeliveryOutbox, 2000);
+  setInterval(drainDeliveryOutbox, 2000).unref();
   const server = app.listen(env.port, () => {
     console.log(`[delivery] Listening on http://localhost:${env.port}`);
   });

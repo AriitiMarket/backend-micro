@@ -45,10 +45,9 @@ router.get('/location/:id', locationsCtrl.getLocation);
 // ── Service-to-service: Commerce hands an order to the Delivery Service ─────
 // `POST /internal/delivery/request`. No `authenticate` on purpose: this router
 // only ever receives traffic from the gateway's INTERNAL surface or from a named
-// peer service, both gated by the cluster credential (gatewayOnly). The public
-// route (`/delivery/request`) keeps `authenticate`, which is why Commerce's
-// handoff used to answer 401 — it sends a cluster credential, not a user
-// identity.
+// peer service, both gated by the cluster credential (gatewayOnly). Request
+// creation is intentionally absent from the public route: only Commerce may
+// bind a marketplace order and its parties to delivery.
 router.post('/request', requestsCtrl.createRequest);
 
 module.exports = router;

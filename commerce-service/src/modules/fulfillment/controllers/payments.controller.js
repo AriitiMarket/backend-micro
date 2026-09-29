@@ -1,6 +1,7 @@
 const paymentService = require('../services/payments.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 async function createPayment(req, res, next) {
   try {
@@ -29,7 +30,7 @@ async function getUserPayments(req, res, next) {
     // Guard so one customer cannot list another's payments by swapping :userId.
     const requesterId = String(req.user.id || req.user._id || '');
     const requestedId = String(req.params.userId || '');
-    if (req.user.role !== 'ADMIN' && requesterId && requestedId && requesterId !== requestedId) {
+    if (!isAdmin(req.user) && requesterId && requestedId && requesterId !== requestedId) {
       return res.status(403).json({ success: false, message: 'Forbidden: you can only access your own payments', errors: [] });
     }
     const payments = await paymentService.getUserPayments(req.params.userId);
@@ -41,7 +42,7 @@ async function getSellerPayments(req, res, next) {
   try {
     const requesterId = String(req.user.id || req.user._id || '');
     const requestedId = String(req.params.sellerId || '');
-    if (req.user.role !== 'ADMIN' && requesterId && requestedId && requesterId !== requestedId) {
+    if (!isAdmin(req.user) && requesterId && requestedId && requesterId !== requestedId) {
       return res.status(403).json({ success: false, message: 'Forbidden: you can only access payments for your own sales', errors: [] });
     }
     const payments = await paymentService.getSellerPayments(req.params.sellerId);
@@ -64,10 +65,10 @@ async function getAllPayments(req, res, next) {
 async function listMethods(req, res, next) { try { return ok(res, { methods: await paymentService.listMethods() }); } catch (err) { return next(err); } }
 async function listActiveMethods(req, res, next) { try { return ok(res, { methods: await paymentService.listActiveMethods() }); } catch (err) { return next(err); } }
 async function saveMethod(req, res, next) { try { return ok(res, { method: await paymentService.saveMethod(req.params.id, req.body) }); } catch (err) { return next(err); } }
-async function listSellerAccounts(req, res, next) { try { return ok(res, { accounts: await paymentService.listSellerAccounts(req.user.role === 'ADMIN' ? undefined : req.user.id) }); } catch (err) { return next(err); } }
+async function listSellerAccounts(req, res, next) { try { return ok(res, { accounts: await paymentService.listSellerAccounts(isAdmin(req.user) ? undefined : req.user.id) }); } catch (err) { return next(err); } }
 async function createSellerAccount(req, res, next) {
   try {
-    if (req.user.role !== 'ADMIN' && String(req.user.id) !== String(req.params.sellerId)) {
+    if (!isAdmin(req.user) && String(req.user.id) !== String(req.params.sellerId)) {
       return res.status(403).json({ success: false, message: 'You can only configure your own payment account', errors: [] });
     }
     return created(res, { account: await paymentService.createSellerAccount(req.params.sellerId, req.body) });

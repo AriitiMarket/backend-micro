@@ -23,6 +23,8 @@ const deliverySchema = new mongoose.Schema({
   routeId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryRoute', default: null },
   hubId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hub', default: null },
   shipmentId: { type: String, default: null },
+  paymentMethod: { type: String, enum: ['COD', 'PREPAID'], default: 'COD' },
+  paymentAmount: { type: Number, min: 0, default: 0 },
   stopId: { type: String, default: null },
 
   // Idempotency key: first write creates the delivery, later duplicates return

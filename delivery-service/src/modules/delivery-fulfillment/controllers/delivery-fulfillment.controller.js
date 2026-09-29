@@ -3,7 +3,7 @@ const providersService = require('../../providers/services/providers.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
 const {
-  isAdmin, isOperator, isBuyer, resolveProviderForUser, assertCanReadDelivery,
+  isAdmin, isSeller, isOperator, isBuyer, resolveProviderForUser, assertCanReadDelivery,
 } = require('../../../shared/utils/access');
 const assignmentsService = require('../../operations/services/assignments.service');
 
@@ -100,7 +100,7 @@ async function buildDeliveryFilter(query, user) {
   if (user) {
     if (isAdmin(user)) {
       // Operational access — query filters below apply as requested.
-    } else if (user.role === 'SELLER') {
+    } else if (isSeller(user)) {
       filter.sellerId = user.id;
     } else if (isBuyer(user)) {
       filter.buyerId = user.id;

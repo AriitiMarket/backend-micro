@@ -55,8 +55,8 @@ router.put('/admin/methods/:id', authenticate, authorize('ADMIN'), paymentsContr
 router.get('/admin/seller-accounts', authenticate, authorize('ADMIN'), paymentsController.listSellerAccounts);
 router.post('/seller/:sellerId/payment-accounts', authenticate, authorize('SELLER', 'ADMIN'), paymentsController.createSellerAccount);
 router.get('/admin/reconciliation', authenticate, authorize('ADMIN'), paymentsController.reconciliation);
-router.put('/update-payment-status/:id', authenticate, authorize('SELLER', 'ADMIN'), ownershipById, paymentsController.updatePaymentStatus);
-router.post('/process-refund/:id', authenticate, authorize('SELLER', 'ADMIN'), ownershipById, paymentsController.processRefund);
+// Payment status changes require an authoritative provider settlement/refund
+// event. No seller or admin-facing route may self-report those outcomes.
 router.delete('/delete-payment/:id', authenticate, authorize('ADMIN'), paymentsController.deletePayment);
 
 module.exports = router;

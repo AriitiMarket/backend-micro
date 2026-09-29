@@ -3,18 +3,23 @@ const fs = require('fs');
 const path = require('path');
 
 const keysDir = path.join(__dirname, 'keys');
-const privateKeyPath = path.join(keysDir, 'private.pem');
-const publicKeyPath = path.join(keysDir, 'public.pem');
+const privateKeyPath = process.env.JWT_PRIVATE_KEY_PATH || path.join(keysDir, 'private.pem');
+const publicKeyPath = process.env.JWT_PUBLIC_KEY_PATH || path.join(keysDir, 'public.pem');
 
 let privateKey = null;
 let publicKey = null;
 
 try {
   privateKey = fs.readFileSync(privateKeyPath, 'utf8');
-  publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+  try {
+    publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+  } catch {
+    // The public half is safe to derive and does not need a separate secret.
+    publicKey = require('crypto').createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString();
+  }
 } catch (err) {
-  console.error('[keys] FATAL: RS256 key pair not found in', keysDir);
-  console.error('[keys] Run: node src/config/keys/generate.js');
+  console.error('[keys] FATAL: RS256 private key not found at', privateKeyPath);
+  console.error('[keys] Set JWT_PRIVATE_KEY_PATH or create the local key pair with node src/config/keys/generate.js');
   process.exit(1);
 }
 

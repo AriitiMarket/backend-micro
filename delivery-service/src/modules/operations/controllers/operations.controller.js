@@ -1,10 +1,11 @@
 const svc = require('../services/operations.service');
+const { isSeller } = require('../../../shared/utils/access');
 const { ok } = require('../../../shared/utils/response');
 
 async function getDashboard(req, res, next) {
   try {
     // A seller only ever sees their own operation — never platform totals.
-    const scope = req.user && req.user.role === 'SELLER' ? { sellerId: req.user.id } : {};
+    const scope = req.user && isSeller(req.user) ? { sellerId: req.user.id } : {};
     const { zoneId, serviceId, providerId, status, sectorId, dateFrom, dateTo } = req.query;
     // Legacy spelling of the provider filter, still sent by deployed clients.
     const requestedProviderId = providerId || req.query.partnerId;

@@ -21,9 +21,9 @@ function keepIfKnown(id, location) {
 async function createRequest(data) {
   // Idempotency (MVP §10): one order hands over to Delivery exactly once.
   // Commerce retries must not create a second request or a second Delivery.
+  let request = null;
   if (data.orderId) {
-    const existing = await requestsRepo.findByOrderId(data.orderId);
-    if (existing) return existing;
+    request = await requestsRepo.findByOrderId(data.orderId);
   }
 
   // Validate pickup location exists and is active (only when we know it)
@@ -54,17 +54,21 @@ async function createRequest(data) {
     requestedAt: new Date(),
   };
 
-  const request = await requestsRepo.create(savedData);
+  if (!request) request = await requestsRepo.create(savedData);
 
   // Auto-materialize a pending Delivery so Admin can assign it immediately.
   if (data.orderId) {
     const existing = await deliveriesRepo.findByOrderId(data.orderId);
     if (!existing) {
       const pickupAddr = data.pickupAddress || {};
-      const newDelivery = await deliveriesRepo.create({
+      const deliveryData = {
+        idempotencyKey: `order:${data.orderId}`,
         orderId: data.orderId,
         sellerId: data.sellerId,
         buyerId: data.buyerId,
+        paymentMethod: data.paymentMethod || 'COD',
+        paymentAmount: Number(data.paymentAmount) || 0,
+        proofRules: { requireCodConfirmation: (data.paymentMethod || 'COD') === 'COD' },
         status: 'pending',
         origin: {
           regionId: pickupAddr.regionId || null,
@@ -106,7 +110,15 @@ async function createRequest(data) {
           coordinates: deliveryAddress.coordinates || { latitude: null, longitude: null },
         },
         metadata: { deliveryRequestId: request._id, specialInstructions: data.specialInstructions || '' },
-      });
+      };
+      let newDelivery;
+      try {
+        newDelivery = await deliveriesRepo.create(deliveryData);
+      } catch (err) {
+        if (err.code !== 11000) throw err;
+        newDelivery = await deliveriesRepo.findByOrderId(data.orderId);
+        if (!newDelivery) throw err;
+      }
       
       const auditClient = require('../../../shared/utils/audit-client');
       if (auditClient && typeof auditClient.sendAudit === 'function') {

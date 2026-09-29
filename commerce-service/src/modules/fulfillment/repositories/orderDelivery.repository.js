@@ -59,6 +59,11 @@ class OrderDeliveryRepository {
     );
   }
 
+  findWithoutDeliveryRequest(limit = 100) {
+    return OrderDelivery.find({ handoffStatus: { $in: ['PENDING', null] }, deliveryRequestId: null }, { orderId: 1 })
+      .sort({ createdAt: 1 }).limit(Math.min(Math.max(Number(limit) || 100, 1), 500)).lean();
+  }
+
   /** Remove the link (checkout compensation — the order row goes away too). */
   deleteByOrderId(orderId) {
     if (!orderId || !isValidObjectId(orderId)) return Promise.resolve(null);

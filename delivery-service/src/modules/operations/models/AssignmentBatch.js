@@ -25,6 +25,10 @@ const batchDeliverySchema = new mongoose.Schema({
   sellerId: { type: String, required: true },
   sellerName: { type: String, default: '' },
   shopName: { type: String, default: '' },
+  origin: { type: mongoose.Schema.Types.Mixed, default: null },
+  destination: { type: mongoose.Schema.Types.Mixed, default: null },
+  paymentMethod: { type: String, default: 'COD' },
+  paymentAmount: { type: Number, default: 0 },
   // Mirrors the underlying Delivery status (independent per order).
   status: { type: String, default: 'assigned' },
 }, { _id: false });

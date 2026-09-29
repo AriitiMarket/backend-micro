@@ -52,6 +52,15 @@ class RequestRepository {
     );
   }
 
+  claimConversion(id) {
+    if (!isValidObjectId(id)) return Promise.resolve(null);
+    return Request.findOneAndUpdate(
+      { _id: id, status: 'AGREED', orderId: null },
+      { $set: { status: 'CONVERTING', conversionStartedAt: new Date(), updatedAt: new Date() } },
+      { new: true, runValidators: true },
+    );
+  }
+
   /**
    * Append one timeline entry. `$slice` keeps the array bounded (newest 300)
    * so an old, chatty negotiation can never grow a document without limit.

@@ -11,6 +11,8 @@ async function createDispute(req, res, next) {
     // (the counterparty side of the dispute still comes from the body). Only an
     // admin may file on someone else's behalf.
     const role = req.user && String(req.user.role || '').toUpperCase();
+    data.requesterId = req.user && req.user.id;
+    data.requesterRole = role;
     if (role === 'SELLER') {
       data.sellerId = req.user.id;
     } else if (role !== 'ADMIN') {

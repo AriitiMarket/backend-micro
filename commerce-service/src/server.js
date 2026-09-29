@@ -55,6 +55,17 @@ async function start() {
   app.listen(env.port, () => {
     console.log('[commerce] Service listening on http://localhost:' + env.port);
   });
+  const orderService = require('./modules/fulfillment/services/orders.service');
+  let handoffSweepRunning = false;
+  const handoffSweep = async () => {
+    if (handoffSweepRunning) return;
+    handoffSweepRunning = true;
+    try { await orderService.recoverDeliveryHandoffs(100); }
+    catch (err) { console.warn('[commerce] Delivery handoff recovery failed:', err.message || err); }
+    finally { handoffSweepRunning = false; }
+  };
+  setTimeout(handoffSweep, 5000);
+  setInterval(handoffSweep, 30000).unref();
 }
 
 start().catch((err) => {

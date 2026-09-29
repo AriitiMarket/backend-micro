@@ -1,5 +1,7 @@
 const ordersRepository = require('../repositories/orders.repository');
 const orderDeliveryService = require('./orderDelivery.service');
+const paymentRepository = require('../repositories/payments.repository');
+const orderService = require('./orders.service');
 const { ORDER_STATUSES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 
 /**
@@ -36,7 +38,7 @@ const DELIVERY_STATUSES = [
  *     always recorded, even when the order status does not move;
  *   * an unknown order or an unknown delivery status is a 404/400, never a 500.
  */
-async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note) {
+async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note, proofOfDelivery = null) {
   if (!orderId) return { success: false, message: 'No orderId provided' };
   if (!status) return { success: false, message: 'No status provided' };
 
@@ -52,6 +54,49 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note)
     const err = new Error('Order not found');
     err.statusCode = 404;
     throw err;
+  }
+
+  if (deliveryStatus === 'delivered' && String(order.paymentInfo?.method || '').toUpperCase() === 'COD') {
+    const collected = Number(proofOfDelivery?.codCollectedAmount);
+    if (proofOfDelivery?.codConfirmed !== true || !Number.isFinite(collected) || collected !== Number(order.totalPrice)) {
+      const err = new Error('COD delivery requires confirmation of the exact order total');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (order.paymentStatus !== 'CONFIRMED') {
+      if (order.paymentStatus === 'SETTLING') {
+        const err = new Error('COD settlement is already in progress; retry this delivery event');
+        err.statusCode = 409;
+        throw err;
+      }
+      const settlementClaim = await ordersRepository.claimCODSettlement(orderId);
+      if (!settlementClaim) {
+        const err = new Error('Could not claim COD settlement; retry this delivery event');
+        err.statusCode = 409;
+        throw err;
+      }
+      try {
+        await orderService.deductInventoryOnPayment(order.cart || [], orderId);
+        await paymentRepository.upsertByOrder(orderId, {
+          userId: String(order.buyerId || order.user?.id || order.user?._id || ''),
+          sellerId: String(order.sellerId || ''),
+          paymentMethod: 'COD',
+          amount: Number(order.totalPrice),
+          currency: order.currency || 'ETB',
+          status: 'COMPLETED',
+          metadata: { settlementSource: 'delivery_cod', deliveryId: String(deliveryId), confirmedAt: new Date() },
+        });
+        await ordersRepository.updateFields(orderId, {
+          paymentStatus: 'CONFIRMED',
+          paymentSettlementStartedAt: null,
+          paidAt: order.paidAt || new Date(),
+          paymentInfo: { ...(order.paymentInfo?.toObject?.() || order.paymentInfo || {}), status: 'CONFIRMED' },
+        });
+      } catch (err) {
+        await ordersRepository.releaseCODSettlement(orderId).catch(() => null);
+        throw err;
+      }
+    }
   }
 
   const currentStatus = normalizeStatus(order.status);
@@ -81,6 +126,12 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note)
     orderStatusApplied = true;
   }
 
+  if (deliveryStatus === 'delivered' && String(order.paymentInfo?.method || '').toUpperCase() === 'COD') {
+    orderFields.paymentStatus = 'CONFIRMED';
+    orderFields.paymentSettlementStartedAt = null;
+    orderFields.paidAt = order.paidAt || new Date();
+    orderFields.paymentInfo = { ...(order.paymentInfo?.toObject?.() || order.paymentInfo || {}), status: 'CONFIRMED' };
+  }
   if (Object.keys(orderFields).length > 0) {
     await ordersRepository.updateFields(orderId, orderFields);
   }

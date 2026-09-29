@@ -5,6 +5,7 @@ const providersRepo = require('../../providers/repositories/providers.repository
 const providersService = require('../../providers/services/providers.service');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const trackingRepo = require('../../tracking/repositories/tracking.repository');
+const { transitionDeliveryStatus } = require('../../delivery-fulfillment/services/delivery-status.service');
 const {
   ASSIGNMENT_BATCH_TRANSITIONS,
   ACTIVE_ASSIGNMENT_BATCH_STATUSES,
@@ -126,17 +127,11 @@ function toPlain(history) {
 /** Push the batch's per-order statuses down to the underlying deliveries. */
 async function syncDeliveryStatuses(batch) {
   for (const entry of batch.deliveries) {
-    await deliveriesRepo.updateFields(entry.deliveryId, {
-      status: entry.status,
-      providerId: batch.providerId,
-    });
-    await trackingRepo.create({
-      deliveryId: entry.deliveryId,
-      providerId: batch.providerId,
-      status: entry.status,
+    const delivery = await deliveriesRepo.findById(entry.deliveryId);
+    if (!delivery) throw Object.assign(new Error(`Delivery ${entry.deliveryId} not found`), { status: 404 });
+    await transitionDeliveryStatus(entry.deliveryId, entry.status, { id: String(batch.providerId), name: batch.providerName }, {
       note: `Assignment ${batch.reference}`,
-      timestamp: new Date(),
-    }).catch(() => null);
+    }, { deferProviderCompletion: true });
   }
 }
 
@@ -202,6 +197,10 @@ async function createBatch({ deliveryIds, providerId, serviceId, routeId, notes,
       sellerId: String(d.sellerId),
       sellerName: d.origin && d.origin.shopName ? d.origin.shopName : String(d.sellerId),
       shopName: d.origin ? d.origin.shopName || '' : '',
+      paymentMethod: d.paymentMethod || 'COD',
+      paymentAmount: d.paymentAmount || 0,
+      origin: d.origin || null,
+      destination: d.destination || null,
       status: 'assigned',
     })),
     pickupPlan: buildPickupPlan(deliveries),
@@ -217,21 +216,11 @@ async function createBatch({ deliveryIds, providerId, serviceId, routeId, notes,
     throw err;
   }
 
-  // Reflect the assignment on each underlying delivery.
+  // Persist ownership before lifecycle transitions so emitted events include
+  // the provider and batch assignment reference.
   for (const d of deliveries) {
-    await deliveriesRepo.updateFields(d._id, {
-      status: 'assigned',
-      providerId: provider._id,
-      assignmentId: batch._id,
-      assignedAt: new Date(),
-    });
-    await trackingRepo.create({
-      deliveryId: d._id,
-      providerId: provider._id,
-      status: 'assigned',
-      note: `Assignment ${batch.reference}`,
-      timestamp: new Date(),
-    }).catch(() => null);
+    await deliveriesRepo.updateFields(d._id, { providerId: provider._id, assignmentId: batch._id });
+    await transitionDeliveryStatus(d._id, 'assigned', actor, { note: `Assignment ${batch.reference}` }, { deferProviderCompletion: true });
   }
 
   return batch;
@@ -390,6 +379,10 @@ async function startPickup(id, actor) {
 /** Confirm pickup for a whole seller stop. */
 async function confirmPickupStop(id, sellerId, actor) {
   const batch = await getBatch(id);
+  if (batch.status === 'picked_up' && batch.pickupPlan.every((s) => s.completed)) {
+    await syncDeliveryStatuses(batch);
+    return batch;
+  }
   if (batch.status !== 'picking_up') {
     throw badRequest('Pickup can only be confirmed while the rider is picking up');
   }
@@ -424,7 +417,14 @@ async function confirmPickupStop(id, sellerId, actor) {
 /** Rider starts delivering to customers. */
 async function startTransit(id, actor) {
   const batch = await getBatch(id);
+  if (batch.status === 'in_transit') {
+    await syncDeliveryStatuses(batch);
+    return batch;
+  }
   assertTransition(batch, 'in_transit');
+  if (batch.pickupPlan.some((stop) => !stop.completed)) {
+    throw badRequest('Confirm every seller pickup before starting delivery');
+  }
   for (const entry of batch.deliveries) {
     if (entry.status === 'pickup') entry.status = 'in_transit';
   }
@@ -444,26 +444,28 @@ async function startTransit(id, actor) {
  * Mark one order delivered. The assignment only completes when EVERY order in
  * it is actually delivered — never earlier.
  */
-async function markDelivered(id, orderId, actor) {
+async function markDelivered(id, orderId, actor, proof = {}) {
   const batch = await getBatch(id);
   if (batch.status !== 'in_transit') {
     throw badRequest('Orders can only be delivered while the assignment is in transit');
   }
   const entry = batch.deliveries.find((d) => d.orderId === orderId);
   if (!entry) throw Object.assign(new Error('Order is not part of this assignment'), { status: 404 });
-  if (entry.status === 'delivered') return batch; // idempotent
+  if (entry.status === 'delivered') {
+    const delivery = await deliveriesRepo.findById(entry.deliveryId);
+    await transitionDeliveryStatus(entry.deliveryId, 'delivered', actor, {
+      ...proof,
+      proofOfDelivery: proof.proofOfDelivery || delivery?.proofOfDelivery || null,
+      note: `Delivered via assignment ${batch.reference}`,
+    }, { deferProviderCompletion: true });
+    return batch;
+  }
 
   entry.status = 'delivered';
-  await deliveriesRepo.updateFields(entry.deliveryId, {
-    status: 'delivered', deliveredAt: new Date(),
-  });
-  await trackingRepo.create({
-    deliveryId: entry.deliveryId,
-    providerId: batch.providerId,
-    status: 'delivered',
+  await transitionDeliveryStatus(entry.deliveryId, 'delivered', actor, {
+    ...proof,
     note: `Delivered via assignment ${batch.reference}`,
-    timestamp: new Date(),
-  }).catch(() => null);
+  }, { deferProviderCompletion: true });
 
   const allDelivered = batch.deliveries.every((d) => d.status === 'delivered');
   if (allDelivered) {

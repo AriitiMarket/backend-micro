@@ -9,6 +9,7 @@ const router = express.Router();
 const Order = require('../models/Orders');
 const { ORDER_STATUSES, canTransition } = require('../constants/orderStatuses');
 const productService = require('../../catalog/services/products.service');
+const orderService = require('../services/orders.service');
 const { authenticate } = require('../../../app/middleware/authenticate');
 const { authorize } = require('../../../app/middleware/authorize');
 const { sendAudit, ACTIONS, getAdminFromReq } = require('../../../shared/utils/audit-client');
@@ -86,7 +87,10 @@ router.put('/admin/:orderId/status', authenticate, authorize('ADMIN'), async (re
     const currentIsKnown = Object.values(ORDER_STATUSES).includes(oldOrder.status);
     const transitionValidated = currentIsKnown;
     if (currentIsKnown && oldOrder.status === status) {
-      return res.json({ success: true, order: oldOrder, unchanged: true });
+      const order = status === ORDER_STATUSES.CONFIRMED
+        ? await orderService.updateOrderStatus(req.params.orderId, { status })
+        : oldOrder;
+      return res.json({ success: true, order, unchanged: true });
     }
     if (currentIsKnown && !canTransition(oldOrder.status, status)) {
       return res.status(409).json({
@@ -98,20 +102,28 @@ router.put('/admin/:orderId/status', authenticate, authorize('ADMIN'), async (re
       });
     }
 
-    const update = { status, updatedAt: new Date() };
-    // Mirror the seller-path side effect so admin transitions to Delivered
-    // stamp deliveredAt the same way updateOrderStatus does.
     if (status === ORDER_STATUSES.DELIVERED) {
-      update.deliveredAt = new Date();
+      return res.status(409).json({ success: false, code: 'DELIVERY_OWNED_BY_DELIVERY_SERVICE', message: 'Mark the shipment delivered through the delivery workflow', errors: [] });
     }
+    if ([ORDER_STATUSES.REFUND_REQUESTED, ORDER_STATUSES.REFUND_APPROVED, ORDER_STATUSES.REFUND_SUCCESS, ORDER_STATUSES.REFUND_REJECTED].includes(status)) {
+      return res.status(409).json({ success: false, code: 'REFUND_WORKFLOW_REQUIRED', message: 'Refund status changes require the refund workflow', errors: [] });
+    }
+
     if (status === ORDER_STATUSES.CANCELLED) {
-      update.cancelledAt = new Date();
+      const reason = String(req.body.reason || '').trim();
+      if (!reason) return res.status(400).json({ success: false, message: 'A cancellation reason is required', errors: [] });
+      const cancelled = await orderService.cancelOrder(req.params.orderId, reason);
+      sendAudit({
+        action: ACTIONS.ORDER_STATUS_CHANGED,
+        ...getAdminFromReq(req),
+        module: 'commerce', targetEntity: 'order', targetId: String(cancelled._id),
+        previousValue: { status: oldOrder.status }, newValue: { status: cancelled.status },
+        details: { reason, totalPrice: cancelled.totalPrice, transitionValidated: true },
+      });
+      return res.json({ success: true, order: cancelled, transitionValidated: true });
     }
-    const order = await Order.findByIdAndUpdate(
-      req.params.orderId,
-      update,
-      { new: true }
-    );
+
+    const order = await orderService.updateOrderStatus(req.params.orderId, { status });
 
     sendAudit({
       action: ACTIONS.ORDER_STATUS_CHANGED,

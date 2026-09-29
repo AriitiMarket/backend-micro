@@ -4,6 +4,13 @@ class PaymentRepository {
   create(data) { return Payment.create(data); }
   findById(id) { return Payment.findById(id); }
   findByOrder(orderId) { return Payment.findOne({ orderId }); }
+  upsertByOrder(orderId, fields = {}) {
+    return Payment.findOneAndUpdate(
+      { orderId: String(orderId) },
+      { $set: { ...fields, updatedAt: new Date() }, $setOnInsert: { orderId: String(orderId), createdAt: new Date() } },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+    );
+  }
   findByUser(userId) { return Payment.find({ userId }); }
   findBySeller(sellerId) { return Payment.find({ sellerId }); }
   findAll(filter = {}) { return Payment.find(filter).sort({ createdAt: -1 }); }

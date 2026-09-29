@@ -9,6 +9,8 @@ const disputeSchema = new mongoose.Schema({
   shopId: { type: mongoose.Schema.Types.ObjectId, default: null },
   riderId: { type: String, default: null },
   riderName: { type: String, default: null },
+  filedBy: { type: String, default: null },
+  filedByRole: { type: String, default: null },
   type: {
     type: String,
     enum: ['order', 'payment', 'delivery', 'product', 'other'],

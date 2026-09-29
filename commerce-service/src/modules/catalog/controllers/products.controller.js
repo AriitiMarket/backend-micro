@@ -3,6 +3,7 @@ const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
 const { isValidObjectId } = require('../../../shared/utils/mongoId');
 const { sanitizeImageReference } = require('../../../shared/utils/imageRefs');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 /**
  * Validate an image reference from the request body. Accepts external
@@ -69,7 +70,7 @@ async function getProduct(req, res, next) {
   try {
     // Only the admin console may see reviews that are still pending/rejected;
     // buyer and seller product pages receive the moderated view.
-    const includeUnmoderated = Boolean(req.user && req.user.role === 'ADMIN');
+    const includeUnmoderated = Boolean(req.user && isAdmin(req.user));
     const product = await productService.getProduct(req.params.id, {
       includeUnmoderated,
       requester: req.user || null,
@@ -125,7 +126,7 @@ async function getAllProducts(req, res, next) {
     // Both operator-only behaviours are gated on the gateway-injected role, not
     // on the query string: any signed-in buyer can send `?includeInactive=true`,
     // and reviews are moderated, so neither may be self-granted.
-    const isOperator = req.user && (req.user.role === 'ADMIN');
+    const isOperator = req.user && isAdmin(req.user);
 
     const result = await productService.getAllProducts({
       includeInactive: isOperator && req.query.includeInactive === 'true',

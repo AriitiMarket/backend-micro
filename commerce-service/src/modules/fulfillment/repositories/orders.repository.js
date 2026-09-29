@@ -12,6 +12,11 @@ class OrderRepository {
     return Order.findById(id);
   }
 
+  findByRequestId(requestId) {
+    if (!requestId) return Promise.resolve(null);
+    return Order.findOne({ requestId: String(requestId) });
+  }
+
   findByIdLean(id) {
     if (!isValidObjectId(id)) return Promise.resolve(null);
     return Order.findById(id).lean();
@@ -85,6 +90,30 @@ class OrderRepository {
       },
       { $set: { paymentStatus: 'CONFIRMED', status: ORDER_STATUSES.CONFIRMED, updatedAt: new Date() } },
       { new: true }
+    );
+  }
+
+  claimCODSettlement(orderId, now = new Date()) {
+    if (!isValidObjectId(orderId)) return Promise.resolve(null);
+    const staleBefore = new Date(now.getTime() - 5 * 60 * 1000);
+    return Order.findOneAndUpdate({
+      _id: orderId,
+      'paymentInfo.method': { $in: ['COD', null] },
+      $or: [
+        { paymentStatus: 'PENDING' },
+        { paymentStatus: 'SETTLING', paymentSettlementStartedAt: { $lt: staleBefore } },
+      ],
+    }, {
+      $set: { paymentStatus: 'SETTLING', paymentSettlementStartedAt: now, updatedAt: now },
+    }, { new: true });
+  }
+
+  releaseCODSettlement(orderId) {
+    if (!isValidObjectId(orderId)) return Promise.resolve(null);
+    return Order.findOneAndUpdate(
+      { _id: orderId, paymentStatus: 'SETTLING' },
+      { $set: { paymentStatus: 'PENDING', paymentSettlementStartedAt: null, updatedAt: new Date() } },
+      { new: true },
     );
   }
 

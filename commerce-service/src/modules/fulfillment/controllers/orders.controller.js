@@ -2,6 +2,7 @@ const orderService = require('../services/orders.service');
 const orderDeliveryService = require('../services/orderDelivery.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
+const { isAdmin, isSeller } = require('../../../shared/utils/roles');
 
 async function createOrder(req, res, next) {
   try {
@@ -14,7 +15,7 @@ async function createOrder(req, res, next) {
 
 async function getUserOrders(req, res, next) {
   try {
-    if (req.user.role !== 'ADMIN' && req.params.userId !== req.user.id) {
+    if (!isAdmin(req.user) && req.params.userId !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Forbidden: cannot view other users orders', errors: [] });
     }
     const orders = await orderService.getUserOrders(req.params.userId);
@@ -48,6 +49,10 @@ async function getSellerOrders(req, res, next) {
 async function updateOrderStatus(req, res, next) {
   try {
     const { orderId } = req.params;
+
+    if (isSeller(req.user) && !isAdmin(req.user) && req.body.status !== ORDER_STATUSES.CONFIRMED) {
+      return res.status(409).json({ success: false, code: 'DELIVERY_OWNS_SHIPMENT_STATUS', message: 'Sellers may confirm an order; shipment statuses are managed through Delivery', errors: [] });
+    }
     
     // Validate ownership before updating
     await orderService.validateOrderOwnership(orderId, req.user.id, req.user.role);

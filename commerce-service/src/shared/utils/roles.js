@@ -12,9 +12,20 @@ function normalizeRole(role) {
   return LEGACY_ROLE_ALIASES[upper] || upper;
 }
 
-const isBuyer = (role) => normalizeRole(role) === 'BUYER';
-const isSeller = (role) => normalizeRole(role) === 'SELLER';
-const isAdmin = (role) => normalizeRole(role) === 'ADMIN';
-const isProvider = (role) => normalizeRole(role) === 'PROVIDER';
+function actorRoles(actor) {
+  const values = actor && typeof actor === 'object'
+    ? [actor.role, ...(Array.isArray(actor.capabilities) ? actor.capabilities : [])]
+    : [actor];
+  return values.map(normalizeRole).filter(Boolean);
+}
 
-module.exports = { LEGACY_ROLE_ALIASES, normalizeRole, isBuyer, isSeller, isAdmin, isProvider };
+const hasRole = (actor, ...roles) => {
+  const held = actorRoles(actor);
+  return roles.some((role) => held.includes(normalizeRole(role)));
+};
+const isBuyer = (actor) => hasRole(actor, 'BUYER');
+const isSeller = (actor) => hasRole(actor, 'SELLER');
+const isAdmin = (actor) => hasRole(actor, 'ADMIN');
+const isProvider = (actor) => hasRole(actor, 'PROVIDER');
+
+module.exports = { LEGACY_ROLE_ALIASES, normalizeRole, actorRoles, hasRole, isBuyer, isSeller, isAdmin, isProvider };

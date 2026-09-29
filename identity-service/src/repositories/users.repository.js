@@ -51,7 +51,10 @@ async function findByEmailInsensitive(email) {
  */
 async function findByEmailForLogin(email) {
   const pool = await getPool();
-  const result = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1;', [email]);
+  const value = String(email || '').trim();
+  const result = value.includes('@')
+    ? await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1;', [value])
+    : await pool.query("SELECT * FROM users WHERE regexp_replace(COALESCE(phone_number, ''), '[^0-9]', '', 'g') = $1 LIMIT 1;", [value.replace(/\D/g, '')]);
   // Memberships travel with the raw row because the caller mints the token from
   // it — the capability set must be resolved before signing.
   return attachMembershipsOne(result.rows[0] || null);

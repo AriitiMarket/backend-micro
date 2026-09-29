@@ -145,7 +145,7 @@ async function startTransit(req, res, next) {
 async function confirmDelivery(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.markDelivered(batch._id, req.params.orderId, { id: String(provider._id), name: provider.name });
+    const result = await svc.markDelivered(batch._id, req.params.orderId, { id: String(provider._id), name: provider.name }, req.body || {});
     return ok(res, { assignment: result }, 'Order delivered');
   } catch (err) { return next(err); }
 }

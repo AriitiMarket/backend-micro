@@ -3,15 +3,17 @@ const restrictionRepository = require('../repositories/restrictions.repository')
 const shopRepository = require('../../selling/repositories/shops.repository');
 const productRepository = require('../../catalog/repositories/products.repository');
 const orderService = require('../../fulfillment/services/orders.service');
+const ordersRepository = require('../../fulfillment/repositories/orders.repository');
 const chatService = require('../../chat/services/chat.service');
 const { sendAudit, ACTIONS } = require('../../../shared/utils/audit-client');
 const { emitRequestEvent } = require('../../../shared/utils/realtime-client');
 const { normalizeSpecs, optionalUnit } = require('../validators/requests.validators');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 class ApiError extends Error { constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; } }
 const ACTIVE = ['PENDING', 'REVIEWING', 'NEGOTIATING'];
 const CANCELLABLE = [...ACTIVE, 'AGREED'];
-const TERMINAL = ['CONVERTED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
+const TERMINAL = ['CONVERTING', 'CONVERTED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
 
 /** Actor labels for audits raised from here (no `req` in a service). */
 function actor(user = {}) {
@@ -280,7 +282,7 @@ class RequestsService {
     await this.sweepExpired();
     const request = await this.assertParticipant(id, user);
     const isSellerSide = String(request.buyerId) !== String(user.id);
-    if (request.status === 'PENDING' && isSellerSide && user.role !== 'ADMIN') {
+    if (request.status === 'PENDING' && isSellerSide && !isAdmin(user)) {
       const updated = await requestRepository.findByIdAndUpdate(id, { status: 'REVIEWING' });
       const doc = await this.record(id, this.entry(user, 'request.reviewed', 'Seller opened the request', { status: 'REVIEWING' }));
       this.notify(updated, 'request.status.changed', { status: 'REVIEWING' }, user);
@@ -382,7 +384,7 @@ class RequestsService {
 
   async cancel(id, user) {
     const request = await this.assertParticipant(id, user);
-    if (String(request.buyerId) !== String(user.id) && user.role !== 'ADMIN') throw new ApiError('Only the customer can cancel this request', 403);
+    if (String(request.buyerId) !== String(user.id) && !isAdmin(user)) throw new ApiError('Only the customer can cancel this request', 403);
     if (!CANCELLABLE.includes(request.status)) throw new ApiError(`A ${request.status.toLowerCase()} request cannot be cancelled`, 409);
     this.assertNotSuspended(request);
     const updated = await requestRepository.findByIdAndUpdate(id, { status: 'CANCELLED' });
@@ -394,7 +396,7 @@ class RequestsService {
   /** Seller acknowledges the request (PENDING → REVIEWING). */
   async acceptRequest(id, user) {
     const request = await this.assertParticipant(id, user);
-    if (String(request.sellerId) !== String(user.id) && user.role !== 'ADMIN') throw new ApiError('Only the seller can accept this request', 403);
+    if (String(request.sellerId) !== String(user.id) && !isAdmin(user)) throw new ApiError('Only the seller can accept this request', 403);
     if (!ACTIVE.includes(request.status)) throw new ApiError('This request is no longer open', 409);
     this.assertNotSuspended(request);
     await this.assertNotRestricted(user.id, 'SELLER');
@@ -493,7 +495,7 @@ class RequestsService {
     const request = await this.assertParticipant(id, user);
     const isSellerSide = Boolean(request.sellerId && String(request.sellerId) === String(user.id));
     const isBuyerSide = String(request.buyerId) === String(user.id);
-    if (!isSellerSide && !isBuyerSide && user.role !== 'ADMIN') throw new ApiError('Only the two sides can make an offer', 403);
+    if (!isSellerSide && !isBuyerSide && !isAdmin(user)) throw new ApiError('Only the two sides can make an offer', 403);
     if (!ACTIVE.includes(request.status)) throw new ApiError('Offers can only be updated during negotiation', 409);
     this.assertNotSuspended(request);
     await this.assertNotRestricted(user.id, isBuyerSide ? 'BUYER' : 'SELLER');
@@ -610,7 +612,7 @@ class RequestsService {
    */
   async attachOfferProduct(id, payload, user) {
     const request = await this.assertParticipant(id, user);
-    if (String(request.sellerId) !== String(user.id) && user.role !== 'ADMIN') throw new ApiError('Only the seller can attach a product', 403);
+    if (String(request.sellerId) !== String(user.id) && !isAdmin(user)) throw new ApiError('Only the seller can attach a product', 403);
     if (![...ACTIVE, 'AGREED'].includes(request.status)) throw new ApiError('This request is closed', 409);
     this.assertNotSuspended(request);
     const list = request.offers || [];
@@ -755,7 +757,7 @@ class RequestsService {
     this.assertNotSuspended(request);
     const active = [...(request.offers || [])].reverse().find((item) => item.status === 'ACTIVE');
     if (!active) throw new ApiError('There is no live offer to decline', 409);
-    if (String(active.createdBy) === String(user.id) && user.role !== 'ADMIN') {
+    if (String(active.createdBy) === String(user.id) && !isAdmin(user)) {
       throw new ApiError('You cannot decline your own offer', 403);
     }
     const offers = (request.offers || []).map((item) => ({ ...plainOffer(item), status: String(item._id) === String(active._id) ? 'DECLINED' : item.status }));
@@ -768,7 +770,15 @@ class RequestsService {
 
   async convertToOrder(id, payload, user) {
     const request = await this.assertParticipant(id, user);
-    if (String(request.buyerId) !== String(user.id) && user.role !== 'ADMIN') throw new ApiError('Only the customer can convert this request', 403);
+    if (String(request.buyerId) !== String(user.id) && !isAdmin(user)) throw new ApiError('Only the customer can convert this request', 403);
+    if (request.status === 'CONVERTING') {
+      const existingOrder = await ordersRepository.findByRequestId(String(request._id));
+      if (!existingOrder) throw new ApiError('Order conversion is already in progress; retry shortly', 409);
+      const updated = await requestRepository.findByIdAndUpdate(id, {
+        status: 'CONVERTED', orderId: String(existingOrder._id), conversionStartedAt: null,
+      });
+      return { request: updated, order: existingOrder };
+    }
     if (request.status !== 'AGREED') throw new ApiError('Only an agreed request can become an order', 409);
     this.assertNotSuspended(request);
     const agreement = request.agreement && typeof request.agreement === 'object' ? request.agreement : {};
@@ -792,7 +802,20 @@ class RequestsService {
       productId: offer.productId,
       productName: offer.productName || request.title,
     }).catch(() => null); // a stale/mismatched link must not block the order
-    const order = await orderService.createAgreementOrder({
+    const claimed = await requestRepository.claimConversion(id);
+    if (!claimed) {
+      const existingOrder = await ordersRepository.findByRequestId(String(request._id));
+      if (existingOrder) {
+        const updated = await requestRepository.findByIdAndUpdate(id, {
+          status: 'CONVERTED', orderId: String(existingOrder._id), conversionStartedAt: null,
+        });
+        return { request: updated, order: existingOrder };
+      }
+      throw new ApiError('Order conversion is already in progress; retry shortly', 409);
+    }
+    let order;
+    try {
+      order = await orderService.createAgreementOrder({
       lines: [{
         productId,
         name: String(offer.productName || request.title || 'Agreed item'),
@@ -813,12 +836,21 @@ class RequestsService {
       requestId: String(request._id),
       shopId: request.shopId,
       sellerId: request.sellerId,
-    });
+      });
+    } catch (err) {
+      const existingOrder = await ordersRepository.findByRequestId(String(request._id)).catch(() => null);
+      if (existingOrder) order = existingOrder;
+      else {
+        await requestRepository.findByIdAndUpdate(id, { status: 'AGREED', conversionStartedAt: null });
+        throw err;
+      }
+    }
     const updated = await requestRepository.findByIdAndUpdate(id, {
       status: 'CONVERTED',
       orderId: String(order._id),
       destination,
       productId,
+      conversionStartedAt: null,
     });
     const doc = await this.record(id, this.entry(user, 'order.created', `Order created from the agreement (${String(order._id)})`, { orderId: String(order._id) }));
     this.notify(updated, 'request.status.changed', { status: 'CONVERTED', orderId: String(order._id) }, user);
@@ -827,7 +859,7 @@ class RequestsService {
 
   async decline(id, user) {
     const request = await this.assertParticipant(id, user);
-    if (String(request.sellerId) !== String(user.id) && user.role !== 'ADMIN') throw new ApiError('Only the seller can decline this request', 403);
+    if (String(request.sellerId) !== String(user.id) && !isAdmin(user)) throw new ApiError('Only the seller can decline this request', 403);
     if (!ACTIVE.includes(request.status)) throw new ApiError('This request is no longer open', 409);
     this.assertNotSuspended(request);
     const updated = await requestRepository.findByIdAndUpdate(id, { status: 'DECLINED' });
@@ -988,7 +1020,7 @@ class RequestsService {
     return lifted;
   }
 
-  async assertParticipant(id, user = {}) { const request = await requestRepository.findById(id); if (!request) throw new ApiError('Request not found', 404); const allowed = user.role === 'ADMIN' || String(request.buyerId) === String(user.id) || (request.sellerId && String(request.sellerId) === String(user.id)); if (!allowed) throw new ApiError('Request not found', 404); return request; }
+  async assertParticipant(id, user = {}) { const request = await requestRepository.findById(id); if (!request) throw new ApiError('Request not found', 404); const allowed = isAdmin(user) || String(request.buyerId) === String(user.id) || (request.sellerId && String(request.sellerId) === String(user.id)); if (!allowed) throw new ApiError('Request not found', 404); return request; }
   async ownsShop(shopId, userId) { const shops = await shopRepository.find({ filter: { ownerId: userId } }); return shops.some((shop) => String(shop._id) === String(shopId)); }
 }
 module.exports = new RequestsService();

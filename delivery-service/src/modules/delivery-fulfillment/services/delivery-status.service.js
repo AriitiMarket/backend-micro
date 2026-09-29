@@ -2,7 +2,7 @@ const deliveriesRepo = require('../repositories/delivery.repository');
 const assignmentsRepo = require('../../operations/repositories/assignments.repository');
 const trackingRepo = require('../../tracking/repositories/tracking.repository');
 const providersService = require('../../providers/services/providers.service');
-const { commerceClient } = require('../../../integrations/commerce/client');
+const deliveryOutbox = require('./delivery-outbox.service');
 const auditClient = require('../../../shared/utils/audit-client');
 const lifecycle = require('../domain/lifecycle');
 
@@ -12,9 +12,19 @@ async function _releaseProvider(providerId, assignmentId) {
   // Status transition is now handled automatically by decrementWorkload!
 }
 
-async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {}) {
+async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {}, options = {}) {
   const delivery = await deliveriesRepo.findById(id);
   if (!delivery) throw Object.assign(new Error('Delivery not found'), { status: 404 });
+
+  // A repeated terminal command is also the retry path for a downstream
+  // Commerce notification that may have failed after this status was stored.
+  if (delivery.status === newStatus) {
+    const commerceStatus = lifecycle.toCommerceStatus(newStatus);
+    if (delivery.orderId && commerceStatus) await deliveryOutbox.enqueueStatusEvent(
+      delivery, commerceStatus, additionalData.note || '', additionalData.proofOfDelivery || delivery.proofOfDelivery || null,
+    );
+    return delivery;
+  }
 
   // Verify transition
   lifecycle.assertTransition(delivery.status, newStatus);
@@ -25,6 +35,9 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
     lifecycle.assertDeliverable(delivery.status);
     if (delivery.proofRules) {
       lifecycle.assertProofSatisfied(additionalData.proofOfDelivery, delivery.proofRules);
+    }
+    if (delivery.proofRules?.requireCodConfirmation && Number(additionalData.proofOfDelivery?.codCollectedAmount) !== Number(delivery.paymentAmount)) {
+      throw Object.assign(new Error('COD collection must equal the order total'), { status: 400, code: 'COD_AMOUNT_MISMATCH' });
     }
   }
 
@@ -44,7 +57,7 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
   // Workload and side-effects
   if (newStatus === 'delivered') {
     if (delivery.providerId) {
-      if (delivery.assignmentId) await providersService.completeDelivery(delivery.providerId, delivery.assignmentId);
+      if (delivery.assignmentId && !options.deferProviderCompletion) await providersService.completeDelivery(delivery.providerId, delivery.assignmentId);
       await assignmentsRepo.cancelActiveByDelivery(id);
     }
   } else if (newStatus === 'failed' || newStatus === 'cancelled') {
@@ -72,10 +85,9 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
 
   // Commerce webhook
   const commerceStatus = lifecycle.toCommerceStatus(newStatus);
-  if (delivery.orderId && commerceStatus) {
-    commerceClient.notifyStatusUpdate(id, delivery.orderId, commerceStatus, delivery.providerId, additionalData.note || '')
-      .catch((err) => console.error(`[delivery] Commerce webhook failed for ${id}:`, err.message));
-  }
+  if (delivery.orderId && commerceStatus) await deliveryOutbox.enqueueStatusEvent(
+    delivery, commerceStatus, additionalData.note || '', additionalData.proofOfDelivery || null,
+  );
 
   // Audit event
   const eventName = lifecycle.eventFor(newStatus);

@@ -76,6 +76,8 @@ const deliveryRequestSchema = new mongoose.Schema({
   }],
   totalValue: { type: Number, default: 0 },
   totalWeight: { type: Number, default: 0 },
+  paymentMethod: { type: String, enum: ['COD', 'PREPAID'], default: 'COD' },
+  paymentAmount: { type: Number, min: 0, default: 0 },
   preferredServiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryService', default: null },
   specialInstructions: { type: String, default: '' },
   requestedAt: { type: Date, default: Date.now },

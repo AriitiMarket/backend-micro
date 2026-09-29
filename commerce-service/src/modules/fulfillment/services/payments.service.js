@@ -32,7 +32,9 @@ class PaymentService {
       throw new ApiError('You can only create a payment for your own order', 403);
     }
     const existing = await paymentRepository.findByOrder(payload.orderId);
-    if (existing) throw new ApiError('Payment already exists for this order', 400);
+    if (existing) return existing;
+    const paymentMethod = String(payload.paymentMethod || 'COD').toUpperCase();
+    if (paymentMethod !== 'COD') throw new ApiError('This payment method is not connected to a verified settlement provider', 400);
 
     // Financial identity and amount are server-owned. Never let a client
     // manufacture a paid payment by submitting `status`, `amount`, or ids.
@@ -47,7 +49,7 @@ class PaymentService {
       orderId: String(payload.orderId),
       userId: userId != null ? String(userId) : undefined,
       sellerId: sellerId != null ? String(sellerId) : undefined,
-      paymentMethod: payload.paymentMethod || 'COD',
+      paymentMethod,
       amount,
       currency: order.currency || 'ETB',
       status: 'PENDING',
@@ -178,4 +180,3 @@ class PaymentService {
 }
 
 module.exports = new PaymentService();
-

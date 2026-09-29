@@ -16,12 +16,12 @@ const client = createInternalClient({
   name: services.self,
   baseUrl: services.commerce.url,
   timeoutMs: parseInt(process.env.COMMERCE_CALL_TIMEOUT_MS, 10) || 5000,
-  maxRetries: 0, // status sync is a write: never retried automatically
+  maxRetries: 2, // delivery state is persisted first; retry transient webhook failures
 });
 
-async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note) {
+async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note, proofOfDelivery = null) {
   const res = await client.requestOrThrow('POST', '/internal/commerce/delivery-webhook/status', {
-    body: { deliveryId, orderId, status, providerId, note },
+    body: { deliveryId, orderId, status, providerId, note, proofOfDelivery },
   });
   return { status: res.status, body: res.body, ok: res.ok, code: res.code, requestId: res.requestId };
 }

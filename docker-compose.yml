@@ -73,6 +73,7 @@ services:
     environment:
       PORT: 8001
       NODE_ENV: development
+      JWT_PRIVATE_KEY_PATH: /run/secrets/identity-jwt-private.pem
       # `pg` does not read libpq's `connect_timeout` / `connection_limit` query
       # params — they used to be silently dropped, leaving the pool on a
       # hard-coded 5s socket timeout that a cold boot easily exceeds. The knobs
@@ -100,6 +101,8 @@ services:
       INTERNAL_SERVICE_NAME: identity
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set — copy .env.example to .env}'
       CORS_ORIGIN: "http://localhost:8000"
+    volumes:
+      - ${IDENTITY_PRIVATE_KEY_PATH:-./identity-service/src/config/keys/private.pem}:/run/secrets/identity-jwt-private.pem:ro
     healthcheck:
       # Readiness: PostgreSQL and the Express app must both be up, else the
       # gateway could route traffic to an instance that only answers 503.

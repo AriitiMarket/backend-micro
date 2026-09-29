@@ -40,7 +40,7 @@ const orderSchema = new mongoose.Schema({
   buyerId: { type: String, index: true },
   // Set when the order was created from an agreed product request
   // (Request Management → order). Null for a normal checkout.
-  requestId: { type: String, default: null, index: true },
+  requestId: { type: String, default: null },
 
   // --- Money (server-computed, per order) ---
   // One checkout can split into several orders (one per seller/shop), so each
@@ -53,8 +53,9 @@ const orderSchema = new mongoose.Schema({
   currency: { type: String, default: 'ETB' },
   totalPrice: { type: Number, required: true },
   status: { type: String, default: 'Processing' },
-  paymentStatus: { type: String, enum: ['PENDING', 'CONFIRMED', 'FAILED', 'REFUNDED'], default: 'PENDING' },
-  paymentInfo: { id: { type: String }, status: { type: String }, type: { type: String } },
+  paymentStatus: { type: String, enum: ['PENDING', 'SETTLING', 'CONFIRMED', 'FAILED', 'REFUNDED'], default: 'PENDING' },
+  paymentSettlementStartedAt: { type: Date, default: null },
+  paymentInfo: { id: { type: String }, status: { type: String }, type: { type: String }, method: { type: String, default: 'COD' } },
   reservation: { type: Object, default: {} },
   // Set only after an authoritative settlement event (COD proof or a verified
   // payment-provider callback).
@@ -124,5 +125,6 @@ orderSchema.pre('save', function assignUpdatedAt(next) {
 // (`findBySellerOrShop`) and the admin shop detail both filter on the shipment
 // shop id — without this index both are collection scans.
 orderSchema.index({ 'sellerShipments.shopId': 1 });
+orderSchema.index({ requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: 'string' } } });
 
 module.exports = mongoose.model('Order', orderSchema);

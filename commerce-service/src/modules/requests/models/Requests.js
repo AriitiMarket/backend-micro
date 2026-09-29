@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const PRODUCT_REQUEST_STATUSES = [
-  'PENDING', 'REVIEWING', 'NEGOTIATING', 'AGREED', 'CONVERTED',
+  'PENDING', 'REVIEWING', 'NEGOTIATING', 'AGREED', 'CONVERTING', 'CONVERTED',
   'DECLINED', 'CANCELLED', 'EXPIRED',
 ];
 
@@ -103,6 +103,7 @@ const requestSchema = new mongoose.Schema({
   respondedAt: { type: Date, default: null },
   buyer: { type: mongoose.Schema.Types.Mixed, default: {} },
   orderId: { type: String, default: null, index: true },
+  conversionStartedAt: { type: Date, default: null },
   /**
    * Delivery destination the customer picked when the agreement became an
    * order. The request is still a negotiation document — this is only the

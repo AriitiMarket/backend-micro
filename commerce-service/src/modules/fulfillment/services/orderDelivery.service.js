@@ -26,6 +26,7 @@ class OrderDeliveryService {
     if (!order) return null;
     return orderDeliveryRepository.create({
       orderId: String(order._id),
+      handoffStatus: 'WAITING_APPROVAL',
       status: null,
       createdFrom: 'checkout',
       pickupLocationId: (shipment && shipment.origin && (shipment.origin.sectorId || shipment.origin.cityId || shipment.origin.areaId)) || null,
@@ -48,11 +49,23 @@ class OrderDeliveryService {
    */
   async attachRequest(orderId, deliveryRequestId) {
     try {
-      return await orderDeliveryRepository.attach(orderId, { deliveryRequestId: String(deliveryRequestId) });
+      return await orderDeliveryRepository.attach(orderId, { deliveryRequestId: String(deliveryRequestId), handoffStatus: 'COMPLETED' });
     } catch (err) {
       console.error(`[orderDelivery] attach request failed for order ${orderId}:`, err.message);
       return null;
     }
+  }
+
+  markHandoffAbandoned(orderId) {
+    return orderDeliveryRepository.attach(orderId, { handoffStatus: 'ABANDONED' });
+  }
+
+  queueHandoff(orderId) {
+    return orderDeliveryRepository.attach(orderId, { handoffStatus: 'PENDING' });
+  }
+
+  waitForOrderApproval(orderId) {
+    return orderDeliveryRepository.attach(orderId, { handoffStatus: 'WAITING_APPROVAL' });
   }
 
   /**
@@ -77,6 +90,10 @@ class OrderDeliveryService {
   getByOrderId(orderId) {
     if (!orderId) return Promise.resolve(null);
     return orderDeliveryRepository.findByOrderIdLoose(orderId);
+  }
+
+  findWithoutDeliveryRequest(limit) {
+    return orderDeliveryRepository.findWithoutDeliveryRequest(limit);
   }
 
   /**

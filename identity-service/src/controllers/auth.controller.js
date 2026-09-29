@@ -59,6 +59,7 @@ async function register(req, res, next) {
     const { user } = await authService.registerCustomer({
       name: req.body.name,
       email: req.body.email,
+      phoneNumber: req.body.phoneNumber,
       password: req.body.password,
       avatarPublicId: avatar.publicId || null,
       avatarUrl: avatar.url || null,

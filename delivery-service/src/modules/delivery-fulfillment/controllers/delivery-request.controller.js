@@ -2,7 +2,7 @@ const svc = require('../services/delivery-request.service');
 const deliveriesRepo = require('../repositories/delivery.repository');
 const { ok, created } = require('../../../shared/utils/response');
 const { forbidden } = require('../../../shared/errors');
-const { isAdmin, isBuyer, assertCanReadRequest } = require('../../../shared/utils/access');
+const { isAdmin, isSeller, isBuyer, assertCanReadRequest } = require('../../../shared/utils/access');
 
 async function createRequest(req, res, next) {
   try { return created(res, { request: await svc.createRequest(req.body) }, 'Delivery request created'); }
@@ -37,7 +37,7 @@ async function getRequests(req, res, next) {
 
     const filter = {};
     if (req.user && !isAdmin(req.user)) {
-      if (req.user.role === 'SELLER') filter.sellerId = req.user.id;
+      if (isSeller(req.user)) filter.sellerId = req.user.id;
       else if (isBuyer(req.user)) filter.buyerId = req.user.id;
       else return next(forbidden('Delivery requests are visible to admins, sellers and buyers only'));
     }

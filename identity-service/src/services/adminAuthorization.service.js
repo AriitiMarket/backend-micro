@@ -36,11 +36,14 @@ async function resolveAdminAuthorization(user) {
   let roles = [];
   try {
     roles = await adminRolesRepo.getUserRoles(user.id);
-  } catch {
-    // A missing/unreadable RBAC table must not strip a working admin. The
-    // assignment is the restriction mechanism, so failing open here preserves
-    // the pre-RBAC behaviour.
-    roles = [];
+  } catch (cause) {
+    // An unreadable RBAC store is an authorization failure, never permission
+    // to bypass the configured role assignments.
+    const error = new Error('Unable to resolve administrator permissions');
+    error.code = 'ADMIN_AUTHORIZATION_UNAVAILABLE';
+    error.cause = cause;
+    error.status = 503;
+    throw error;
   }
 
   if (!roles.length) {

@@ -467,15 +467,6 @@ class OrderService {
       throw err;
     }
 
-    // The delivery handoff belongs to a COMMITTED order: it runs only once every
-    // reservation succeeded, and it never blocks the response.
-    for (const order of orders) {
-      const shipment = order.sellerShipments[0];
-      this._createDeliveryRequest(order, shipment, destinationSnapshot).catch((err) => {
-        console.error(`[commerce] Delivery request failed for order ${order._id}:`, err.message || err);
-      });
-    }
-
     return orders;
   }
 
@@ -598,12 +589,6 @@ class OrderService {
       throw err;
     }
 
-    // Handoff to the Delivery Service (non-blocking): this is what makes the
-    // order show up for the admin/delivery coordinator to assign a provider.
-    this._createDeliveryRequest(order, shipment, destinationSnapshot).catch((err) => {
-      console.error(`[commerce] Delivery request failed for agreement order ${order._id}:`, err.message || err);
-    });
-
     return order;
   }
 
@@ -689,7 +674,7 @@ class OrderService {
     // Both sides are normalized: stored documents may still carry the legacy
     // 'PENDING'/'CONFIRMED' spellings, and older clients send legacy values.
     const nextStatus = status ? normalizeStatus(status) : null;
-    if (nextStatus && !canTransition(order.status, nextStatus)) {
+    if (nextStatus && normalizeStatus(order.status) !== nextStatus && !canTransition(order.status, nextStatus)) {
       throw new ApiError(`Cannot transition from "${order.status}" to "${status}"`, 400);
     }
     order.status = nextStatus || order.status;
@@ -697,6 +682,15 @@ class OrderService {
       order.deliveredAt = Date.now();
     }
     await order.save();
+    if (normalizeStatus(order.status) === ORDER_STATUSES.CONFIRMED) {
+      const shipment = (order.sellerShipments || [])[0];
+      if (shipment) {
+        await orderDeliveryService.queueHandoff(order._id);
+        this._createDeliveryRequest(order, shipment, order.destination || {}).catch((err) => {
+          console.error(`[commerce] Delivery request failed for confirmed order ${order._id}:`, err.message || err);
+        });
+      }
+    }
     return order;
   }
 
@@ -1060,6 +1054,8 @@ class OrderService {
         value: item.discountPrice || item.price || 0,
       })),
       totalValue: shipment.subtotal || 0,
+      paymentMethod: order.paymentInfo?.method || 'COD',
+      paymentAmount: order.totalPrice,
       totalWeight: shipment.items.reduce((sum, item) => sum + ((item.weight || 0) * lineQty(item)), 0),
       specialInstructions: destinationSnapshot.additionalInstructions || '',
     };
@@ -1075,6 +1071,32 @@ class OrderService {
       console.warn(`[commerce] Delivery request returned status ${result.status} for order ${order._id}`);
     }
     return result;
+  }
+
+  /** Retry committed order handoffs whose delivery-service acknowledgement was lost. */
+  async recoverDeliveryHandoffs(limit = 100) {
+    const links = await orderDeliveryService.findWithoutDeliveryRequest(limit);
+    let recovered = 0;
+    for (const link of links) {
+      try {
+        const order = await orderRepository.findById(link.orderId);
+        if (!order || ['Cancelled', 'CANCELLED'].includes(String(order.status))) {
+          await orderDeliveryService.markHandoffAbandoned(link.orderId);
+          continue;
+        }
+        if (normalizeStatus(order.status) !== ORDER_STATUSES.CONFIRMED) {
+          await orderDeliveryService.waitForOrderApproval(link.orderId);
+          continue;
+        }
+        const shipment = (order.sellerShipments || [])[0];
+        if (!shipment) continue;
+        const result = await this._createDeliveryRequest(order, shipment, order.destination || {});
+        if (result?.status >= 200 && result.status < 300) recovered += 1;
+      } catch (err) {
+        console.warn(`[commerce] Delivery handoff retry failed for order ${link.orderId}:`, err.message || err);
+      }
+    }
+    return { attempted: links.length, recovered };
   }
 }
 

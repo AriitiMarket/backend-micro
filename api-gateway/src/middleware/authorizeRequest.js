@@ -102,6 +102,15 @@ const ROUTE_PERMISSIONS = [
   { prefix: '/order/admin', view: 'orders.view', manage: 'orders.manage' },
   { prefix: '/shop/admin', view: 'shops.view', manage: 'shops.manage' },
   { prefix: '/disputes/admin', view: 'disputes.view', manage: 'disputes.manage' },
+  // Admin-only mutations under otherwise public Commerce prefixes. Method
+  // filters keep public catalog/taxonomy reads unauthenticated at the gateway.
+  { prefix: '/product/bulk', methods: ['POST'], view: 'commerce.view', manage: 'commerce.manage' },
+  { prefix: '/category', methods: ['POST', 'PUT', 'PATCH', 'DELETE'], view: 'commerce.view', manage: 'commerce.manage' },
+  { prefix: '/sector', methods: ['POST', 'PUT', 'PATCH', 'DELETE'], view: 'commerce.view', manage: 'commerce.manage' },
+  { prefix: '/payment/admin', view: 'commerce.view', manage: 'commerce.manage' },
+  { prefix: '/payment/get-all-payments', view: 'commerce.view' },
+  { prefix: '/payment/admin/reconciliation', view: 'commerce.view' },
+  { prefix: '/request/admin/restrictions', methods: ['GET', 'POST', 'PUT', 'DELETE'], view: 'commerce.view', manage: 'commerce.manage' },
 
   // ── Reporting (admin-only router) ──
   { prefix: '/analytics', view: 'reports.view' },
@@ -163,9 +172,11 @@ const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
  * The permission a request needs, or null when the path is not privilege-gated.
  */
 function requiredPermission(method, path) {
-  const rule = ROUTE_PERMISSIONS.find((entry) => matches(path, entry.prefix));
+  const verb = String(method || '').toUpperCase();
+  const rule = ROUTE_PERMISSIONS.find((entry) => matches(path, entry.prefix)
+    && (!entry.methods || entry.methods.includes(verb)));
   if (!rule) return null;
-  const isRead = READ_METHODS.includes(String(method || '').toUpperCase());
+  const isRead = READ_METHODS.includes(verb);
   return (isRead ? rule.view : rule.manage || rule.view) || null;
 }
 

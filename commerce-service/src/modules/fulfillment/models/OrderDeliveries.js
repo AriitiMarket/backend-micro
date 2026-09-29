@@ -22,6 +22,7 @@ const orderDeliverySchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true, index: true },
   deliveryId: { type: String, default: null, index: true },
   deliveryRequestId: { type: String, default: null },
+  handoffStatus: { type: String, enum: ['WAITING_APPROVAL', 'PENDING', 'COMPLETED', 'ABANDONED'], default: 'WAITING_APPROVAL' },
   // The DELIVERY provider that owns the shipment (was `partnerId`; renamed
   // with the delivery actor — boot migration in src/app/config/database.js).
   providerId: { type: String, default: null },

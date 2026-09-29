@@ -1,15 +1,37 @@
 const disputesRepo = require('../repositories/disputes.repository');
+const ordersRepo = require('../repositories/orders.repository');
 const { sendAudit, ACTIONS, LEVELS } = require('../../../shared/utils/audit-client');
 
 class DisputesService {
   async createDispute(data) {
-    if (!data.buyerId || !data.subject || !data.type) {
+    if (!data.orderId || !data.requesterId || !data.subject || !data.description || !data.type) {
       throw Object.assign(
-        new Error('Missing required fields: buyerId, subject, type'),
+        new Error('Missing required fields: orderId, subject, type'),
         { status: 400 }
       );
     }
-    return disputesRepo.create(data);
+    const order = await ordersRepo.findById(data.orderId);
+    if (!order) throw Object.assign(new Error('Order not found'), { status: 404 });
+    const buyerId = String(order.buyerId);
+    const sellerIds = [...new Set([
+      order.sellerId,
+      ...(order.sellerShipments || []).map((shipment) => shipment.sellerId),
+    ].filter(Boolean).map(String))];
+    const role = String(data.requesterRole || '').toUpperCase();
+    if (role === 'BUYER' && buyerId !== String(data.requesterId)) {
+      throw Object.assign(new Error('Only the order buyer can file this dispute'), { status: 403 });
+    }
+    if (role === 'SELLER' && !sellerIds.includes(String(data.requesterId))) {
+      throw Object.assign(new Error('Only a seller on the order can file this dispute'), { status: 403 });
+    }
+    const sellerId = role === 'SELLER' ? String(data.requesterId) : (data.sellerId && sellerIds.includes(String(data.sellerId)) ? String(data.sellerId) : sellerIds[0] || null);
+    return disputesRepo.create({
+      ...data,
+      buyerId,
+      sellerId,
+      filedBy: String(data.requesterId),
+      filedByRole: role,
+    });
   }
 
   async getDispute(id) {

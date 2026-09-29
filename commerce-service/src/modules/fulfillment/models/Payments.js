@@ -12,13 +12,14 @@ const paymentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, default: 'ETB' },
   status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED', 'REFUNDED'], default: 'PENDING' },
-  transactionId: { type: String, default: null },
+  transactionId: { type: String, default: undefined },
   metadata: { type: Object, default: {} },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 });
 // One payment per order. The unique index closes the race where two requests both pass findByOrder before either create.
 paymentSchema.index({ orderId: 1 }, { unique: true });
-paymentSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ transactionId: 1 }, { unique: true, partialFilterExpression: { transactionId: { $type: 'string' } } });
 
 
 module.exports = mongoose.model('Payment', paymentSchema);

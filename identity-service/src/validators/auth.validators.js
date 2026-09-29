@@ -2,6 +2,7 @@
 const { isValidCodeChallenge } = require('../utils/jwt');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^\+?[\d\s().-]{7,20}$/;
 
 function validationError(res, errors) {
   return res.status(400).json({ success: false, message: 'Validation failed', errors });
@@ -34,7 +35,7 @@ const validateRegister = (req, res, next) => {
 const validateLogin = (req, res, next) => {
   const errors = [];
   if (req.body.email) req.body.email = String(req.body.email).trim();
-  if (!req.body.email || !EMAIL_RE.test(req.body.email)) errors.push('Valid email is required');
+  if (!req.body.email || (!EMAIL_RE.test(req.body.email) && !PHONE_RE.test(req.body.email))) errors.push('Enter a valid email address or phone number');
   if (!req.body.password) errors.push('Password is required');
   if (errors.length) return validationError(res, errors);
   next();
