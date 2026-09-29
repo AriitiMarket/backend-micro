@@ -1,0 +1,16 @@
+{
+  "name": "aritii-market",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aritii Market — API Gateway, Identity, Commerce and Delivery services in one repository. This root manifest owns no runtime dependency: it exists so the whole platform can be linted, tested and brought up with one command, and so CI has a single entry point.",
+  "scripts": {
+    "test": "npm run test:architecture && npm run test:gateway && npm run test:services",
+    "test:architecture": "node --test tests/architecture.test.js",
+    "test:gateway": "npm --prefix api-gateway test",
+    "test:services": "npm --prefix identity-service test && npm --prefix commerce-service test && npm --prefix delivery-service test",
+    "test:integration": "node --test tests/integration/*.test.js",
+    "up": "docker compose up -d --build",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f"
+  }
+}
