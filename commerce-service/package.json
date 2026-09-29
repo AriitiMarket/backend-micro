@@ -1,0 +1,22 @@
+{
+  "name": "commerce-service",
+  "version": "1.0.0",
+  "description": "Aritii Market Commerce Service (MongoDB) - shops, products, orders, cart, wishlist, reviews, coupons, events",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 src/app/middleware/__tests__/authorize.test.js src/shared/__tests__/response.test.js src/shared/__tests__/internal-auth.test.js src/shared/__tests__/internal-client.test.js src/modules/fulfillment/__tests__/orders.test.js src/modules/fulfillment/__tests__/authorization.test.js src/modules/carts/__tests__/carts.test.js src/modules/carts/__tests__/wishlists.test.js src/modules/selling/__tests__/shops.test.js src/modules/chat/__tests__/chat.test.js src/modules/requests/__tests__/requests.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mongoose": "^8.5.0",
+    "multer": "^2.1.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "cloudinary": "^1.41.3"
+  }
+}
