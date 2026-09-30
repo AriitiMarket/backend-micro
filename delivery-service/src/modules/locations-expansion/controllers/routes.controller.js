@@ -1,6 +1,8 @@
 const svc = require('../services/routes.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
+const { validationError } = require('../../../shared/errors');
+const { isValidObjectId } = require('../../../shared/utils/mongoId');
 
 async function createRoute(req, res, next) {
   try {
@@ -58,4 +60,27 @@ async function getRouteStats(req, res, next) {
   catch (err) { return next(err); }
 }
 
-module.exports = { createRoute, getRoute, updateRoute, deleteRoute, getRoutes, getRouteStats };
+/**
+ * `GET /delivery/route/search?originId&destinationId` — the existing connection
+ * between two locations, or `route: null`.
+ *
+ * The admin console calls this before creating a connection so it can offer
+ * "reactivate the existing route" instead of a duplicate (which the service
+ * refuses with 409). Without this route the request fell through to `/:id`,
+ * where `id = 'search'` raised `INVALID_ID` — so that check could never pass.
+ */
+async function searchRoute(req, res, next) {
+  try {
+    const { originId, destinationId } = req.query;
+    if (!originId || !destinationId) {
+      throw validationError(['"originId" and "destinationId" are required']);
+    }
+    for (const [field, value] of [['originId', originId], ['destinationId', destinationId]]) {
+      if (!isValidObjectId(value)) throw validationError([`"${field}" must be a valid location identifier`]);
+    }
+    const route = await svc.findRouteByEndpoints(originId, destinationId);
+    return ok(res, { route: route || null }, route ? 'Connection found' : 'No connection yet');
+  } catch (err) { return next(err); }
+}
+
+module.exports = { createRoute, getRoute, updateRoute, deleteRoute, getRoutes, getRouteStats, searchRoute };

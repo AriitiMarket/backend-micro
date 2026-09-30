@@ -1,4 +1,10 @@
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+// Load the service's own .env for bare-metal development. The path must be
+// resolved from the SERVICE ROOT (src/app/config -> ../../..), not from the
+// config directory: `join(__dirname, '..', '.env')` pointed at
+// src/app/.env, which never exists, so the documented .env was silently ignored
+// and the process ran on defaults. Under Docker the variables already exist in
+// the environment and dotenv never overrides them.
+require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '..', '.env') });
 
 module.exports = {
   port: process.env.PORT || 8003,

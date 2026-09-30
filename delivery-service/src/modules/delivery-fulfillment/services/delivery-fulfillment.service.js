@@ -4,10 +4,24 @@ const trackingRepo = require('../../tracking/repositories/tracking.repository');
 const providersService = require('../../providers/services/providers.service');
 const { commerceClient } = require('../../../integrations/commerce/client');
 const { VALID_TRANSITIONS } = require('../../../shared/constants');
+const validators = require('../validators');
 
 const TERMINAL_STATUSES = ['delivered', 'failed', 'cancelled'];
 
-async function createDelivery(data) { return deliveriesRepo.create(data); }
+/**
+ * Create a delivery directly (admin operation).
+ *
+ * The same contract the Commerce handoff uses, validated the same way: an admin
+ * creating a delivery by hand must not be able to persist a record with no
+ * destination, a negative quantity or an impossible coordinate pair.
+ */
+async function createDelivery(data) {
+  validators.validateDeliveryCreationInput(data);
+  return deliveriesRepo.create({
+    ...data,
+    paymentMethod: validators.normalizePaymentMethod(data.paymentMethod) || 'COD',
+  });
+}
 
 async function getDelivery(id) {
   const delivery = await deliveriesRepo.findById(id);

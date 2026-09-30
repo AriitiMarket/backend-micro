@@ -1073,15 +1073,25 @@ class OrderService {
     return result;
   }
 
-  /** Retry committed order handoffs whose delivery-service acknowledgement was lost. */
+  /**
+   * Retry committed order handoffs whose delivery-service acknowledgement was lost.
+   *
+   * Delivery validates the handoff (it refuses an order with no destination, no
+   * pickup, a negative quantity, an impossible coordinate, …), so a 4xx answer is
+   * PERMANENT: the same order data will be refused forever. Such a handoff is
+   * marked abandoned — with the reason — instead of being retried on every pass;
+   * only a 5xx / unreachable answer is a transient failure worth retrying.
+   */
   async recoverDeliveryHandoffs(limit = 100) {
     const links = await orderDeliveryService.findWithoutDeliveryRequest(limit);
     let recovered = 0;
+    let abandoned = 0;
     for (const link of links) {
       try {
         const order = await orderRepository.findById(link.orderId);
         if (!order || ['Cancelled', 'CANCELLED'].includes(String(order.status))) {
           await orderDeliveryService.markHandoffAbandoned(link.orderId);
+          abandoned += 1;
           continue;
         }
         if (normalizeStatus(order.status) !== ORDER_STATUSES.CONFIRMED) {
@@ -1091,12 +1101,23 @@ class OrderService {
         const shipment = (order.sellerShipments || [])[0];
         if (!shipment) continue;
         const result = await this._createDeliveryRequest(order, shipment, order.destination || {});
-        if (result?.status >= 200 && result.status < 300) recovered += 1;
+        if (result?.status >= 200 && result.status < 300) {
+          recovered += 1;
+          continue;
+        }
+        if (result && result.status >= 400 && result.status < 500) {
+          // The delivery service rejected the order data itself: retrying cannot
+          // change the answer, so stop and leave an operator-visible trail.
+          const reason = (result.body && result.body.message) || `Delivery refused the handoff (${result.status})`;
+          console.warn(`[commerce] Delivery handoff abandoned for order ${link.orderId}: ${reason}`);
+          await orderDeliveryService.markHandoffAbandoned(link.orderId);
+          abandoned += 1;
+        }
       } catch (err) {
         console.warn(`[commerce] Delivery handoff retry failed for order ${link.orderId}:`, err.message || err);
       }
     }
-    return { attempted: links.length, recovered };
+    return { attempted: links.length, recovered, abandoned };
   }
 }
 

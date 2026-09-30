@@ -112,21 +112,70 @@ function assertCancellable(status, override = false) {
   return true;
 }
 
-/** Throws 400 listing every proof requirement the delivery has not met. */
-function assertProofSatisfied(proof, rules) {
+/**
+ * Normalize a proof-of-delivery payload onto the field names the Delivery model
+ * actually stores.
+ *
+ * The API historically accepted `photoUrl` / `signatureUrl` while the persisted
+ * subdocument stores `photoReference` / `signatureReference` (and mongooses'
+ * strict mode then discarded the accepted value). Mapping every accepted
+ * spelling onto the storage contract here keeps one vocabulary: callers may send
+ * either, nothing is silently dropped, and `assertProofSatisfied` checks the
+ * same fields that were saved.
+ */
+function normalizeProofOfDelivery(proof) {
+  if (!proof || typeof proof !== 'object') return null;
+  const p = proof;
+  const numberOrNull = (value) => (value === null || value === undefined || value === '' || Number.isNaN(Number(value))
+    ? null
+    : Number(value));
+  return {
+    type: p.type || (p.photoReference || p.photoUrl ? 'photo' : (p.signatureReference || p.signatureUrl ? 'signature' : 'confirmation')),
+    confirmedAt: p.confirmedAt || new Date(),
+    recipientName: p.recipientName || null,
+    recipientReference: p.recipientReference || p.confirmedBy || null,
+    photoReference: p.photoReference || p.photoUrl || null,
+    signatureReference: p.signatureReference || p.signatureUrl || null,
+    note: p.note || null,
+    codConfirmed: p.codConfirmed === true,
+    // COD receipts must survive on the document: without this the collected
+    // amount was discarded and the cash reconciliation had no evidence.
+    codCollectedAmount: numberOrNull(p.codCollectedAmount),
+  };
+}
+
+/**
+ * Throws 400 listing every proof requirement the delivery has not met.
+ *
+ * A COD delivery counts as confirmed either by an explicit `codConfirmed: true`
+ * or by reporting the collected amount — the amount is the evidence the platform
+ * reconciles, so accepting it keeps the rule satisfiable by real clients.
+ */
+function assertProofSatisfied(proof, rules, { expectedCodAmount = null } = {}) {
   const effective = { ...moduleConstants.DEFAULT_PROOF_RULES, ...(rules || {}) };
   const p = proof && typeof proof === 'object' ? proof : {};
   const missing = [];
-  if (effective.requireConfirmation && !(p.confirmed === true || p.confirmedBy || p.recipientName)) {
+  const codReported = p.codConfirmed === true
+    || (p.codCollectedAmount !== null && p.codCollectedAmount !== undefined && expectedCodAmount !== null
+      && Number(p.codCollectedAmount) === Number(expectedCodAmount));
+  if (effective.requireConfirmation && !(p.confirmed === true || p.recipientName || p.recipientReference)) {
     missing.push('recipient confirmation');
   }
-  if (effective.requirePhoto && !p.photoUrl) missing.push('photo proof');
-  if (effective.requireSignature && !p.signatureUrl) missing.push('signature');
-  if (effective.requireCodConfirmation && !(p.codConfirmed === true)) missing.push('COD confirmation');
+  if (effective.requirePhoto && !(p.photoReference || p.photoUrl)) missing.push('photo proof');
+  if (effective.requireSignature && !(p.signatureReference || p.signatureUrl)) missing.push('signature');
+  if (effective.requireCodConfirmation && !codReported) missing.push('COD confirmation');
   if (missing.length > 0) {
     throw validationError(
       missing.map((m) => `Proof of delivery requires ${m}`),
+      'Proof of delivery is incomplete',
       'PROOF_REQUIRED',
+    );
+  }
+  if (effective.requireCodConfirmation && p.codCollectedAmount !== null && p.codCollectedAmount !== undefined
+    && expectedCodAmount !== null && Number(p.codCollectedAmount) !== Number(expectedCodAmount)) {
+    throw conflict(
+      'COD collection must equal the order total',
+      'COD_AMOUNT_MISMATCH',
     );
   }
   return true;
@@ -197,6 +246,7 @@ module.exports = {
   isBlocked,
   isTerminal,
   assertCancellable,
+  normalizeProofOfDelivery,
   assertProofSatisfied,
   assertRetryable,
   assertDeliverable,

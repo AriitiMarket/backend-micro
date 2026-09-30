@@ -100,3 +100,23 @@ test('the edge gate accepts a named caller with its own credential', () => {
   assert.equal(nextCalled, true);
   assert.equal(req.internalCaller, 'commerce', 'the caller is recorded for auditability');
 });
+
+// ── Authorization table ──────────────────────────────────────────────────────
+// Regression: the location tree is reference data every actor needs (address
+// pickers), and Delivery serves those reads without an identity. A BUYER token
+// used to be stopped at the edge with `403 PERMISSION_DENIED:
+// locations.view`, so the customer-facing address picker could never load.
+test('the location tree is a shared actor read, not an admin-only surface', () => {
+  const authorizeRequest = require('../middleware/authorizeRequest');
+
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/location/hierarchy'), 'locations.view');
+  assert.equal(authorizeRequest.isActorSharedPath('/delivery/location/hierarchy'), true);
+  assert.equal(authorizeRequest.isActorSharedPath('/delivery/location/search'), true);
+  assert.equal(authorizeRequest.isActorSharedPath('/delivery/location'), true);
+
+  // The rest of the network configuration stays admin-only at the edge.
+  for (const path of ['/delivery/zone', '/delivery/hub', '/delivery/route', '/delivery/operation/dashboard']) {
+    assert.equal(authorizeRequest.isActorSharedPath(path), false, `${path} must stay admin-gated at the edge`);
+  }
+});
+

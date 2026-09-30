@@ -13,6 +13,11 @@ const authorize = require('../../../app/middleware/authorize');
 // or buyer-level requests.
 router.get('/available', authenticate, authorize('ADMIN'), ctrl.getAvailableProviders);
 router.get('/', authenticate, authorize('ADMIN'), ctrl.getProviders);
+// The caller's OWN provider record. Declared before `/:id` so `/me` is never
+// read as an id: the rider portal needs its own document (id, zones, status,
+// capacity) to render the profile and the availability toggle, and it cannot know
+// the provider _id without first fetching it.
+router.get('/me', authenticate, authorize(['ADMIN', 'PROVIDER']), ctrl.getMyProvider);
 router.get('/:id/detail', authenticate, authorize('ADMIN'), ctrl.getProviderDetail);
 router.get('/:id', authenticate, authorize('ADMIN'), ctrl.getProvider);
 router.post('/', authenticate, authorize('ADMIN'), ctrl.createProvider);

@@ -2,6 +2,8 @@ const svc = require('../services/assignmentBatches.service');
 const readyOrdersSvc = require('../services/readyOrders.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
+const { forbidden } = require('../../../shared/errors');
+const { isAdmin } = require('../../../shared/utils/access');
 
 /** Orders eligible for assignment right now (Ready for Delivery table). */
 async function listReadyOrders(req, res, next) {
@@ -36,9 +38,22 @@ async function createBatchAssignment(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+/**
+ * One batch. ADMIN sees any; a delivery provider only the batch assigned to their
+ * own Provider record — the same ownership proof the rider actions use, so the
+ * detail screen can never show (or act on) another provider's work.
+ */
 async function getBatchAssignment(req, res, next) {
-  try { return ok(res, { assignment: await svc.getBatchDetail(req.params.id) }); }
-  catch (err) { return next(err); }
+  try {
+    const batch = await svc.getBatchDetail(req.params.id);
+    if (!isAdmin(req.user)) {
+      const provider = await svc.resolveProvider(req.user && req.user.id);
+      if (!provider || String(batch.providerId) !== String(provider._id)) {
+        return next(forbidden('You can only open your own assignments'));
+      }
+    }
+    return ok(res, { assignment: batch });
+  } catch (err) { return next(err); }
 }
 
 async function listBatchAssignments(req, res, next) {
@@ -106,7 +121,7 @@ async function respondToBatch(req, res, next) {
   try {
     const accepted = Boolean(req.body.accepted);
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const actor = { id: String(provider._id), name: provider.name };
+    const actor = { id: String(provider._id), name: provider.name, role: 'PROVIDER' };
     const result = accepted
       ? await svc.acceptBatch(batch._id, provider._id, actor)
       : await svc.rejectBatch(batch._id, provider._id, req.body.reason, actor);
@@ -118,7 +133,7 @@ async function respondToBatch(req, res, next) {
 async function startPickup(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.startPickup(batch._id, { id: String(provider._id), name: provider.name });
+    const result = await svc.startPickup(batch._id, { id: String(provider._id), name: provider.name, role: 'PROVIDER' });
     return ok(res, { assignment: result }, 'Pickup started');
   } catch (err) { return next(err); }
 }
@@ -127,7 +142,7 @@ async function startPickup(req, res, next) {
 async function confirmPickup(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.confirmPickupStop(batch._id, req.params.sellerId, { id: String(provider._id), name: provider.name });
+    const result = await svc.confirmPickupStop(batch._id, req.params.sellerId, { id: String(provider._id), name: provider.name, role: 'PROVIDER' });
     return ok(res, { assignment: result }, 'Pickup confirmed');
   } catch (err) { return next(err); }
 }
@@ -136,16 +151,17 @@ async function confirmPickup(req, res, next) {
 async function startTransit(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.startTransit(batch._id, { id: String(provider._id), name: provider.name });
+    const result = await svc.startTransit(batch._id, { id: String(provider._id), name: provider.name, role: 'PROVIDER' });
     return ok(res, { assignment: result }, 'Delivery started');
   } catch (err) { return next(err); }
 }
 
-/** Rider confirms delivery of a single order. */
+/** Rider confirms delivery of a single order (with proof when the rules need it). */
 async function confirmDelivery(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.markDelivered(batch._id, req.params.orderId, { id: String(provider._id), name: provider.name }, req.body || {});
+    const actor = { id: String(provider._id), name: provider.name, role: 'PROVIDER' };
+    const result = await svc.markDelivered(batch._id, req.params.orderId, actor, req.body || {});
     return ok(res, { assignment: result }, 'Order delivered');
   } catch (err) { return next(err); }
 }

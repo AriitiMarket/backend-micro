@@ -5,16 +5,19 @@ const coverageService = require('./provider-coverage.service');
 const eligibilityService = require('./provider-eligibility.service');
 const auditClient = require('../../../shared/utils/audit-client');
 const identityClient = require('../../../shared/utils/identity-client');
+const { badRequest } = require('../../../shared/errors');
 
 async function createProvider(data, actor) {
   if (data.identityUserId) {
     const existing = await providersRepo.findByIdentityUserId(data.identityUserId);
     if (existing) throw Object.assign(new Error('Provider already exists for this user'), { status: 409 });
   }
-  
-  // Clean restricted fields on creation if not from admin?
-  // Assume admin creation or controlled registration
-  const provider = await providersRepo.create(data);
+  // Workload counters are owned by the capacity service (atomic increments) and
+  // must never be seeded from a request body.
+  const payload = { ...(data || {}) };
+  for (const counter of WORKLOAD_MANAGED_FIELDS) delete payload[counter];
+
+  const provider = await providersRepo.create(payload);
 
   if (auditClient && typeof auditClient.sendAudit === 'function') {
     auditClient.sendAudit({
@@ -36,20 +39,53 @@ async function getProvider(id) {
   return provider;
 }
 
+// Fields an administrator may change through the roster endpoint. Everything
+// else — the linked identity account, the operational status (its own endpoint
+// with its own transition rules) and the capacity counters (owned by the atomic
+// capacity service) — is NOT assignable from a request body.
+const UPDATABLE_PROVIDER_FIELDS = [
+  'name', 'phone', 'email', 'providerType', 'actorType', 'vehicleType', 'plateNumber',
+  'serviceId', 'sectorId', 'hubId', 'zoneId', 'zoneIds', 'maxCapacityKg',
+  'maxActiveAssignments', 'rating', 'metadata',
+];
+const WORKLOAD_MANAGED_FIELDS = ['activeDeliveries', 'currentWorkloadIds', 'completedDeliveries', 'identityUserId'];
+
+function assertUpdatableFields(fields) {
+  const unknown = Object.keys(fields || {}).filter((key) => !UPDATABLE_PROVIDER_FIELDS.includes(key));
+  if (unknown.length > 0) {
+    // A typed AppError: the rejection carries the same `{ success, code, message,
+    // errors }` shape as every other validation failure in the service.
+    throw badRequest(`Unsupported provider field(s): ${unknown.join(', ')}`, 'UNSUPPORTED_FIELD');
+  }
+  if (fields.maxActiveAssignments !== undefined && fields.maxActiveAssignments !== null) {
+    const value = Number(fields.maxActiveAssignments);
+    if (!Number.isInteger(value) || value < 1) {
+      throw badRequest('"maxActiveAssignments" must be an integer of at least 1');
+    }
+  }
+  if (fields.maxCapacityKg !== undefined && fields.maxCapacityKg !== null) {
+    const value = Number(fields.maxCapacityKg);
+    if (!Number.isFinite(value) || value < 0) {
+      throw badRequest('"maxCapacityKg" must be a non-negative number');
+    }
+  }
+  return fields;
+}
+
 async function updateProvider(id, fields, actor) {
   await getProvider(id);
-  
-  // Validation for vehicle type could go here if needed
-  
-  const provider = await providersRepo.updateFields(id, fields);
-  
+  const patch = assertUpdatableFields(fields);
+
+  const provider = await providersRepo.updateFields(id, patch);
+
   if (auditClient && typeof auditClient.sendAudit === 'function') {
     auditClient.sendAudit({
       action: 'PROVIDER_UPDATED',
       targetEntity: 'provider',
       targetId: id,
       adminId: actor?.id,
-      adminName: actor?.name
+      adminName: actor?.name,
+      newValue: patch,
     }).catch(() => null);
   }
 

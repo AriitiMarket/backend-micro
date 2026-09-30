@@ -140,8 +140,10 @@ function matches(path, prefix) {
  * (`authorize('PROVIDER')` / handlers scoped to the caller). An ADMIN token is
  * still held to the permission table, so RBAC for the console is unchanged.
  *
- * Admin-only delivery surfaces (/delivery/location, /zone, /route, /hub,
- * /operation) are deliberately NOT listed here.
+ * Admin-only delivery surfaces (/zone, /route, /hub, /operation) are
+ * deliberately NOT listed here. `/delivery/location` is listed for READS only:
+ * the customer address picker needs the location tree, and Delivery serves it
+ * without an identity, so the service — not this table — is what governs writes.
  */
 const ACTOR_SHARED_PREFIXES = [
   '/delivery/assignment',
@@ -151,6 +153,15 @@ const ACTOR_SHARED_PREFIXES = [
   '/delivery/provider',
   '/delivery/partner',
   '/delivery/request',
+  // The location tree (hierarchy, search, one node) is the reference data every
+  // actor needs to pick an address with, and Delivery serves it without an
+  // identity on purpose. Without this entry the permission table below returned
+  // `403 PERMISSION_DENIED: Missing permission: locations.view` for a BUYER
+  // token, so the customer-facing address picker could never load — while the
+  // service happily answered the same call. Only READS are shared: the service
+  // still requires ADMIN for every location/zone write, so this entry does not
+  // widen what a non-admin can change.
+  '/delivery/location',
 ];
 
 /** Is this path also part of an actor (non-admin) workspace? */

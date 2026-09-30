@@ -14,8 +14,8 @@ class AppError extends Error {
   }
 }
 
-function validationError(errors, message = 'Validation failed') {
-  return new AppError(message, 400, 'VALIDATION_ERROR', errors);
+function validationError(errors, message = 'Validation failed', code = 'VALIDATION_ERROR') {
+  return new AppError(message, 400, code, errors);
 }
 
 function badRequest(message, code = 'BAD_REQUEST', errors = []) {

@@ -5,6 +5,7 @@ const providersService = require('../../providers/services/providers.service');
 const zonesService = require('../../locations-expansion/services/zones.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { forbidden, notFound } = require('../../../shared/errors');
+const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
 const {
   isAdmin, isOperator, resolveProviderForUser, assertCanReadDelivery,
 } = require('../../../shared/utils/access');
@@ -14,7 +15,16 @@ async function createAssignment(req, res, next) {
     // Accept either deliveryId or the commerce/admin alias
     const body = { ...req.body };
     if (!body.deliveryId && body.deliveryRequestId) body.deliveryId = body.deliveryRequestId;
-    return created(res, { assignment: await svc.createAssignment(body) }, 'Assignment created');
+    const { adminId, adminName, ipAddress } = getAdminFromReq(req);
+    body.actorId = adminId;
+    body.actorName = adminName;
+    body.actorRole = req.user ? req.user.role : 'ADMIN';
+    const assignment = await svc.createAssignment(body);
+    sendAudit({
+      action: 'DELIVERY_ASSIGNED', adminId, adminName, targetEntity: 'delivery',
+      targetId: body.deliveryId, newValue: { providerId: assignment.providerId }, ipAddress,
+    });
+    return created(res, { assignment }, 'Assignment created');
   } catch (err) { return next(err); }
 }
 
@@ -61,8 +71,17 @@ async function reassign(req, res, next) {
   // `partnerId` is the legacy spelling of the body field — a deployed admin
   // console still sends it, so it must keep reassigning.
   const providerId = req.body.providerId || req.body.partnerId;
-  try { return ok(res, { assignment: await svc.reassign(req.body.deliveryId, providerId) }, 'Reassigned'); }
-  catch (err) { return next(err); }
+  try {
+    const { adminId, adminName, ipAddress } = getAdminFromReq(req);
+    const assignment = await svc.reassign(req.body.deliveryId, providerId, {
+      id: adminId, name: adminName, role: req.user ? req.user.role : 'ADMIN',
+    });
+    sendAudit({
+      action: 'DELIVERY_REASSIGNED', adminId, adminName, targetEntity: 'delivery',
+      targetId: req.body.deliveryId, newValue: { providerId }, ipAddress,
+    });
+    return ok(res, { assignment }, 'Reassigned');
+  } catch (err) { return next(err); }
 }
 
 async function getAssignments(req, res, next) {

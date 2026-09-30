@@ -141,6 +141,9 @@ const deliverySchema = new mongoose.Schema({
       signatureReference: { type: String, default: null },
       note: { type: String, default: null },
       codConfirmed: { type: Boolean, default: false },
+      // Cash actually collected at the door. Required to reconcile a COD order,
+      // so it must be part of the stored proof (it used to be dropped).
+      codCollectedAmount: { type: Number, default: null, min: 0 },
     }, { _id: false }),
     default: null
   },

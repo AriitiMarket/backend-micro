@@ -2,7 +2,12 @@ const mongoose = require('mongoose');
 
 const routeSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
-  code: { type: String, default: null, unique: true, sparse: true },
+  // `default: undefined` (not null) is deliberate: the unique index on `code` is
+  // sparse, and a stored `null` IS indexed — so with a null default only the
+  // first code-less route could ever be created, and every later one failed with
+  // a duplicate-key error on `code_1`. An unset code is now stored as absent,
+  // which the sparse index skips.
+  code: { type: String, default: undefined, unique: true, sparse: true },
   originLocationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', required: true },
   destinationLocationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', required: true },
   status: { type: String, default: 'active', enum: ['active', 'inactive', 'suspended', 'archived'] },

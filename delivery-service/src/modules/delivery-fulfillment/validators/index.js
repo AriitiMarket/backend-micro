@@ -6,11 +6,17 @@
 // Failures throw a single `VALIDATION_ERROR` carrying *all* problems at once.
 const { validationError, badRequest } = require('../../../shared/errors');
 const { isValidObjectId } = require('../../../shared/utils/mongoId');
-const { tryNormalizeDeliveryStatus } = require('../../../shared/constants');
+const { tryNormalizeDeliveryStatus, DELIVERY_SERVICE_TYPES } = require('../../../shared/constants');
 const moduleConstants = require('../constants');
 
 const MAX_TEXT = 500;
 const MAX_ID_LENGTH = 128;
+// Sanity ceiling for a single package line — anything above this is a data error,
+// not a real order (and would silently inflate capacity/weight calculations).
+const MAX_ITEM_QUANTITY = 10000;
+// Payment methods the Delivery model can store, for both the request and the
+// delivery document.
+const PAYMENT_METHODS = ['COD', 'PREPAID'];
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -57,6 +63,10 @@ function assertObjectId(value, field, { optional = true } = {}) {
  * `POST /deliveries` and the Commerce handoff share this contract:
  * an external order reference, the parties involved, a pickup point and a
  * destination. Commerce/Identity-owned data is referenced by id only.
+ *
+ * The package block and the coordinates are validated here too: an order with a
+ * negative quantity, an impossible latitude or a nonexistent location reference
+ * is rejected at the boundary instead of becoming an undeliverable record.
  */
 function validateDeliveryCreationInput(data) {
   if (!isPlainObject(data)) throw validationError(['A JSON body is required']);
@@ -73,6 +83,17 @@ function validateDeliveryCreationInput(data) {
     || Boolean(data.pickupLocationId);
   push(errors, hasPickup, 'A pickup point (address or location reference) is required');
 
+  validateLocationReference(data.pickupLocationId, 'pickupLocationId', errors);
+  validateLocationReference(data.destinationLocationId, 'destinationLocationId', errors);
+  validateAddressCoordinates(data.pickupAddress || data.origin, 'pickupAddress', errors);
+  validateAddressCoordinates(data.deliveryAddress || data.destination, 'deliveryAddress', errors);
+  validateItems(data.items, errors);
+  validateNonNegative(data.totalWeight, 'totalWeight', errors);
+  validateNonNegative(data.totalValue, 'totalValue', errors);
+  validateNonNegative(data.paymentAmount, 'paymentAmount', errors);
+  validatePaymentMethod(data.paymentMethod, errors);
+  validateDeliveryType(data.deliveryType !== undefined ? data.deliveryType : data.serviceType, errors);
+
   if (data.status !== undefined && data.status !== null && !tryNormalizeDeliveryStatus(data.status)) {
     errors.push(`Unknown delivery status "${data.status}"`);
   }
@@ -81,6 +102,77 @@ function validateDeliveryCreationInput(data) {
   }
   if (errors.length > 0) throw validationError(errors);
   return data;
+}
+
+/** A location reference must be an ObjectId (or absent) — never a stray string. */
+function validateLocationReference(value, field, errors) {
+  if (value === undefined || value === null || value === '') return;
+  if (!isValidObjectId(value)) errors.push(`"${field}" must be a valid location identifier`);
+}
+
+/** GeoJSON-style lat/lng bounds on the address snapshots. */
+function validateAddressCoordinates(address, label, errors) {
+  if (!isPlainObject(address) || !isPlainObject(address.coordinates)) return;
+  const { latitude, longitude } = address.coordinates;
+  const check = (value, field, min, max) => {
+    if (value === undefined || value === null) return;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      errors.push(`"${label}.coordinates.${field}" must be a number`);
+    } else if (value < min || value > max) {
+      errors.push(`"${label}.coordinates.${field}" must be between ${min} and ${max}`);
+    }
+  };
+  check(latitude, 'latitude', -90, 90);
+  check(longitude, 'longitude', -180, 180);
+}
+
+/** Package lines: numeric, non-negative, within a sane ceiling. */
+function validateItems(items, errors) {
+  if (items === undefined || items === null) return;
+  if (!Array.isArray(items)) { errors.push('"items" must be an array'); return; }
+  items.forEach((item, index) => {
+    if (!isPlainObject(item)) { errors.push(`"items[${index}]" must be an object`); return; }
+    for (const field of ['quantity', 'weight', 'value']) {
+      const value = item[field];
+      if (value === undefined || value === null) continue;
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        errors.push(`"items[${index}].${field}" must be a number`);
+      } else if (value < 0) {
+        errors.push(`"items[${index}].${field}" cannot be negative`);
+      }
+    }
+    if (typeof item.quantity === 'number' && item.quantity > MAX_ITEM_QUANTITY) {
+      errors.push(`"items[${index}].quantity" must be at most ${MAX_ITEM_QUANTITY}`);
+    }
+  });
+}
+
+function validateNonNegative(value, field, errors) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'number' || !Number.isFinite(value)) errors.push(`"${field}" must be a number`);
+  else if (value < 0) errors.push(`"${field}" cannot be negative`);
+}
+
+/** Case-insensitive, normalized onto the values the model can store. */
+function normalizePaymentMethod(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 'COD';
+  const method = String(value).trim().toUpperCase();
+  return PAYMENT_METHODS.includes(method) ? method : null;
+}
+
+function validatePaymentMethod(value, errors) {
+  if (value === undefined || value === null || String(value).trim() === '') return;
+  if (!normalizePaymentMethod(value)) {
+    errors.push(`"paymentMethod" must be one of: ${PAYMENT_METHODS.join(', ')}`);
+  }
+}
+
+/** The delivery-service catalogue types an order may request. */
+function validateDeliveryType(value, errors) {
+  if (value === undefined || value === null || String(value).trim() === '') return;
+  if (!DELIVERY_SERVICE_TYPES.includes(String(value).trim())) {
+    errors.push(`Unsupported delivery type "${value}". Allowed: ${DELIVERY_SERVICE_TYPES.join(', ')}`);
+  }
 }
 
 /** The Commerce order handoff (`POST /internal/delivery/request`). */
@@ -298,4 +390,7 @@ module.exports = {
   validateValidatePayload,
   validatePatchPayload,
   buildDeliveryFilter,
+  normalizePaymentMethod,
+  MAX_ITEM_QUANTITY,
+  PAYMENT_METHODS,
 };

@@ -6,7 +6,7 @@ const zonesService = require('../../locations-expansion/services/zones.service')
 const routesService = require('../../locations-expansion/services/routes.service');
 const deliveriesService = require('../../delivery-fulfillment/services/delivery-fulfillment.service');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
-const trackingRepo = require('../../tracking/repositories/tracking.repository');
+const { transitionDeliveryStatus } = require('../../delivery-fulfillment/services/delivery-status.service');
 
 const ACTIVE_DELIVERY_STATUSES = ['pending', 'assigned', 'pickup', 'in_transit'];
 const TERMINAL_DELIVERY_STATUSES = ['delivered', 'failed', 'cancelled'];
@@ -83,25 +83,43 @@ async function createAssignment(data) {
     throw err;
   }
 
-  const now = new Date();
-  await deliveriesRepo.updateFields(data.deliveryId, {
-    status: 'assigned',
-    providerId: data.providerId,
-    assignmentId: assignment._id,
-    assignedAt: now,
-    ...(zoneId ? { 'destination.zoneId': zoneId } : {}),
-  });
-  // setProviderStatus is automatically handled by incrementWorkload if capacity is full
+  // Capacity is reserved BEFORE the delivery moves. The repository's atomic
+  // $expr guard is the only check that cannot oversubscribe a provider when two
+  // admins assign work at the same moment; if it loses the race the delivery
+  // must be left exactly as it was, so nothing is written before it succeeds.
   try {
     await providersService.incrementWorkload(data.providerId, assignment._id, null);
   } catch (err) {
     await assignmentsRepo.updateFields(assignment._id, { status: 'cancelled' });
     throw err;
   }
-  await trackingRepo.create({
-    deliveryId: data.deliveryId, providerId: data.providerId,
-    status: 'assigned', note: 'Assigned to delivery actor', timestamp: now,
-  }).catch(() => null);
+
+  const previousStatus = delivery.status;
+  const previousProviderId = delivery.providerId || null;
+  const previousAssignmentId = delivery.assignmentId || null;
+  try {
+    // Ownership first, so the state-machine side effects (milestone, tracking,
+    // Commerce notification) carry the provider and the assignment reference.
+    const ownership = { providerId: data.providerId, assignmentId: assignment._id };
+    if (zoneId) ownership['destination.zoneId'] = zoneId;
+    await deliveriesRepo.updateFields(data.deliveryId, ownership);
+    // One state machine for every assignment path: the status change, its
+    // milestone (`assignedAt`) and the downstream notifications are identical
+    // whether a provider was assigned one delivery or a whole batch.
+    await transitionDeliveryStatus(data.deliveryId, 'assigned', {
+      id: data.actorId || null, name: data.actorName || null, role: data.actorRole || 'ADMIN',
+    }, { note: data.notes || 'Assigned to delivery provider' });
+  } catch (err) {
+    // Never leave a delivery `assigned` to a provider that holds no work: it
+    // would be invisible in the ready pool and impossible to dispatch again.
+    await providersService.decrementWorkload(data.providerId, assignment._id, null).catch(() => null);
+    await assignmentsRepo.updateFields(assignment._id, { status: 'cancelled' });
+    await deliveriesRepo.updateFields(data.deliveryId, {
+      status: previousStatus, providerId: previousProviderId, assignmentId: previousAssignmentId,
+    }).catch(() => null);
+    if (zoneId) await deliveriesRepo.updateFields(data.deliveryId, { 'destination.zoneId': null }).catch(() => null);
+    throw err;
+  }
 
   return assignmentsRepo.findById(assignment._id);
 }
@@ -131,7 +149,12 @@ async function getAssignment(id) {
 async function respondToAssignment(id, accepted, providerId) {
   const assignment = await getAssignment(id);
   if (assignment.status !== 'pending') throw Object.assign(new Error('Assignment is not pending'), { status: 400 });
-  if (assignment.providerId.toString() !== providerId) throw Object.assign(new Error('Not authorized'), { status: 403 });
+  // `assignment.providerId` is an ObjectId and the resolved provider id arrives
+  // as a string: a strict comparison rejected EVERY provider response with 403,
+  // so no provider could ever accept or decline an assignment.
+  if (String(assignment.providerId) !== String(providerId)) {
+    throw Object.assign(new Error('This assignment belongs to another provider'), { status: 403 });
+  }
   if (new Date() > assignment.expiresAt) {
     await assignmentsRepo.updateFields(id, { status: 'expired' });
     await providersService.decrementWorkload(providerId, id, null);
@@ -142,15 +165,18 @@ async function respondToAssignment(id, accepted, providerId) {
     return assignmentsRepo.findById(id);
   }
   await assignmentsRepo.updateFields(id, { status: 'rejected', respondedAt: new Date(), rejectionReason: 'Rejected by provider' });
-  // Free the actor and reopen the delivery for reassignment
+  // Free the provider's reserved capacity, then release the delivery back to the
+  // ready pool through the state machine so the release is part of its history
+  // and Commerce is told about it.
   await providersService.decrementWorkload(providerId, id, null);
-  await deliveriesRepo.updateFields(assignment.deliveryId, {
-    status: 'pending', providerId: null, assignmentId: null,
-  });
+  await transitionDeliveryStatus(assignment.deliveryId, 'pending', {
+    id: String(providerId), role: 'PROVIDER',
+  }, { note: 'Assignment rejected by provider' });
+  await deliveriesRepo.updateFields(assignment.deliveryId, { providerId: null, assignmentId: null });
   return assignmentsRepo.findById(id);
 }
 
-async function reassign(deliveryId, newProviderId) {
+async function reassign(deliveryId, newProviderId, actor = null) {
   const delivery = await deliveriesService.getDelivery(deliveryId);
   assertAssignable(delivery);
   // Batch-held orders must be reassigned from the batch, not here.
@@ -158,19 +184,20 @@ async function reassign(deliveryId, newProviderId) {
   if (activeBatches.length > 0) {
     throw Object.assign(new Error('Delivery already has an active assignment'), { status: 409 });
   }
-  const previousProviderId = delivery.providerId;
-  const oldAssignments = await assignmentsRepo.findActiveByDeliveryId(deliveryId);
-  await assignmentsRepo.cancelActiveByDelivery(deliveryId);
-  if (previousProviderId && String(previousProviderId) !== String(newProviderId)) {
-    if (oldAssignments.length > 0) {
-      for (const a of oldAssignments) {
-        await providersService.decrementWorkload(previousProviderId, a._id, null);
-      }
-    }
+
+  // Step 1 — move the delivery to `reassigned` through the state machine. That
+  // single call stamps the milestone, releases the outgoing provider's reserved
+  // capacity, records the event in history and tells Commerce; writing the field
+  // directly would have done none of that and left the release unexplained. A
+  // delivery that holds no provider yet has nothing to hand over.
+  if (delivery.providerId && delivery.status !== 'reassigned') {
+    await transitionDeliveryStatus(deliveryId, 'reassigned', actor, { note: 'Reassigned to another provider' });
   }
-  await deliveriesRepo.updateFields(deliveryId, {
-    status: 'reassigned', reassignedAt: new Date(),
-  });
+  await assignmentsRepo.cancelActiveByDelivery(deliveryId);
+  await deliveriesRepo.updateFields(deliveryId, { providerId: null, assignmentId: null });
+
+  // Step 2 — hand it to the new provider through the same path every assignment
+  // uses (eligibility, capacity reservation, `assigned` transition).
   const assignment = await createAssignment({ deliveryId, providerId: newProviderId });
   return assignment;
 }

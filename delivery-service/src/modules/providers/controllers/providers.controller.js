@@ -7,6 +7,8 @@ const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery
 const { ok, created } = require('../../../shared/utils/response');
 const { isAdmin } = require('../../../shared/utils/access');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
+const { notFound, forbidden } = require('../../../shared/errors');
+const providersRepository = require('../repositories/providers.repository');
 
 // Providers that can be given new work. `pending` providers are not yet approved.
 const ASSIGNABLE_PROVIDER_STATUSES = ['available', 'busy'];
@@ -17,6 +19,26 @@ async function createProvider(req, res, next) {
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
     sendAudit({ action: 'PROVIDER_CREATED', adminId, adminName, targetEntity: 'provider', targetId: result._id, ipAddress });
     return created(res, { provider: result }, 'Provider created');
+  } catch (err) { return next(err); }
+}
+
+/**
+ * `GET /delivery/provider/me` — the authenticated actor's own provider record.
+ *
+ * A delivery provider cannot know its Provider `_id` (that lives in Identity), so
+ * without this the rider portal's profile, availability and capacity screens had
+ * nothing to show and no id to toggle with. ADMIN callers get their own record
+ * too (usually none → 404), which keeps the route harmless for them.
+ */
+async function getMyProvider(req, res, next) {
+  try {
+    const userId = req.user && req.user.id;
+    if (!userId) return next(forbidden('No identity for this request'));
+    const provider = await providersRepository.findByIdentityUserId(String(userId));
+    if (!provider) {
+      return next(notFound('This account has no delivery provider record yet'));
+    }
+    return ok(res, { provider });
   } catch (err) { return next(err); }
 }
 
@@ -76,7 +98,7 @@ async function setOnline(req, res, next) {
   try {
     const provider = await svc.getProvider(req.params.id);
     if (req.user && !isAdmin(req.user) && provider.identityUserId !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized to update another provider' });
+      return next(forbidden('Not authorized to update another provider'));
     }
     return ok(res, { provider: await svc.setOnline(req.params.id, req.body.isOnline, getAdminFromReq(req)) });
   } catch (err) { return next(err); }
@@ -86,7 +108,7 @@ async function updateLocation(req, res, next) {
   try {
     const provider = await svc.getProvider(req.params.id);
     if (req.user && !isAdmin(req.user) && provider.identityUserId !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized to update another provider' });
+      return next(forbidden('Not authorized to update another provider'));
     }
     return ok(res, { provider: await svc.updateLocation(req.params.id, req.body.coordinates) });
   } catch (err) { return next(err); }
@@ -259,7 +281,7 @@ async function assignRoutes(req, res, next) {
 }
 
 module.exports = {
-  createProvider, getProvider, updateProvider, getProviders, getAvailableProviders,
+  createProvider, getProvider, getMyProvider, updateProvider, getProviders, getAvailableProviders,
   setProviderStatus, setOnline, updateLocation, approveProvider,
   rejectProvider, getProviderDetail, assignZones, assignRoutes,
 };

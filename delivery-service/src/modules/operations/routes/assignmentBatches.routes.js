@@ -17,7 +17,10 @@ const authorize = require('../../../app/middleware/authorize');
 router.get('/ready-orders', authenticate, authorize('ADMIN'), ctrl.listReadyOrders);
 router.get('/batches', authenticate, authorize('ADMIN'), ctrl.listBatchAssignments);
 router.post('/batches', authenticate, authorize('ADMIN'), ctrl.createBatchAssignment);
-router.get('/batches/:id', authenticate, authorize('ADMIN'), ctrl.getBatchAssignment);
+// Batch DETAIL is also the rider's own screen (it lists, then opens one). A
+// provider may therefore read it — the controller proves the batch is theirs
+// before answering, so this does not expose anybody else's work.
+router.get('/batches/:id', authenticate, authorize(['ADMIN', 'PROVIDER']), ctrl.getBatchAssignment);
 router.post('/batches/:id/reassign', authenticate, authorize('ADMIN'), ctrl.reassignBatchAssignment);
 router.post('/batches/:id/cancel', authenticate, authorize('ADMIN'), ctrl.cancelBatchAssignment);
 

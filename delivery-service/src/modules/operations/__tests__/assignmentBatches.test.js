@@ -15,7 +15,7 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '../../../..');
 
 // ---- In-memory fakes -------------------------------------------------------
-const store = { batches: [], deliveries: new Map(), providers: new Map(), tracking: [], nextId: 1 };
+const store = { batches: [], deliveries: new Map(), providers: new Map(), tracking: [], outbox: [], nextId: 1 };
 
 function oid() {
   const id = `id${store.nextId++}`;
@@ -97,6 +97,16 @@ stub('src/modules/providers/services/providers.service.js', providersService);
 stub('src/modules/tracking/repositories/tracking.repository.js', {
   async create(e) { store.tracking.push(e); return e; },
 });
+// The Commerce notification outbox is infrastructure, not business logic: the
+// delivery state machine must run (and be asserted) without a live MongoDB just
+// to record the downstream event. Without this stub every transition timed out
+// on `deliveryoutboxevents.findOneAndUpdate()`.
+stub('src/modules/delivery-fulfillment/repositories/delivery-outbox.repository.js', {
+  async enqueue(event) { store.outbox.push(event); return { ...event, _id: oid() }; },
+  async claimNext() { return null; },
+  async markSent() { return null; },
+  async markFailed() { return null; },
+});
 // Single-assignment holders (the OTHER assignment flow) — see createBatch's guard.
 const singleHolds = { active: [] };
 stub('src/modules/operations/repositories/assignments.repository.js', {
@@ -107,6 +117,12 @@ stub('src/modules/operations/repositories/assignments.repository.js', {
   async findActiveByDeliveryId(deliveryId) {
     return singleHolds.active.filter((a) => String(a.deliveryId) === String(deliveryId));
   },
+  // The delivery state machine closes the delivery's active assignment when it is
+  // delivered/failed/cancelled.
+  async cancelActiveByDelivery(deliveryId) {
+    singleHolds.active = singleHolds.active.filter((a) => String(a.deliveryId) !== String(deliveryId));
+    return { modifiedCount: 0 };
+  },
 });
 
 const svc = require(path.join(ROOT, 'src/modules/operations/services/assignmentBatches.service.js'));
@@ -115,6 +131,7 @@ const svc = require(path.join(ROOT, 'src/modules/operations/services/assignmentB
 function reset() {
   store.batches = [];
   store.tracking = [];
+  store.outbox = [];
   store.deliveries = new Map();
   store.providers = new Map();
   singleHolds.active = [];

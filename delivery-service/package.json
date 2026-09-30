@@ -7,7 +7,7 @@
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed/seed.js",
-    "test": "node --test"
+    "test": "node --test --test-force-exit"
   },
   "dependencies": {
     "cors": "^2.8.5",

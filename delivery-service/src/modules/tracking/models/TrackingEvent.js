@@ -1,9 +1,16 @@
 const mongoose = require('mongoose');
+const { DELIVERY_STATUSES } = require('../../../shared/constants');
 
+// History is the delivery's audit trail: EVERY status the delivery state machine
+// can reach must be storable here. The enum used to list only the original eight
+// MVP values, so a transition to `ready_for_pickup`, `arrived_at_hub`,
+// `out_for_delivery`, `return_requested` … was rejected by mongoose validation
+// and the event was silently lost from history. It is now derived from the one
+// canonical lifecycle list.
 const trackingEventSchema = new mongoose.Schema({
   deliveryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Delivery', required: true },
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', default: null },
-  status: { type: String, required: true, enum: ['pending', 'assigned', 'pickup', 'in_transit', 'delivered', 'failed', 'cancelled', 'reassigned'] },
+  status: { type: String, required: true, enum: DELIVERY_STATUSES },
   location: {
     type: { type: String, enum: ['Point'], default: undefined },
     coordinates: { type: [Number], default: undefined },

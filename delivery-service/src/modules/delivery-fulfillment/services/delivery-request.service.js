@@ -3,6 +3,7 @@ const requestsRepo = require('../repositories/delivery-request.repository');
 const deliveriesRepo = require('../repositories/delivery.repository');
 const locationsService = require('../../locations-expansion/services/locations.service');
 const zonesService = require('../../locations-expansion/services/zones.service');
+const validators = require('../validators');
 
 // An order handoff must never be rejected because a location id is unusable:
 // buyers save addresses against an older location tree, shops may have no pin
@@ -19,6 +20,14 @@ function keepIfKnown(id, location) {
 }
 
 async function createRequest(data) {
+  // The Commerce handoff is an API contract: validate it before ANY document is
+  // written. `validateRequestHandoffInput` existed in the module but was never
+  // called, so an incomplete handoff (no pickup, no destination, negative
+  // quantities, impossible coordinates) used to create a delivery that could
+  // never be picked up and whose capacity/weight numbers were meaningless.
+  validators.validateRequestHandoffInput(data);
+  const paymentMethod = validators.normalizePaymentMethod(data.paymentMethod) || 'COD';
+
   // Idempotency (MVP §10): one order hands over to Delivery exactly once.
   // Commerce retries must not create a second request or a second Delivery.
   let request = null;
@@ -43,12 +52,20 @@ async function createRequest(data) {
     }
   }
 
+  // Location references that do not resolve to a real location are dropped from
+  // the RECORD as well as stored as null, so no document ends up pointing at an
+  // orphan location id (the text address snapshot below still carries everything
+  // the coordinator needs).
+  const pickupLocationId = keepIfKnown(data.pickupLocationId, pickup);
+  const destinationLocationId = keepIfKnown(data.destinationLocationId, destination);
+
   // Ensure location hierarchy snapshots are preserved
   // (regionId/regionName/areaId/areaName/sectorId/sectorName come from Commerce)
   const savedData = {
     ...data,
-    pickupLocationId: keepIfKnown(data.pickupLocationId, pickup),
-    destinationLocationId: keepIfKnown(data.destinationLocationId, destination),
+    paymentMethod,
+    pickupLocationId,
+    destinationLocationId,
     deliveryAddress,
     pickupAddress: { ...data.pickupAddress },
     requestedAt: new Date(),
@@ -66,16 +83,16 @@ async function createRequest(data) {
         orderId: data.orderId,
         sellerId: data.sellerId,
         buyerId: data.buyerId,
-        paymentMethod: data.paymentMethod || 'COD',
+        paymentMethod,
         paymentAmount: Number(data.paymentAmount) || 0,
-        proofRules: { requireCodConfirmation: (data.paymentMethod || 'COD') === 'COD' },
+        proofRules: { requireCodConfirmation: paymentMethod === 'COD' },
         status: 'pending',
         origin: {
           regionId: pickupAddr.regionId || null,
           areaId: pickupAddr.areaId || null,
           cityId: pickupAddr.cityId || null,
           sectorId: pickupAddr.sectorId || null,
-          locationId: data.pickupLocationId || null,
+          locationId: pickupLocationId || null,
           regionName: pickupAddr.regionName || '',
           areaName: pickupAddr.areaName || '',
           cityName: pickupAddr.cityName || '',
@@ -94,8 +111,11 @@ async function createRequest(data) {
           regionId: deliveryAddress.regionId || null,
           areaId: deliveryAddress.areaId || null,
           cityId: deliveryAddress.cityId || null,
-          sectorId: deliveryAddress.sectorId || data.destinationLocationId || null,
-          locationId: data.destinationLocationId || deliveryAddress.locationId || null,
+          // `sectorId` holds a SECTOR location id, never the generic destination
+          // reference: conflating them made every sector/zone filter and every
+          // provider coverage check compare unrelated locations.
+          sectorId: deliveryAddress.sectorId || null,
+          locationId: destinationLocationId || deliveryAddress.locationId || null,
           zoneId: deliveryAddress.zoneId || null,
           regionName: deliveryAddress.regionName || '',
           areaName: deliveryAddress.areaName || '',

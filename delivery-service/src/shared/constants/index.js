@@ -31,6 +31,10 @@ const DELIVERY_STATUSES = [
 // value. Unknown values return null instead of silently persisting junk.
 const DELIVERY_STATUS_ALIASES = {
   REQUESTED: 'pending',
+  // The canonical lifecycle name of the initial state. Without this entry
+  // `PENDING` — the spelling the platform's own state machine uses — was
+  // rejected as an unknown status while every other canonical name was accepted.
+  PENDING: 'pending',
   VALIDATED: 'validated',
   READY_FOR_PICKUP: 'ready_for_pickup',
   READY: 'ready_for_pickup',
@@ -65,10 +69,15 @@ function tryNormalizeDeliveryStatus(value) {
 // Terminal states (`cancelled`, `returned`) have no outgoing transitions.
 // `pending` is re-enterable as the "released/requeued to the ready pool"
 // operation used by dispatch (rider rejects, assignment released, retry).
+//
+// A delivery may only be PICKED UP after a provider has been assigned to it:
+// `assigned`/`reassigned` are the only states that precede `pickup`. Without
+// this rule an unassigned (`pending`) delivery could be marked picked up, which
+// no provider could ever account for.
 const VALID_TRANSITIONS = {
-  pending:           ['validated', 'ready_for_pickup', 'assigned', 'pickup', 'failed', 'cancelled'],
-  validated:         ['ready_for_pickup', 'assigned', 'pickup', 'failed', 'cancelled'],
-  ready_for_pickup:  ['assigned', 'pickup', 'failed', 'cancelled'],
+  pending:           ['validated', 'ready_for_pickup', 'assigned', 'failed', 'cancelled'],
+  validated:         ['ready_for_pickup', 'assigned', 'failed', 'cancelled'],
+  ready_for_pickup:  ['assigned', 'failed', 'cancelled'],
   assigned:          ['pickup', 'reassigned', 'pending', 'failed', 'cancelled'],
   reassigned:        ['assigned', 'pickup', 'pending', 'failed', 'cancelled'],
   pickup:            ['in_transit', 'arrived_at_hub', 'out_for_delivery', 'assigned', 'reassigned', 'pending', 'failed', 'cancelled'],
