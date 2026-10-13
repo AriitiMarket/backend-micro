@@ -1,7 +1,9 @@
 const productRepository = require('../repositories/products.repository');
 const stockMovementRepository = require('../repositories/stockMovements.repository');
 const shopRepository = require('../../selling/repositories/shops.repository');
+const sellerApplicationRepository = require('../../selling/repositories/sellerApplications.repository');
 const orderRepository = require('../../fulfillment/repositories/orders.repository');
+const identityClient = require('../../../app/clients/identity.client').identityClient;
 const settingsService = require('../../platform/services/settings.service');
 const { validateCategory } = require('../../../shared/utils/categoryValidator');
 const { inactiveProductCategoryTitles } = require('../../../shared/utils/categoryVisibility');
@@ -283,7 +285,7 @@ class ProductService {
   async publishProduct(id, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     if (!isAdminRequester(requester)) {
       const shop = await shopRepository.findById(product.shopId);
@@ -308,7 +310,7 @@ class ProductService {
   async draftProduct(id, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     const updated = await productRepository.draft(id);
     return updated || product;
@@ -323,7 +325,7 @@ class ProductService {
   async archiveProduct(id, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     if (product.status === 'ARCHIVED') return product; // idempotent
     const updated = await productRepository.archive(id);
@@ -337,7 +339,7 @@ class ProductService {
   async unarchiveProduct(id, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     if (product.status !== 'ARCHIVED') return product; // nothing to restore
     const updated = await productRepository.unarchive(id);
@@ -419,7 +421,7 @@ class ProductService {
     }
 
     if (isAdmin && filters) {
-      const { search, category, shopId, priceMin, priceMax, dateFrom, page: p, limit: l } = filters;
+      const { search, category, shopId, businessId, ownerId, priceMin, priceMax, dateFrom, page: p, limit: l } = filters;
 
       if (statusFilter === 'ACTIVE') clauses.push({ isActive: { $ne: false } });
       else if (statusFilter === 'INACTIVE') clauses.push({ isActive: false });
@@ -465,16 +467,62 @@ class ProductService {
       }
 
       if (search && String(search).trim()) {
-        const terms = String(search).trim().split(/\s+/).map(escapeRegex);
-        clauses.push({
-          $or: terms.flatMap((t) => {
-            const re = new RegExp(t, 'i');
-            return [{ name: re }, { category: re }, { description: re }, { tags: re }];
-          }),
+        const term = String(search).trim();
+        const terms = term.split(/\s+/).map(escapeRegex);
+        const orClauses = terms.flatMap((t) => {
+          const re = new RegExp(t, 'i');
+          return [
+            { name: re },
+            { category: re },
+            { description: re },
+            { tags: re },
+            // One search field answers for the catalogue AND its ownership: an
+            // admin types a product name, an SKU or a shop name and gets the
+            // same list. Nobody searches by a Mongo id.
+            { sku: re },
+            { 'shop.name': re },
+          ];
         });
+
+        // A seller's name / phone / email never appears on a product document
+        // (only `sellerId` does), so the term is resolved against Identity and
+        // the shop store first and folded in as ids — still ONE Mongo query.
+        const rx = new RegExp(escapeRegex(term), 'i');
+        const [identityResult, namedShops] = await Promise.all([
+          identityClient.searchUsers(term, 50),
+          shopRepository
+            .findAll({ $or: [{ name: rx }, { email: rx }, { phoneNumber: rx }] }, { limit: 50 })
+            .catch(() => []),
+        ]);
+        const people = identityClient
+          .displayUsers(identityResult)
+          .map((user) => String(user.id || user._id || ''))
+          .filter(Boolean);
+        if (people.length) {
+          orClauses.push({ sellerId: { $in: people } });
+          orClauses.push({ 'shop.ownerId': { $in: people } });
+        }
+        const namedShopIds = (namedShops || []).map((s) => String(s._id || s.id || '')).filter(Boolean);
+        if (namedShopIds.length) orClauses.push({ shopId: { $in: namedShopIds } });
+
+        if (orClauses.length) clauses.push({ $or: orClauses });
       }
       if (category) clauses.push({ category: { $regex: new RegExp(`^${escapeRegex(category)}$`, 'i') } });
       if (shopId) clauses.push({ shopId: String(shopId) });
+      // Filter a whole seller or a whole business. A product stores no
+      // `businessId`, so the business expands to its shops — and a business with
+      // no shops is an EMPTY list, never an unfiltered one.
+      if (ownerId) {
+        const id = String(ownerId);
+        clauses.push({ $or: [{ sellerId: id }, { 'shop.ownerId': id }] });
+      }
+      if (businessId) {
+        const businessShops = await shopRepository
+          .findAll({ businessId: String(businessId) }, { limit: 500 })
+          .catch(() => []);
+        const shopIds = (businessShops || []).map((s) => String(s._id || s.id || '')).filter(Boolean);
+        clauses.push({ shopId: { $in: shopIds } });
+      }
       if (priceMin !== undefined && priceMin !== null && priceMin !== '') {
         clauses.push({ discountPrice: { $gte: Number(priceMin) } });
       }
@@ -509,12 +557,81 @@ class ProductService {
       : sanitizeProducts(products.map(withApprovedReviewsOnly), { includeSensitive: isAdmin });
 
     return {
-      products: shaped,
+      products: isAdmin ? await this.enrichAdminProductRows(shaped) : shaped,
       total,
       page,
       limit: hasPagination ? limit : total,
       totalPages: hasPagination ? Math.ceil(total / limit) : 1,
     };
+  }
+
+  /**
+   * Give admin product rows the shop, business and seller behind them.
+   *
+   * The Products console has to show Shop / Business / Seller as NAMES on every
+   * row — never a bare `shopId`. The lookups are batched across the page and
+   * every miss simply leaves the field blank instead of failing the list. Only
+   * the admin listing reaches this path, so the storefront pays nothing for it.
+   */
+  async enrichAdminProductRows(rows = []) {
+    if (!rows.length) return rows;
+
+    const shopIds = [...new Set(rows.map((row) => row && row.shopId).filter(Boolean).map(String))];
+    const ownerIds = [...new Set(rows.map((row) => row && row.sellerId).filter(Boolean).map(String))];
+
+    const [shopRows, identityResult] = await Promise.all([
+      shopIds.length
+        ? shopRepository.findAll({ _id: { $in: shopIds } }, { limit: shopIds.length }).catch(() => [])
+        : Promise.resolve([]),
+      ownerIds.length ? identityClient.findUsersByIds(ownerIds) : Promise.resolve(null),
+    ]);
+
+    const shopsById = new Map();
+    for (const shop of shopRows || []) {
+      const id = String(shop._id || shop.id || '');
+      if (id) shopsById.set(id, shop);
+    }
+    const ownersById = new Map();
+    for (const user of identityClient.displayUsers(identityResult)) {
+      const id = String(user.id || user._id || '');
+      if (id) ownersById.set(id, user);
+    }
+
+    const businessIds = [...new Set(
+      (shopRows || []).map((shop) => (shop && shop.businessId) || '').filter(Boolean).map(String)
+    )];
+    const businessDocs = businessIds.length
+      ? await sellerApplicationRepository
+          .findAll({ _id: { $in: businessIds } }, { limit: businessIds.length })
+          .catch(() => [])
+      : [];
+    const businessesById = new Map();
+    for (const doc of businessDocs || []) {
+      const id = String(doc._id || doc.id || '');
+      if (id) businessesById.set(id, doc);
+    }
+
+    return rows.map((row) => {
+      const shopId = row.shopId || (row.shop && row.shop._id) || null;
+      const shop = shopId ? shopsById.get(String(shopId)) || null : null;
+      const ownerId = row.sellerId || (row.shop && row.shop.ownerId) || null;
+      const owner = ownerId ? ownersById.get(String(ownerId)) || null : null;
+      const businessId = (shop && shop.businessId) || (row.shop && row.shop.businessId) || null;
+      const business = businessId ? businessesById.get(String(businessId)) || null : null;
+      return {
+        ...row,
+        shopId: shopId || row.shopId || null,
+        shopName: row.shopName || (row.shop && row.shop.name) || (shop ? shop.name : null) || null,
+        businessId,
+        businessName:
+          (business && business.businessInformation && business.businessInformation.businessName) ||
+          (business ? business.businessName || null : null) ||
+          null,
+        sellerId: ownerId,
+        sellerName: row.sellerName || (owner ? owner.name || null : null) || null,
+        sellerEmail: (owner ? owner.email || null : null) || (row.shop && row.shop.email) || null,
+      };
+    });
   }
 
   /**
@@ -643,16 +760,30 @@ class ProductService {
     };
   }
 
-  assertOwnership(product, requester) {
+  async assertOwnership(product, requester) {
     if (!requester || !requester.id) {
       throw new ApiError('Authentication required', 401);
     }
     if (isAdminRequester(requester)) return;
-    const ownerId = product.shop && product.shop.ownerId ? String(product.shop.ownerId) : null;
+
+    // The live Shop is authoritative. The `shop` snapshot embedded on the
+    // product is a denormalised copy and can outlive an ownership transfer
+    // (`getSellerShop` re-links `ownerId`), so trusting it alone could keep
+    // granting a previous owner access. `sellerId` is only a fallback for the
+    // one case the live shop cannot answer: the shop document is gone.
+    const shop = product.shopId ? await shopRepository.findById(product.shopId) : null;
+    if (shop) {
+      const isOwner =
+        String(shop.ownerId) === String(requester.id) ||
+        (requester.shopId && String(shop._id) === String(requester.shopId));
+      if (!isOwner) throw new ApiError('Forbidden: you can only manage products from your own business', 403);
+      return;
+    }
+
+    const snapshotOwner = product.shop && product.shop.ownerId ? String(product.shop.ownerId) : null;
     const isOwner =
       (product.sellerId && String(product.sellerId) === String(requester.id)) ||
-      (ownerId && ownerId === String(requester.id)) ||
-      (product.shopId && requester.shopId && String(product.shopId) === String(requester.shopId));
+      (snapshotOwner === String(requester.id));
     if (!isOwner) throw new ApiError('Forbidden: you can only manage products from your own business', 403);
   }
 
@@ -660,7 +791,7 @@ class ProductService {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
 
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     // Allowlisted + numerically validated (see buildWritableFields). `partial`
     // keeps update semantics: an omitted field stays untouched, and `''` clears
@@ -764,7 +895,7 @@ class ProductService {
   async deleteProduct(id, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     // Never hard-delete a product that orders reference. Order lines store the
     // product id they were priced against, so removing the row breaks the
@@ -790,7 +921,7 @@ class ProductService {
   async restockProduct(id, quantity, note, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     const qty = Number(quantity);
     if (!Number.isInteger(qty) || qty <= 0) throw new ApiError('Quantity must be a positive whole number', 400);
@@ -815,7 +946,7 @@ class ProductService {
   async adjustStock(id, newQuantity, note, requester) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
 
     const target = Number(newQuantity);
     if (!Number.isFinite(target) || target < 0 || !Number.isInteger(target)) {
@@ -849,7 +980,7 @@ class ProductService {
   async getStockHistory(id, limit = 50, requester = null) {
     const product = await productRepository.findById(id);
     if (!product) throw new ApiError('Product not found', 404);
-    this.assertOwnership(product, requester);
+    await this.assertOwnership(product, requester);
     const movements = await stockMovementRepository.findByProduct(id, limit);
     return movements;
   }

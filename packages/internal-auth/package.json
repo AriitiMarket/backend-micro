@@ -1,0 +1,31 @@
+{
+  "name": "@aritii/internal-auth",
+  "version": "1.0.0",
+  "description": "Internal service authentication for Aritii microservices",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./jwt": "./src/jwt.js",
+    "./credentials": "./src/credentials.js",
+    "./verification": "./src/verification.js"
+  },
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "aritii",
+    "internal-auth",
+    "microservices",
+    "authentication"
+  ],
+  "author": "Aritii",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "eslint": "^8.0.0"
+  }
+}

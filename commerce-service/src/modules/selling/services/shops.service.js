@@ -2,6 +2,7 @@ const shopRepository = require('../repositories/shops.repository');
 const { findPublicAll } = require('../repositories/shops.public.repository');
 const productRepository = require('../../catalog/repositories/products.repository');
 const sellerAppRepository = require('../repositories/sellerApplications.repository');
+const { ensureBusiness, isLiveStatus } = require('./business.service');
 const orderRepository = require('../../fulfillment/repositories/orders.repository');
 const { identityClient } = require('../../../app/clients/identity.client');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
@@ -112,6 +113,21 @@ class ShopService {
       { address, phoneNumber, coordinates: null }
     );
 
+    const status = approvedSeller ? 'APPROVED' : 'PENDING_APPROVAL';
+
+    // User -> Seller Actor -> BUSINESS -> Shop: a shop must never exist without
+    // a business record. Sellers who reach here without a filed application get
+    // a minimal one (flagged `provisionedFromShop`) so the hierarchy and the
+    // admin business scope stay unbroken.
+    const { business } = await ensureBusiness(requester.id, {
+      businessName: String(name).trim(),
+      businessCategory: shopCategory,
+      email,
+      shopName: String(name).trim(),
+      live: isLiveStatus(status),
+    });
+    const businessId = String(business._id);
+
     const shop = await shopRepository.create({
       name: String(name).trim(),
       email,
@@ -122,7 +138,9 @@ class ShopService {
       category: shopCategory,
       avatar,
       ownerId: requester.id,
-      status: approvedSeller ? 'APPROVED' : 'PENDING_APPROVAL',
+      status,
+      applicationId: businessId,
+      businessId,
       ...locationUpdate,
     });
 
@@ -529,8 +547,10 @@ class ShopService {
    * name and avatar now do too.)
    */
   async syncShopSnapshot(id, fields) {
-    // Only the fields the product payload actually carries.
-    const keys = ['name', 'avatar', 'email', 'phoneNumber', 'address', 'description', 'status', 'showOnPublic'];
+    // Only the fields the product payload actually carries. `ownerId` is
+    // included because `getSellerShop` can re-link a shop to a new owner and
+    // the embedded copy is what product cards and legacy readers show.
+    const keys = ['name', 'avatar', 'email', 'phoneNumber', 'address', 'description', 'status', 'showOnPublic', 'ownerId'];
     const set = {};
     for (const key of keys) {
       if (fields && fields[key] !== undefined) set[`shop.${key}`] = fields[key];

@@ -220,7 +220,7 @@ test('Deconsolidation: shipment received releases deliveries', async () => {
   assert.equal(d1.shipmentId, null);
 });
 
-test('Hub: arrival and receiving', async () => {
+test('Port: arrival and receiving', async () => {
   reset();
   const sId = oid();
   store.shipments.push({ _id: sId, status: 'in_transit', items: [{ deliveryId: 'd1' }], history: [] });

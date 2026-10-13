@@ -54,10 +54,9 @@ async function deactivateZone(req, res, next) {
 
 async function getZones(req, res, next) {
   try {
-    const { status, search, sectorId, page = 1, limit = 50 } = req.query;
+    const { status, search, page = 1, limit = 50 } = req.query;
     const filter = {};
     if (status) filter.status = status;
-    if (sectorId) filter.sectorId = sectorId;
     if (search) {
       const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       filter.$or = [{ name: rx }, { code: rx }];

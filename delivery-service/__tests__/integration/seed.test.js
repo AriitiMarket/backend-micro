@@ -2,7 +2,7 @@
 /**
  * Seed data integration tests (§37).
  *
- * The Ethiopian location hierarchy, zones, hubs, routes and providers must be
+ * The Ethiopian location hierarchy, zones, ports, routes and providers must be
  * safe to seed repeatedly: the first run creates them, every later run finds
  * them, and nothing that is not part of the seed is ever deleted.
  */
@@ -40,14 +40,16 @@ it('the first run creates the whole delivery hierarchy', async () => {
     zones: await models.Zone.countDocuments(),
     deliveryServices: await models.DeliveryService.countDocuments(),
     providers: await models.Provider.countDocuments(),
-    hubs: await models.Hub.countDocuments(),
+    ports: await models.Port.countDocuments(),
     routes: await models.DeliveryRoute.countDocuments(),
   };
-  assert.ok(counts.locations >= 14, `locations seeded (${counts.locations})`);
+  // Country -> Region -> City only (Zone/Port are separate models), so the
+  // location count is intentionally much smaller than the old sector tree.
+  assert.ok(counts.locations >= 6, `locations seeded (${counts.locations})`);
   assert.ok(counts.zones >= 3, `zones seeded (${counts.zones})`);
   assert.ok(counts.deliveryServices >= 2);
   assert.ok(counts.providers >= 3);
-  assert.ok(counts.hubs >= 2);
+  assert.ok(counts.ports >= 3, `ports seeded (${counts.ports})`);
   assert.ok(counts.routes >= 3);
 });
 
@@ -57,12 +59,12 @@ it('a second run creates nothing and deletes nothing', async () => {
     locations: await models.Location.countDocuments(),
     zones: await models.Zone.countDocuments(),
     providers: await models.Provider.countDocuments(),
-    hubs: await models.Hub.countDocuments(),
+    ports: await models.Port.countDocuments(),
     routes: await models.DeliveryRoute.countDocuments(),
   };
 
   // Records that are NOT part of the seed (an operator's own data).
-  const extraLocation = await models.Location.create({ name: 'Operator Village', type: 'village', code: 'OP-VILLAGE' });
+  const extraLocation = await models.Location.create({ name: 'Operator Point', type: 'other', code: 'OP-POINT' });
   await models.Provider.create({ name: 'Operator Rider', phone: '+251977777777', status: 'available' });
   const deliveries = await models.Delivery.countDocuments();
 
@@ -74,14 +76,14 @@ it('a second run creates nothing and deletes nothing', async () => {
     locations: await models.Location.countDocuments(),
     zones: await models.Zone.countDocuments(),
     providers: await models.Provider.countDocuments(),
-    hubs: await models.Hub.countDocuments(),
+    ports: await models.Port.countDocuments(),
     routes: await models.DeliveryRoute.countDocuments(),
   };
   // +1 location and +1 provider: the ones the operator added, nothing else.
   assert.equal(countsAfter.locations, countsBefore.locations + 1);
   assert.equal(countsAfter.providers, countsBefore.providers + 1);
   assert.equal(countsAfter.zones, countsBefore.zones);
-  assert.equal(countsAfter.hubs, countsBefore.hubs);
+  assert.equal(countsAfter.ports, countsBefore.ports);
   assert.equal(countsAfter.routes, countsBefore.routes);
   assert.equal(await models.Delivery.countDocuments(), deliveries, 'deliveries are untouched by a re-seed');
 
@@ -90,14 +92,14 @@ it('a second run creates nothing and deletes nothing', async () => {
 });
 
 it('the seeded hierarchy is internally consistent', async () => {
-  const conflicts = await models.Location.find({ type: 'sector' });
-  assert.ok(conflicts.length >= 2);
-  for (const sector of conflicts) {
-    assert.ok(sector.parentId, `sector ${sector.name} has a parent`);
-    const parent = await models.Location.findById(sector.parentId);
-    assert.ok(parent, `sector ${sector.name} references an existing parent`);
-    assert.ok(['city', 'town', 'area', 'region'].includes(parent.type), `sector ${sector.name} hangs off a ${parent.type}`);
+  // MVP geography is Region (optional) -> City; Zone and Port are their own models.
+  for (const city of await models.Location.find({ type: 'city' })) {
+    assert.ok(city.parentId, `city ${city.name} has a parent`);
+    const parent = await models.Location.findById(city.parentId);
+    assert.ok(parent, `city ${city.name} references an existing parent`);
+    assert.ok(['region', 'country'].includes(parent.type), `city ${city.name} hangs off a ${parent.type}`);
   }
+  assert.equal(await models.Location.countDocuments({ type: 'sector' }), 0, 'the Sector concept is gone');
 
   const zones = await models.Zone.find({});
   for (const zone of zones) {
@@ -113,9 +115,9 @@ it('the seeded hierarchy is internally consistent', async () => {
     assert.ok(await models.Location.findById(route.destinationLocationId), `route ${route.name} has a real destination`);
   }
 
-  const hubs = await models.Hub.find({});
-  for (const hub of hubs) {
-    assert.ok(await models.Location.findById(hub.locationId), `hub ${hub.name} sits at a real location`);
+  const ports = await models.Port.find({});
+  for (const port of ports) {
+    assert.ok(await models.Location.findById(port.locationId), `port ${port.name} sits at a real location`);
   }
 
   const providers = await models.Provider.find({ email: { $in: ['ahmed@aritii.et', 'fatima@aritii.et', 'omar@aritii.et'] } });
@@ -131,7 +133,7 @@ it('two routes can exist without a code (unique + sparse index regression)', asy
   // default the second code-less route died with `E11000 ... code_1`, so the
   // admin could only ever create one route without a code.
   const origin = await models.Location.findOne({ code: 'HAR' });
-  const destination = await models.Location.findOne({ code: 'HAR-SH' });
+  const destination = await models.Location.findOne({ code: 'DD-C' });
   const first = await models.DeliveryRoute.create({ name: 'No code A', originLocationId: origin._id, destinationLocationId: destination._id });
   const second = await models.DeliveryRoute.create({ name: 'No code B', originLocationId: destination._id, destinationLocationId: origin._id });
   assert.ok(first._id && second._id);

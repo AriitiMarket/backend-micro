@@ -43,13 +43,26 @@ async function createRequest(data) {
   const destination = await findLocationIfKnown(data.destinationLocationId);
   if (destination && !destination.isActive) throw Object.assign(new Error('Destination location is inactive'), { status: 400 });
 
-  // Auto-resolve zone if not provided
+  // Auto-resolve zone if not provided (one centralized resolver)
   const deliveryAddress = { ...data.deliveryAddress };
-  if (destination) {
-    const destZones = await zonesService.findZoneForLocation(data.destinationLocationId);
-    if (destZones.length > 0 && !deliveryAddress.zoneId) {
-      deliveryAddress.zoneId = destZones[0]._id;
-    }
+  if (!deliveryAddress.zoneId) {
+    const zone = await zonesService.resolveDeliveryArea({ locationId: data.destinationLocationId });
+    if (zone) deliveryAddress.zoneId = zone._id;
+  }
+
+  // One centralized requestability gate: unknown zone, paused zone, outside
+  // service hours or not-yet-live zone rejects the request with a clear code
+  // BEFORE any Delivery row is created. Existing deliveries are untouched.
+  let resolvedPortId = null;
+  if (deliveryAddress.zoneId) {
+    let zone = null;
+    try { zone = await zonesService.getZone(deliveryAddress.zoneId); } catch { zone = null; }
+    if (!zone) throw Object.assign(new Error('Zone not serviceable: ZONE_NOT_FOUND'), { status: 400, code: 'ZONE_NOT_FOUND' });
+    await zonesService.assertZoneRequestable(zone);
+    // Zone says WHERE; the Port is the known local point that will serve it.
+    // Resolved once, here, so assignment and tracking never re-derive it.
+    const port = await zonesService.resolveZonePort(zone._id);
+    resolvedPortId = port ? port._id : null;
   }
 
   // Location references that do not resolve to a real location are dropped from
@@ -111,12 +124,12 @@ async function createRequest(data) {
           regionId: deliveryAddress.regionId || null,
           areaId: deliveryAddress.areaId || null,
           cityId: deliveryAddress.cityId || null,
-          // `sectorId` holds a SECTOR location id, never the generic destination
-          // reference: conflating them made every sector/zone filter and every
-          // provider coverage check compare unrelated locations.
+          // Sector fields are legacy: new requests set them to null and no
+          // delivery logic branches on them any more.
           sectorId: deliveryAddress.sectorId || null,
           locationId: destinationLocationId || deliveryAddress.locationId || null,
           zoneId: deliveryAddress.zoneId || null,
+          portId: resolvedPortId,
           regionName: deliveryAddress.regionName || '',
           areaName: deliveryAddress.areaName || '',
           cityName: deliveryAddress.cityName || '',

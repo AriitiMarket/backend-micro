@@ -129,14 +129,14 @@ async function getLocations(filter = {}, options = {}) {
 }
 async function countLocations(filter = {}) { return locationsRepo.count(filter); }
 async function getLocationStats() {
-  const [totalLocations, activeLocations, serviceableLocations, hubs, pendingExpansion] = await Promise.all([
+  const [totalLocations, activeLocations, serviceableLocations, ports, pendingExpansion] = await Promise.all([
     locationsRepo.count({}),
     locationsRepo.count({ isActive: true }),
     locationsRepo.count({ 'serviceability.serviceable': true }),
-    locationsRepo.count({ 'hub.isHub': true }),
+    locationsRepo.count({ 'port.isPort': true }),
     locationsRepo.count({ expansionStatus: { $in: ['planned', 'preparing'] } }),
   ]);
-  return { totalLocations, activeLocations, serviceableLocations, hubs, pendingExpansion };
+  return { totalLocations, activeLocations, serviceableLocations, ports, pendingExpansion };
 }
 async function searchLocations(q) { return locationsRepo.search(q); }
 async function getAncestors(id) { await getLocation(id); return locationsRepo.findAncestors(id); }

@@ -20,7 +20,7 @@ const operationsRoutes = require('../../modules/operations/routes/operations.rou
 const shipmentRoutes = require('../../modules/operations/routes/shipments.routes');
 const trackingRoutes = require('../../modules/tracking/routes/tracking.routes');
 const internalRoutes = require('../../modules/operations/routes/internal.routes');
-const hubRoutes = require('../../modules/operations/routes/hubs.routes');
+const portRoutes = require('../../modules/operations/routes/ports.routes');
 
 const app = express();
 
@@ -83,7 +83,7 @@ app.use(gatewayOnly);
 
 app.use('/delivery/location', locationRoutes);
 app.use('/delivery/zone', zoneRoutes);
-app.use('/delivery/hub', hubRoutes);
+app.use('/delivery/port', portRoutes);
 app.use('/delivery/route', deliveryRouteRoutes);
 // Delivery service catalog (read + admin CRUD) — powers the Delivery Services page.
 app.use('/delivery/service', deliveryServicesRoutes);

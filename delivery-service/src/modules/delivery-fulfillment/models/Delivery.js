@@ -15,13 +15,16 @@ const attemptSchema = new mongoose.Schema({
 
 const deliverySchema = new mongoose.Schema({
   orderId: { type: String, required: true },
+  // Human-readable reference (DEL-1001). The ObjectId stays the technical key;
+  // this is what an admin reads, quotes to a customer and support can search.
+  deliveryRef: { type: String, default: null, index: { unique: true, sparse: true } },
   sellerId: { type: String, required: true },
   buyerId: { type: String, required: true },
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', default: null },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryService', default: null },
   assignmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Assignment', default: null },
   routeId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryRoute', default: null },
-  hubId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hub', default: null },
+  portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
   shipmentId: { type: String, default: null },
   paymentMethod: { type: String, enum: ['COD', 'PREPAID'], default: 'COD' },
   paymentAmount: { type: Number, min: 0, default: 0 },
@@ -74,6 +77,8 @@ const deliverySchema = new mongoose.Schema({
     sectorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
     zoneId: { type: mongoose.Schema.Types.ObjectId, ref: 'Zone', default: null },
+    // Known local point inside the Zone that serves this delivery.
+    portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
 
     // Location hierarchy names (historical snapshot)
     regionName: { type: String, default: '' },
@@ -96,27 +101,21 @@ const deliverySchema = new mongoose.Schema({
 
   estimatedDeliveryAt: { type: Date, default: null },
   // Milestone timestamps — one per reachable status, written only by the
-  // state machine (never guessed in read paths).
-  validatedAt: { type: Date, default: null },
-  readyForPickupAt: { type: Date, default: null },
+  // state machine (never guessed in read paths). Keyed by the canonical
+  // `STATUS_TIMESTAMP_FIELDS` map in domain/lifecycle.js.
   assignedAt: { type: Date, default: null },
+  reassignedAt: { type: Date, default: null },
   pickedUpAt: { type: Date, default: null },
   inTransitAt: { type: Date, default: null },
-  arrivedAtHubAt: { type: Date, default: null },
-  outForDeliveryAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
   failedAt: { type: Date, default: null },
   cancelledAt: { type: Date, default: null },
-  reassignedAt: { type: Date, default: null },
-  returnRequestedAt: { type: Date, default: null },
-  returnedAt: { type: Date, default: null },
 
   failureReason: { type: String, default: '' },
   cancellationReason: { type: String, default: '' },
-  returnReason: { type: String, default: '' },
 
   // Failure handling: how many attempts so far and what the last attempt
-  // agreed happens next (retry / reschedule / return / escalation).
+  // agreed happens next (retry / reschedule / escalation).
   retryCount: { type: Number, default: 0 },
   nextAction: { type: String, default: '' },
   attempts: { type: [attemptSchema], default: [] },
@@ -164,13 +163,12 @@ deliverySchema.index({ buyerId: 1 });
 deliverySchema.index({ providerId: 1 });
 deliverySchema.index({ status: 1 });
 deliverySchema.index({ status: 1, createdAt: -1 });
+deliverySchema.index({ 'destination.portId': 1 });
 deliverySchema.index({ serviceId: 1 });
 deliverySchema.index({ shipmentId: 1 });
 deliverySchema.index({ 'origin.locationId': 1 });
 deliverySchema.index({ 'destination.locationId': 1 });
 deliverySchema.index({ 'destination.zoneId': 1 });
-deliverySchema.index({ 'destination.sectorId': 1 });
-deliverySchema.index({ 'origin.sectorId': 1 });
 // One delivery per idempotency key. Partial so legacy documents without a key
 // are unaffected by the uniqueness rule.
 deliverySchema.index(

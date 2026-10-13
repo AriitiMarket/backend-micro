@@ -105,6 +105,16 @@ async function seedHarariRegion() {
   const shops = await Shop.insertMany(shopsWithLocation);
   console.log(`[harari] ✅ ${shops.length} shops created`);
 
+  // User -> Seller Actor -> Business -> Shop: give every seeded shop an owning
+  // business so the seeded orders can carry a real businessId instead of the
+  // owner's Identity user id (which collides with the admin scope's meaning).
+  const { resolveShopBusinessId } = require('../../modules/selling/services/business.service');
+  const businessIdByShop = new Map();
+  for (const shop of shops) {
+    const businessId = await resolveShopBusinessId(shop);
+    if (businessId) businessIdByShop.set(String(shop._id), businessId);
+  }
+
   console.log('[harari] Creating orders with location tracking...');
   const ordersWithLocation = seedOrders.map((order, idx) => {
     const shop = shops[idx % shops.length];
@@ -140,7 +150,7 @@ async function seedHarariRegion() {
       locationId: order.destination?.sectorId || shop.locationId,
       sellerShipments: [{
         sellerId: shop.ownerId,
-        businessId: shop.ownerId,
+        businessId: businessIdByShop.get(String(shop._id)) || null,
         shopId: shop._id.toString(),
         items: order.cart || [],
         subtotal: order.totalPrice || 0,

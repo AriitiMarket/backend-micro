@@ -116,6 +116,33 @@ async function findUserByEmail(req, res, next) {
   }
 }
 
+// Internal (service-to-service) display lookup for a bounded batch of ids.
+// Commerce resolves the `ownerId` / `sellerId` / `buyerId` on a page of admin
+// rows to a human name in ONE call instead of one call per row.
+async function findUsersByIds(req, res, next) {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const users = await usersRepository.findDisplayByIds(ids);
+    return ok(res, { users });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// Internal (service-to-service) free-text directory search (name / email /
+// phone). Lets Commerce resolve an admin's search box on its own lists into the
+// accounts that match, so shop and order search can reach owner and buyer names.
+async function searchUsers(req, res, next) {
+  try {
+    const term = String(req.body?.term || '').trim();
+    const limit = req.body?.limit;
+    const users = await usersRepository.searchDirectory(term, limit);
+    return ok(res, { users });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 // Internal (service-to-service) membership status check. Used by Commerce and
 // Delivery services to check if a user has a specific role membership and its status.
 async function checkMembershipStatus(req, res, next) {
@@ -159,5 +186,7 @@ module.exports = {
   updateAvatar,
   countUsers,
   findUserByEmail,
+  findUsersByIds,
+  searchUsers,
   checkMembershipStatus,
 };

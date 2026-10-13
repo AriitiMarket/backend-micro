@@ -4,6 +4,7 @@ const productRepository = require('../../catalog/repositories/products.repositor
 const stockMovementRepository = require('../../catalog/repositories/stockMovements.repository');
 const orderDeliveryService = require('./orderDelivery.service');
 const shopRepository = require('../../selling/repositories/shops.repository');
+const { resolveShipmentBusinessId } = require('../../selling/services/business.service');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { ORDER_STATUSES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 const { isProductPubliclyVisible } = require('../../../shared/utils/productVisibility');
@@ -402,7 +403,10 @@ class OrderService {
 
       return {
         sellerId: sellerId || '',
-        businessId: shop?.ownerId || null,
+        // The BUSINESS id (a SellerApplication _id), never `shop.ownerId` —
+        // the admin hierarchy scope resolves businessId as an application, so
+        // a user id here made every business-scoped order query miss.
+        businessId: await resolveShipmentBusinessId(shop),
         shopId,
         shopName: shop?.name || '',
         items,
@@ -549,7 +553,8 @@ class OrderService {
     const shipping = computeShipping(subtotal);
     const shipment = {
       sellerId: String(shop.ownerId || sellerId || ''),
-      businessId: shop.ownerId || null,
+      // Business id, not the owner's user id — see createOrder above.
+      businessId: await resolveShipmentBusinessId(shop),
       shopId: String(shop._id),
       shopName: shop.name || '',
       items,

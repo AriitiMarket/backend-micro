@@ -1,8 +1,8 @@
 'use strict';
 /**
- * Fixtures for the integration suites — the same shape the seeded Ethiopian
- * delivery hierarchy produces (Country → Region → City → Sector), plus the
- * zones, catalogue entry, hub and route a delivery needs.
+ * Fixtures for the integration suites — the MVP shape the seed produces
+ * (Country → Region → City, with Zone and Port as their own models), plus the
+ * catalogue entry and route a delivery needs.
  */
 
 async function seedGeography(models, options = {}) {
@@ -11,39 +11,35 @@ async function seedGeography(models, options = {}) {
   const region = await models.Location.create({ name: 'Hararghe', type: 'region', parentId: country._id });
   const city = await models.Location.create({ name: 'Harar', type: 'city', parentId: region._id });
   const otherCity = await models.Location.create({ name: 'Dire Dawa', type: 'city', parentId: region._id });
-  const sector = await models.Location.create({ name: 'Sector 01', type: 'sector', parentId: city._id, isActive: active });
-  const otherSector = await models.Location.create({ name: 'Sector 02', type: 'sector', parentId: otherCity._id });
-  const inactiveSector = await models.Location.create({ name: 'Sector 09 (closed)', type: 'sector', parentId: city._id, isActive: false });
+  const inactiveCity = await models.Location.create({ name: 'Closed Town', type: 'city', parentId: region._id, isActive: false });
 
   const zone = await models.Zone.create({
     name: 'Harar City Zone',
     code: `HZ-${Math.random().toString(36).slice(2, 7)}`,
-    sectorId: sector._id,
-    locationIds: [city._id, sector._id],
+    locationIds: [city._id],
   });
   const service = await models.DeliveryService.create({
     name: 'Local Delivery', code: `SVC-${Math.random().toString(36).slice(2, 7)}`, coverageZones: [zone._id],
   });
-  const hub = await models.Hub.create({ name: 'Harar Hub', locationId: city._id });
+  const port = await models.Port.create({ name: 'Central Market Port', locationId: city._id, zoneId: zone._id });
+  const otherPort = await models.Port.create({ name: 'Bus Station Port', locationId: city._id, zoneId: zone._id });
   const route = await models.DeliveryRoute.create({
     name: 'Harar City Loop', code: `R-${Math.random().toString(36).slice(2, 7)}`,
-    originLocationId: city._id, destinationLocationId: sector._id,
+    originLocationId: city._id, destinationLocationId: city._id,
   });
 
   return {
-    country, region, city, otherCity, sector, otherSector, inactiveSector, zone, service, hub, route,
+    country, region, city, otherCity, inactiveCity, zone, service, port, otherPort, route,
     // Address snapshot the way Commerce sends it.
     pickupAddress: {
       regionId: region._id, regionName: region.name,
       cityId: city._id, cityName: city.name,
-      sectorId: sector._id, sectorName: sector.name,
       shopId: 'shop-1', shopName: 'Aritii Coffee Shop',
       addressDetail: 'Shop Street 1', contactName: 'Seller', contactPhone: '+251911000000',
     },
     deliveryAddress: {
       regionId: region._id, regionName: region.name,
       cityId: city._id, cityName: city.name,
-      sectorId: sector._id, sectorName: sector.name,
       addressDetail: 'Home Street 9', contactName: 'Buyer', contactPhone: '+251922000000',
     },
   };
@@ -71,7 +67,7 @@ function handoffPayload(geo, orderId, overrides = {}) {
     buyerId: 'buyer-1',
     pickupAddress: geo.pickupAddress,
     deliveryAddress: geo.deliveryAddress,
-    destinationLocationId: String(geo.sector._id),
+    destinationLocationId: String(geo.city._id),
     pickupLocationId: String(geo.city._id),
     items: [{ name: 'Coffee', quantity: 1, weight: 1, value: 500 }],
     totalValue: 500,

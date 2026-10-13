@@ -10,12 +10,15 @@ const {
   ASSIGNMENT_BATCH_TRANSITIONS,
   ACTIVE_ASSIGNMENT_BATCH_STATUSES,
   MAX_BATCH_ORDERS,
+  READY_DELIVERY_STATUSES,
+  BLOCKED_DELIVERY_STATUSES,
 } = require('../../../shared/constants');
 
-// An order may only enter a batch while it is still waiting for a rider.
-// `pending` is "Ready for Pickup" in the delivery vocabulary.
-const ASSIGNABLE_DELIVERY_STATUSES = ['pending'];
-const BLOCKED_DELIVERY_STATUSES = ['cancelled', 'delivered', 'failed'];
+// An order may only enter a batch while it is still in the ready pool.
+// `READY_DELIVERY_STATUSES` is the canonical ready pool (`pending`); it used to
+// be re-spelled here as a literal, which is how dispatch came to disagree with
+// the delivery state machine about what "ready for pickup" means.
+const ASSIGNABLE_DELIVERY_STATUSES = READY_DELIVERY_STATUSES;
 
 function badRequest(message, extra = {}) {
   return Object.assign(new Error(message), { status: 400, ...extra });
@@ -55,14 +58,6 @@ async function assertProviderAssignable(providerId, deliveries) {
   }
 
   // Area eligibility — only enforced when the rider has a restricted area.
-  const destSectors = [
-    ...new Set(deliveries.map((d) => d.destination && d.destination.sectorId).filter(Boolean).map(String)),
-  ];
-  if (provider.sectorId && destSectors.length > 0) {
-    if (!destSectors.includes(String(provider.sectorId))) {
-      throw badRequest('Rider does not serve the destination sector of the selected orders');
-    }
-  }
   const destZones = [
     ...new Set(deliveries.map((d) => d.destination && d.destination.zoneId).filter(Boolean).map(String)),
   ];

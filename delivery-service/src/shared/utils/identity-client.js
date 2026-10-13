@@ -51,4 +51,52 @@ async function grantProviderRole(userId) {
   };
 }
 
-module.exports = { grantProviderRole, postInternal, identityClientInternals: client };
+/**
+ * Write the PROVIDER membership status (SUSPENDED / REJECTED / PENDING /
+ * ACTIVE) for an account. Used to keep Identity in step when the roster
+ * suspends, rejects or sends an application back to review — without it the
+ * account keeps (or keeps missing) the capability the roster says it has.
+ *
+ * Never throws: a failure is returned for the caller to log.
+ * @returns {Promise<{ok: boolean, status: number, reason?: string}>}
+ */
+async function setProviderMembershipStatus(userId, status) {
+  const result = await postInternal('/internal/providers/set-status', { userId, status });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      reason: (result.body && result.body.message) || result.error || 'identity service unavailable',
+    };
+  }
+  return { ok: true, status: result.status };
+}
+
+/**
+ * Mark the provider onboarding wizard complete on application submission.
+ *
+ * Tells Identity the applicant finished the vehicle/application details, so the
+ * abandoned-application sweep will not reclaim their PENDING membership.
+ * Idempotent and never throws: the application document is the source of truth
+ * for the review queue.
+ * @returns {Promise<{ok: boolean, status: number, reason?: string}>}
+ */
+async function markOnboardingComplete(userId) {
+  const result = await postInternal('/internal/onboarding/PROVIDER/complete', { userId });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      reason: (result.body && result.body.message) || result.error || 'identity service unavailable',
+    };
+  }
+  return { ok: true, status: result.status };
+}
+
+module.exports = {
+  grantProviderRole,
+  setProviderMembershipStatus,
+  markOnboardingComplete,
+  postInternal,
+  identityClientInternals: client,
+};

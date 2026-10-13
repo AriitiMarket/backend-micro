@@ -80,7 +80,7 @@ async function seed() {
     if (existing.rows.length > 0) {
       const row = existing.rows[0];
       if (row.role !== 'SELLER') {
-        await pool.query('UPDATE users SET role = $1, seller_status = $2, updated_at = NOW() WHERE id = $3;', ['SELLER', 'ACTIVE', row.id]);
+        await pool.query('UPDATE users SET role = $1, seller_status = $2, updated_at = NOW() WHERE id = $3;', ['SELLER', 'PENDING', row.id]);
         console.log(`  ✓ User ${seller.email} upgraded to SELLER`);
       } else {
         console.log(`  ✓ Seller ${seller.email} already exists (id: ${row.id})`);
@@ -92,7 +92,7 @@ async function seed() {
       await pool.query(
         `INSERT INTO users (id, name, email, password_hash, role, status, is_verified, seller_status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
-        [id, seller.name, seller.email, hash, 'SELLER', 'active', true, 'ACTIVE']
+        [id, seller.name, seller.email, hash, 'SELLER', 'active', true, 'PENDING']
       );
       console.log(`  ✓ Seller created: ${seller.email} / ${seller.password}`);
       results.sellers.push({ id, email: seller.email, name: seller.name });

@@ -13,8 +13,8 @@
  *   order.status     : Processing | Confirmed | Shipped | In Transit | Delivered
  *                      | Cancelled | Refund Requested | Refund Approved
  *                      | Refund Success | Refund Rejected
- *   delivery.status  : pending | assigned | pickup | in_transit | delivered
- *                      | failed | cancelled | reassigned
+ *   delivery.status  : pending | assigned | reassigned | pickup | in_transit
+ *                      | delivered | failed | cancelled
  *   assignment.status: pending | accepted | rejected | expired | cancelled
  *
  * Stages that have no backing status in the platform are deliberately absent —
@@ -62,7 +62,6 @@ const EXCEPTION_ORDER_STATUSES = Object.freeze([
   'Refund Approved',
   'Refund Success',
   'Refund Rejected',
-  'Failed',
 ]);
 
 // commerce order.status -> stage (used when no delivery record exists yet)
@@ -83,6 +82,11 @@ const ORDER_STATUS_STAGE = Object.freeze({
 });
 
 // delivery.status -> stage (authoritative for physical movement)
+//
+// Complete against the delivery service's canonical lifecycle: a status with no
+// entry here falls through to the ORDER mapping, so the console reports the
+// order's idea of reality instead of the delivery's. That is how a delivery
+// sitting on the customer leg used to be shown as plain `in_transit`.
 const DELIVERY_STATUS_STAGE = Object.freeze({
   pending: 'ready_for_pickup',
   assigned: 'pickup_assigned',
@@ -132,8 +136,10 @@ function mapOrderStatusToStage(status) {
 }
 
 function isSettled(order) {
-  const payment = String((order && order.paymentStatus) || '').toUpperCase();
-  return payment === 'CONFIRMED' || payment === 'PAID';
+  // Only CONFIRMED settles. `PAID` was accepted here but is not a member of the
+  // order payment enum, so it was dead code that made an unsettled order look
+  // settled to every stage counter.
+  return String((order && order.paymentStatus) || '').toUpperCase() === 'CONFIRMED';
 }
 
 /**

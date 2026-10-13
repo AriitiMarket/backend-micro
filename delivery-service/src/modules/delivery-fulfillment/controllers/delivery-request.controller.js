@@ -31,7 +31,7 @@ async function getRequest(req, res, next) {
 async function getRequests(req, res, next) {
   try {
     const {
-      sellerId, buyerId, orderId, search, zoneId, sectorId, serviceId,
+      sellerId, buyerId, orderId, search, zoneId, serviceId,
       dateFrom, dateTo, page = 1, limit = 50,
     } = req.query;
 
@@ -46,7 +46,6 @@ async function getRequests(req, res, next) {
     if (buyerId && !filter.buyerId) filter.buyerId = buyerId;
     if (orderId) filter.orderId = orderId;
     if (zoneId) filter['deliveryAddress.zoneId'] = zoneId;
-    if (sectorId) filter['deliveryAddress.sectorId'] = sectorId;
     if (serviceId) filter.preferredServiceId = serviceId;
     if (dateFrom || dateTo) {
       filter.createdAt = {};
@@ -83,6 +82,8 @@ async function getRequests(req, res, next) {
       const delivery = byOrder.get(String(r.orderId));
       return {
         ...(r.toObject ? r.toObject() : r),
+        // The console reads `id` on every row; `_id` alone crashed its table.
+        id: String(r._id),
         status: delivery ? 'materialized' : 'pending',
         deliveryId: delivery ? delivery._id : null,
         deliveryStatus: delivery ? delivery.status : null,

@@ -47,7 +47,7 @@ async function getShipments(req, res, next) {
     if (req.query.routeId) filter.routeId = req.query.routeId;
     if (req.query.originLocationId) filter.originLocationId = req.query.originLocationId;
     if (req.query.destinationLocationId) filter.destinationLocationId = req.query.destinationLocationId;
-    if (req.query.hubId) filter.$or = [{ originHubId: req.query.hubId }, { destinationHubId: req.query.hubId }];
+    if (req.query.portId) filter.$or = [{ originPortId: req.query.portId }, { destinationPortId: req.query.portId }];
     if (req.query.serviceId) filter.serviceId = req.query.serviceId;
     // `partnerId` is the legacy spelling of this filter — accepted so an
     // already-deployed client keeps narrowing the shipment list correctly.
@@ -95,9 +95,9 @@ async function transitionStatus(req, res, next) {
     const shipment = await shipmentsService.transitionShipmentStatus(req.params.id, targetStatus, actor, req.body.note);
     
     // If received, we need to release deliveries for last-mile assignment
-    // (This is conceptually un-assigning them from line-haul and making them available in destination hub)
-    // Actually they stay with shipmentId but their fulfillment status can remain unchanged, or changed to 'hub_received' if needed. 
-    // The prompt says: "Do not automatically mark every delivery as delivered because a shipment arrived at a hub."
+    // (This is conceptually un-assigning them from line-haul and making them available in destination port)
+    // Actually they stay with shipmentId but their fulfillment status can remain unchanged, or changed to 'port_received' if needed. 
+    // The prompt says: "Do not automatically mark every delivery as delivered because a shipment arrived at a port."
     // and "Shipment received -> Deliveries become available for next operational stage".
     // Since AssignmentBatch pulls from deliveries based on their status, we don't need to change Delivery status here unless required.
 

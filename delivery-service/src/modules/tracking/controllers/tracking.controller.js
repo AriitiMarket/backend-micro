@@ -3,7 +3,7 @@ const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery
 const { ok } = require('../../../shared/utils/response');
 const { validationError, notFound, forbidden, conflict } = require('../../../shared/errors');
 const { assertCanReadDelivery, isAdmin, isOperator, resolveProviderForUser } = require('../../../shared/utils/access');
-const { tryNormalizeDeliveryStatus } = require('../../../shared/constants');
+const { tryNormalizeDeliveryStatus, TERMINAL_DELIVERY_STATUSES } = require('../../../shared/constants');
 const { isValidObjectId } = require('../../../shared/utils/mongoId');
 
 /**
@@ -18,8 +18,10 @@ async function canReadDeliveryOrMissing(deliveryId, user) {
 }
 
 // A delivery whose journey is over (or was aborted) accepts no further tracking:
-// the timeline must not keep growing after the delivery was closed.
-const CLOSED_TRACKING_STATUSES = ['delivered', 'cancelled', 'returned', 'return_requested'];
+// the timeline must not keep growing after the delivery was closed. Derived from
+// the canonical terminal set — `failed` is excluded on purpose, because a failed
+// delivery can still be retried and would then legitimately move again.
+const CLOSED_TRACKING_STATUSES = TERMINAL_DELIVERY_STATUSES;
 
 /** Coordinates must be a real GeoJSON Point: [longitude, latitude]. */
 function validateCoordinates(location) {

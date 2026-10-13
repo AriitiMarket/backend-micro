@@ -72,6 +72,9 @@ async function getShops(req, res, next) {
       ...hierarchyFilters(req.query),
       status,
       search,
+      // Batch owner lookup (comma-separated) — the Sellers tab needs the shops
+      // of exactly its own page's sellers, in ONE commerce call.
+      ownerIds: req.query.ownerIds || undefined,
       page: parseInt(page),
       limit: parseInt(limit)
     });
@@ -83,11 +86,19 @@ async function getShops(req, res, next) {
 
 async function getOrders(req, res, next) {
   try {
-    const { status, paymentStatus, page = 1, limit = 50 } = req.query;
+    const { status, paymentStatus, stage, search, from, to, sellerId, page = 1, limit = 50 } = req.query;
+    // The service supports `from`/`to`/`stage`/`sellerId`/`search`, but they were
+    // never forwarded — so the console's date range, search box and stage pills
+    // all sent values the service never saw and quietly filtered nothing.
     const result = await adminPlatformService.getOrders({
       ...hierarchyFilters(req.query),
       status,
       paymentStatus,
+      stage,
+      search,
+      from,
+      to,
+      sellerId,
       page: parseInt(page),
       limit: parseInt(limit)
     });

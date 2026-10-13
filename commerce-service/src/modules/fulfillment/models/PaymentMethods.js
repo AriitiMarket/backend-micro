@@ -1,30 +1,101 @@
 const mongoose = require('mongoose');
 
+/**
+ * Payment Methods Schema
+ * Stores user payment methods for orders
+ */
 const paymentMethodSchema = new mongoose.Schema({
-  key: { type: String, required: true, unique: true, index: true },
-  // Provider adapter key, e.g. telebirr, cbe_birr, flutterwave. This is not a secret.
-  providerKey: { type: String, required: true, index: true },
-  name: { type: String, required: true },
-  type: { type: String, required: true, enum: ['OFFLINE', 'BANK', 'WALLET', 'GATEWAY', 'CARD'] },
-  description: { type: String, default: '' },
-  availableFor: { type: [String], default: ['BUYERS', 'SELLERS'] },
-  supportedTransactionTypes: { type: [String], default: ['PAYMENT', 'PAYOUT'] },
-  currency: { type: String, default: 'ETB' },
-  minAmount: { type: Number, default: 0 },
-  maxAmount: { type: Number, default: null },
-  fixedFee: { type: Number, default: 0 },
-  percentageFee: { type: Number, default: 0 },
-  processingSettings: { type: Object, default: {} },
-  verificationRequired: { type: Boolean, default: false },
-  // Only references to environment-backed provider credentials belong here.
-  // Never store API keys, app secrets, or merchant secrets in MongoDB.
-  providerConfig: { type: Object, default: {} },
-  settlementSettings: { type: Object, default: {} },
-  status: { type: String, enum: ['ACTIVE', 'INACTIVE'], default: 'INACTIVE' },
-  configured: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
+  userId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  
+  methodType: {
+    type: String,
+    enum: ['CARD', 'MOBILE_WALLET', 'BANK_TRANSFER', 'COD', 'CRYPTO'],
+    required: true
+  },
+  
+  // For card payments
+  card: {
+    last4: String,
+    brand: { enum: ['VISA', 'MASTERCARD', 'AMEX'] },
+    expiryMonth: Number,
+    expiryYear: Number,
+    holderName: String,
+    tokenized: Boolean,
+    stripeTokenId: String,
+    paystackAuthorizationUrl: String
+  },
+  
+  // For mobile wallet
+  wallet: {
+    provider: { enum: ['TELEBIRR', 'CBE', 'DASHEN', 'ABYSINIA'] },
+    phoneNumber: String,
+    verified: Boolean
+  },
+  
+  // For bank transfer
+  bankAccount: {
+    bankName: String,
+    accountNumber: String,
+    accountHolder: String,
+    routingNumber: String,
+    accountType: { enum: ['CHECKING', 'SAVINGS'] }
+  },
+  
+  // For COD (Cash on Delivery)
+  cod: {
+    enabled: Boolean,
+    availableInAreas: [String]
+  },
+  
+  // For Crypto
+  crypto: {
+    address: String,
+    network: { enum: ['ETHEREUM', 'BITCOIN', 'POLYGON', 'BINANCE'] },
+    verified: Boolean
+  },
+  
+  // Common fields
+  isDefault: {
+    type: Boolean,
+    default: false
+  },
+  
+  isVerified: {
+    type: Boolean,
+    default: false
+  },
+  
+  verifiedAt: Date,
+  
+  failureCount: {
+    type: Number,
+    default: 0
+  },
+  
+  status: {
+    type: String,
+    enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'EXPIRED'],
+    default: 'ACTIVE'
+  },
+  
+  lastUsed: Date,
+  
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { timestamps: true });
 
-paymentMethodSchema.pre('save', function(next) { this.updatedAt = new Date(); next(); });
+// Ensure only one default per user
+paymentMethodSchema.index({ userId: 1, isDefault: 1 }, { unique: true, sparse: true });
+
 module.exports = mongoose.model('PaymentMethod', paymentMethodSchema);

@@ -90,6 +90,95 @@ async function runMigrations(db) {
     }
   }
 
+  // 3) Rejections used to be stored as `suspended` (the status enum had no
+  //    `rejected` member), which both misrepresented the review outcome and
+  //    locked the applicant out of re-applying. Only documents that carry a
+  //    stored rejection reason were rejected — a plain admin suspension never
+  //    writes one.
+  if (existing.has('providers')) {
+    const reclassified = await db.collection('providers').updateMany(
+      { status: 'suspended', 'metadata.application.rejectionReason': { $exists: true } },
+      { $set: { status: 'rejected' } }
+    );
+    if (reclassified.modifiedCount > 0) {
+      changed.push(`providers: suspended -> rejected for ${reclassified.modifiedCount} rejected application(s)`);
+    }
+  }
+
+  // 5) Zone MVP lifecycle: documents written before this field existed carry
+  //    no value (mongoose only defaults NEW documents), and any zone left on
+  //    the removed PILOT value is treated as LIVE. Both cases become LIVE.
+  if (existing.has('zones')) {
+    const backfilled = await db.collection('zones').updateMany(
+      { $or: [{ lifecycle: { $exists: false } }, { lifecycle: null }, { lifecycle: 'PILOT' }] },
+      { $set: { lifecycle: 'LIVE' } }
+    );
+    const pilotCleared = await db.collection('zones').updateMany(
+      { pilotLimitPerDay: { $exists: true } },
+      { $unset: { pilotLimitPerDay: '' } }
+    );
+    if (backfilled.modifiedCount > 0) {
+      changed.push(`zones: lifecycle backfilled to LIVE for ${backfilled.modifiedCount} zone(s)`);
+    }
+    if (pilotCleared.modifiedCount > 0) {
+      changed.push(`zones: dropped pilotLimitPerDay on ${pilotCleared.modifiedCount} zone(s)`);
+    }
+  }
+
+  // 5) Delivery lifecycle collapsed to the states that have a writer. Documents
+  //    written while the enum still listed the speculative stages are no longer
+  //    representable — mongoose would reject the next `.save()` on them, so they
+  //    are reclassified onto the state that replaced each one:
+  //      validated / ready_for_pickup -> pending        (the ready pool)
+  //      out_for_delivery             -> in_transit     (the customer leg)
+  //      return_requested / returned  -> delivered      (it reached the customer)
+  //    `returned` is the only judgement call: a return has no flow to enter, and
+  //    `cancelled` would misreport a completed handover as a failure, so it is
+  //    recorded as delivered (the parcel did arrive) rather than lost.
+  const DELIVERY_STATUS_COLLAPSE = {
+    validated: 'pending',
+    ready_for_pickup: 'pending',
+    out_for_delivery: 'in_transit',
+    return_requested: 'delivered',
+    returned: 'delivered',
+  };
+  const RETIRED_MILESTONE_FIELDS = [
+    'validatedAt', 'readyForPickupAt', 'outForDeliveryAt',
+    'returnRequestedAt', 'returnedAt', 'returnReason',
+  ];
+  for (const name of ['deliveries', 'trackingevents']) {
+    if (!existing.has(name)) continue;
+    for (const [from, to] of Object.entries(DELIVERY_STATUS_COLLAPSE)) {
+      const reclassified = await db.collection(name).updateMany(
+        { status: from },
+        { $set: { status: to } }
+      );
+      if (reclassified.modifiedCount > 0) {
+        changed.push(`${name}: status ${from} -> ${to} (${reclassified.modifiedCount} document(s))`);
+      }
+    }
+    if (name === 'deliveries') {
+      const pruned = await db.collection(name).updateMany(
+        { $or: RETIRED_MILESTONE_FIELDS.map((field) => ({ [field]: { $ne: null, $exists: true } })) },
+        { $unset: Object.fromEntries(RETIRED_MILESTONE_FIELDS.map((field) => [field, ''])) }
+      );
+      if (pruned.modifiedCount > 0) {
+        changed.push(`deliveries: dropped retired milestone fields (${pruned.modifiedCount} document(s))`);
+      }
+    }
+  }
+
+  // 6) The old non-unique sparse index on identityUserId predates the unique
+  //    partial index declared by the model; drop it so the new one (different
+  //    options, explicitly named) can be built. Missing index = no-op.
+  if (existing.has('providers')) {
+    const indexes = await db.collection('providers').indexes();
+    if (indexes.some((ix) => ix.name === 'identityUserId_1')) {
+      await db.collection('providers').dropIndex('identityUserId_1');
+      changed.push('providers: dropped legacy sparse index identityUserId_1');
+    }
+  }
+
   return changed;
 }
 

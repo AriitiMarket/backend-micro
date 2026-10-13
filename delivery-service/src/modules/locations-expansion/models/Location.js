@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const locationSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   localName: { type: String, default: null },
-  type: { type: String, required: true, enum: ['country', 'region', 'city', 'town', 'area', 'sector', 'community', 'village', 'rural', 'other'] },
+  type: { type: String, required: true, enum: ['country', 'region', 'city', 'other'] },
   parentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
   code: { type: String, default: null },
   description: { type: String, default: '' },
@@ -29,12 +29,12 @@ const locationSchema = new mongoose.Schema({
       days: { type: [String], default: [] },
     },
   },
-  // Hub configuration
-  hub: {
-    isHub: { type: Boolean, default: false },
-    hubName: { type: String, default: null },
-    hubCode: { type: String, default: null },
-    hubAddress: { type: String, default: null },
+  // Port configuration
+  port: {
+    isPort: { type: Boolean, default: false },
+    portName: { type: String, default: null },
+    portCode: { type: String, default: null },
+    portAddress: { type: String, default: null },
     contactInfo: {
       phone: { type: String, default: null },
       email: { type: String, default: null },
@@ -52,7 +52,7 @@ locationSchema.index({ name: 'text', description: 'text' });
 locationSchema.index({ code: 1 }, { sparse: true });
 locationSchema.index({ coordinates: '2dsphere' }, { sparse: true });
 locationSchema.index({ expansionStatus: 1 });
-locationSchema.index({ 'hub.isHub': 1 });
+locationSchema.index({ 'port.isPort': 1 });
 locationSchema.index({ 'serviceability.serviceable': 1 });
 
 module.exports = mongoose.model('Location', locationSchema);

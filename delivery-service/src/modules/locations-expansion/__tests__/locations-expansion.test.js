@@ -22,7 +22,7 @@ const expansionService = {
   async checkReadiness(locationId) {
     const loc = await locationsRepo.findById(locationId);
     if (!loc) throw new Error('Location not found');
-    const checks = { locationActive: loc.isActive, serviceability: loc.serviceability?.serviceable, zone: false, route: false, deliveryService: false, hub: true };
+    const checks = { locationActive: loc.isActive, serviceability: loc.serviceability?.serviceable, zone: false, route: false, deliveryService: false, port: true };
     const blockingReasons = [];
     if (!checks.locationActive) blockingReasons.push('Inactive');
     if (!checks.serviceability) blockingReasons.push('Not serviceable');

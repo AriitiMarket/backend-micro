@@ -1,58 +1,59 @@
-# Aritii Market backend — repository root ignore rules.
-#
-# These apply to every service, including those that do not ship their own
-# .gitignore (delivery-service). Per-service .gitignore files narrow this further.
-
-# ── Dependencies ─────────────────────────────────────────────────────────────
+# Dependencies
 node_modules/
-.pnp
-.pnp.js
-
-# ── Environment & secrets ────────────────────────────────────────────────────
-# Templates (.env.example) stay tracked; live values never do.
-.env
-.env.*
-!.env.example
-
-# ── Key material ─────────────────────────────────────────────────────────────
-# The RS256 pair is generated per machine: node src/config/keys/generate.js
-*.pem
-*.key
-*.p12
-*.pfx
-*.crt
-*.cer
-
-# ── Logs ─────────────────────────────────────────────────────────────────────
-*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# ── Build & test output ──────────────────────────────────────────────────────
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build outputs
 dist/
 build/
-coverage/
-.nyc_output/
-.cache/
-.eslintcache
+*.tsbuildinfo
 
-# ── Uploads & generated media ────────────────────────────────────────────────
-uploads/
-public/uploads/
-media/
-
-# ── Databases ────────────────────────────────────────────────────────────────
-*.db
-*.sqlite
-*.sqlite3
-dump/
-
-# ── OS & editor ──────────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
-*.bak
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Testing
+coverage/
+.nyc_output/
+
+# Docker
+.dockerignore
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temp files
+tmp/
+temp/
+*.tmp
+
+# Database
+*.db
+*.sqlite
+
+# Backups
+*.backup
+*.archive
+backup/
+
+# Cache
+.cache/
+node_modules/.cache
+
+# PM2
+pm2-logs/

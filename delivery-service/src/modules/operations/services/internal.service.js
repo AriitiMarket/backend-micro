@@ -2,23 +2,42 @@ const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery
 const locationsRepo = require('../../locations-expansion/repositories/locations.repository');
 const zonesRepo = require('../../locations-expansion/repositories/zones.repository');
 const providersRepo = require('../../providers/repositories/providers.repository');
+const {
+  DELIVERY_STATUSES,
+  READY_DELIVERY_STATUSES,
+  ACTIVE_DELIVERY_STATUSES,
+} = require('../../../shared/constants');
 
-const ACTIVE_STATUSES = ['pending', 'assigned', 'pickup', 'in_transit'];
-
+/**
+ * Operations counters consumed by Commerce's admin platform.
+ *
+ * `byStatus` is keyed by the canonical lifecycle so a consumer can read any
+ * status it knows about. It used to be built from a hand-copied subset, which
+ * silently omitted statuses — Commerce then read keys that were always
+ * `undefined` and reported those buckets as 0.
+ */
 async function getOperationsDashboard() {
-  const statuses = ['pending', 'assigned', 'pickup', 'in_transit', 'delivered', 'failed', 'cancelled', 'reassigned'];
   const [counts, activeProviders, totalProviders, totalZones, activeZones] = await Promise.all([
-    Promise.all(statuses.map((s) => deliveriesRepo.count({ status: s }))),
+    Promise.all(DELIVERY_STATUSES.map((s) => deliveriesRepo.count({ status: s }))),
     providersRepo.count({ status: 'available' }),
     providersRepo.count({}),
     zonesRepo.count({}),
     zonesRepo.count({ status: 'active' }),
   ]);
   const byStatus = {};
-  statuses.forEach((s, i) => { byStatus[s] = counts[i]; });
+  DELIVERY_STATUSES.forEach((s, i) => { byStatus[s] = counts[i]; });
+  const readyPool = READY_DELIVERY_STATUSES.reduce((a, s) => a + (byStatus[s] || 0), 0);
+  const statusTotal = counts.reduce((a, b) => a + b, 0);
   return {
-    byStatus, total: counts.reduce((a, b) => a + b, 0),
-    active: ACTIVE_STATUSES.reduce((a, s) => a + byStatus[s], 0),
+    byStatus,
+    // Counts every status, so the total can no longer under-report a delivery
+    // that happens to sit in a state the old subset forgot.
+    total: statusTotal,
+    // The dispatch-ready pool as its own number: a consumer building an
+    // operational view needs this bucket, and deriving it from one hard-coded
+    // status is exactly how it went stale before.
+    activeReadyPool: readyPool,
+    active: ACTIVE_DELIVERY_STATUSES.reduce((a, s) => a + (byStatus[s] || 0), 0),
     failed: byStatus.failed,
     providers: { total: totalProviders, available: activeProviders },
     zones: { total: totalZones, active: activeZones },
@@ -83,7 +102,7 @@ async function getDeliveriesForOrders(orderIds = []) {
 }
 
 async function getLocationCounts() {
-  const types = ['country', 'region', 'city', 'town', 'area', 'sector', 'community', 'village', 'rural', 'other'];
+  const types = ['country', 'region', 'city', 'town', 'area', 'community', 'village', 'rural', 'other'];
   const [typeCounts, activeByType, deliveryCounts, zonesTotal] = await Promise.all([
     Promise.all(types.map((t) => locationsRepo.count({ type: t }))),
     Promise.all(types.map((t) => locationsRepo.count({ type: t, isActive: true }))),

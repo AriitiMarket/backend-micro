@@ -3,10 +3,13 @@ const assignmentsRepo = require('../../operations/repositories/assignments.repos
 const trackingRepo = require('../../tracking/repositories/tracking.repository');
 const providersService = require('../../providers/services/providers.service');
 const { commerceClient } = require('../../../integrations/commerce/client');
-const { VALID_TRANSITIONS } = require('../../../shared/constants');
+const { VALID_TRANSITIONS, BLOCKED_DELIVERY_STATUSES } = require('../../../shared/constants');
 const validators = require('../validators');
 
-const TERMINAL_STATUSES = ['delivered', 'failed', 'cancelled'];
+// Nothing further may happen to these deliveries (no new rider, no completion,
+// no cancel). `failed` belongs here even though the retry requeue can leave it:
+// once failed, it is out of the operational flow until somebody acts on it.
+const TERMINAL_STATUSES = BLOCKED_DELIVERY_STATUSES;
 
 /**
  * Create a delivery directly (admin operation).

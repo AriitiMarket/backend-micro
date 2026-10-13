@@ -3,6 +3,7 @@ const shipmentsRepo = require('../repositories/shipments.repository');
 const routesRepo = require('../../locations-expansion/repositories/routes.repository');
 const locationsService = require('../../locations-expansion/services/locations.service');
 const deliveryServicesService = require('../../locations-expansion/services/deliveryServices.service');
+const { READY_DELIVERY_STATUSES } = require('../../../shared/constants');
 
 const MAX_CANDIDATE_DELIVERIES = 500;
 
@@ -27,12 +28,13 @@ async function nameOfService(id) {
 /**
  * Compatible delivery groups for Admin-reviewed consolidation (MVP §18).
  *
- * A group is: same origin + same destination + same service, still `pending`
- * and not already inside a shipment. Everything shown as the compatibility
- * reason comes from the data, never from frontend assumptions.
+ * A group is: same origin + same destination + same service, still in the ready
+ * pool (`READY_DELIVERY_STATUSES`) and not already inside a shipment. Everything
+ * shown as the compatibility reason comes from the data, never from frontend
+ * assumptions.
  */
 async function getCandidates(filter = {}) {
-  const query = { status: 'pending', shipmentId: null };
+  const query = { status: { $in: READY_DELIVERY_STATUSES }, shipmentId: null };
   if (filter.originLocationId) query['origin.locationId'] = filter.originLocationId;
   if (filter.destinationLocationId) query['destination.locationId'] = filter.destinationLocationId;
   if (filter.serviceId) query.serviceId = filter.serviceId;
@@ -96,7 +98,7 @@ function newShipmentNumber() {
  * will not match, the shipment is rolled back and a 409 is returned.
  */
 async function confirmConsolidation(data, actor) {
-  const { deliveryIds, originLocationId, destinationLocationId, originHubId, destinationHubId, routeId, serviceId, providerId, maxWeight } = data;
+  const { deliveryIds, originLocationId, destinationLocationId, originPortId, destinationPortId, routeId, serviceId, providerId, maxWeight } = data;
   if (!deliveryIds || deliveryIds.length === 0) throw Object.assign(new Error('No deliveries selected for consolidation'), { status: 400 });
 
   if (routeId) {
@@ -149,8 +151,8 @@ async function confirmConsolidation(data, actor) {
     status: 'planning',
     originLocationId,
     destinationLocationId,
-    originHubId,
-    destinationHubId,
+    originPortId,
+    destinationPortId,
     routeId,
     serviceId,
     providerId,
@@ -169,7 +171,7 @@ async function confirmConsolidation(data, actor) {
 
   // Atomic claim — the loser of a two-admin race rolls back cleanly.
   const claim = await deliveriesRepo.updateMany(
-    { _id: { $in: deliveryIds }, shipmentId: null, status: 'pending' },
+    { _id: { $in: deliveryIds }, shipmentId: null, status: { $in: READY_DELIVERY_STATUSES } },
     { $set: { shipmentId: String(shipment._id) } }
   );
   if (claim.modifiedCount !== deliveryIds.length) {

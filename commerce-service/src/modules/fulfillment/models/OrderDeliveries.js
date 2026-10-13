@@ -1,5 +1,22 @@
 const mongoose = require('mongoose');
 
+// The Delivery Service's canonical vocabulary, mirrored here because this row is
+// Commerce's local copy of the delivery state.
+//
+// This enum is a FILTER, not a translation layer: it used to list fewer values
+// than the delivery service persisted, so mongoose REJECTED the webhook write
+// for any status outside the shorter list and the bridge silently kept the
+// previous status — the order then showed a stale delivery state forever with
+// no error anywhere. `null` is a member because no delivery has been assigned
+// yet (the row is created at handoff, before the delivery exists).
+const DELIVERY_STATUSES = [
+  'pending', 'assigned', 'reassigned',
+  'pickup', 'in_transit',
+  'delivered',
+  'failed', 'cancelled',
+  null,
+];
+
 /**
  * ORDER ↔ DELIVERY BRIDGE — the single table that connects a marketplace order
  * to its shipment.
@@ -31,7 +48,7 @@ const orderDeliverySchema = new mongoose.Schema({
   // --- Delivery-owned state (mirror of the Delivery Service state machine) ---
   status: {
     type: String,
-    enum: ['pending', 'assigned', 'pickup', 'in_transit', 'delivered', 'failed', 'cancelled', 'reassigned', null],
+    enum: DELIVERY_STATUSES,
     default: null,
   },
   note: { type: String, default: null },

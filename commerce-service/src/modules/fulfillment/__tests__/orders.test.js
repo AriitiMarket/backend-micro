@@ -112,6 +112,21 @@ async function seedOrder(overrides = {}) {
   });
 }
 
+/**
+ * Insert an order carrying a status the model enum now rejects — i.e. a row
+ * written before the boot migration rewrote it.
+ *
+ * The repository queries deliberately stay tolerant of these spellings, so the
+ * tolerance still needs testing; but the document can no longer be produced
+ * through the model, exactly as it could not in production after the enum was
+ * added. Validation is skipped for the same reason, not to work around a bug.
+ */
+async function seedLegacyOrder(status) {
+  const order = await seedOrder();
+  await Order.collection.updateOne({ _id: order._id }, { $set: { status } });
+  return Order.findById(order._id);
+}
+
 // ── normalizeStatus ────────────────────────────────────────────────────
 describe('normalizeStatus', () => {
   it('passes canonical values through', () => {
@@ -425,7 +440,7 @@ describe('claimPaymentConfirmation', () => {
   });
 
   it('accepts a legacy PENDING status document', async () => {
-    const order = await seedOrder({ status: 'PENDING', paymentStatus: 'PENDING' });
+    const order = await seedLegacyOrder('PENDING');
     const claimed = await orderRepo.claimPaymentConfirmation(order._id);
     assert.ok(claimed);
     assert.strictEqual(claimed.status, ORDER_STATUSES.CONFIRMED);
@@ -449,7 +464,8 @@ describe('existsOwnedOrder', () => {
 
   it('returns falsy for a legacy CANCELLED order', async () => {
     const product = await seedProduct();
-    await seedOrder({ status: 'CANCELLED', _product: product });
+    const order = await seedOrder({ _product: product });
+    await Order.collection.updateOne({ _id: order._id }, { $set: { status: 'CANCELLED' } });
     assert.strictEqual(!!(await orderRepo.existsOwnedOrder('cust-1', product._id)), false);
   });
 

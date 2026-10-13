@@ -53,6 +53,56 @@ async function findUser(id) {
   return get('/internal/users/' + encodeURIComponent(String(id)));
 }
 
+/**
+ * Display lookup for a whole page of ids in ONE call.
+ *
+ * Admin lists (shops, orders, products) carry foreign keys that must render as
+ * names, never as uuids. A per-row `findUser` turned a 50-row page into 50
+ * sequential service calls; this is the batch twin of `findUser`.
+ *
+ * A degraded Identity degrades to an EMPTY result, never to a failed list: an
+ * admin page that shows ids it cannot look up still works, one that 500s does not.
+ */
+async function findUsersByIds(ids = []) {
+  try {
+    return await post('/internal/users/by-ids', { ids: ids.slice(0, 200) });
+  } catch (err) {
+    console.error('[identityClient] batch user lookup warning:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Free-text directory search (name / email / phone).
+ *
+ * Lets an admin's search box on a Commerce list reach the people behind it:
+ * the term is resolved to matching accounts first, then folded into the query
+ * alongside the list's own fields. Degrades to "no people match" on failure.
+ */
+async function searchUsers(term, limit = 25) {
+  try {
+    return await post('/internal/users/search', { term, limit });
+  } catch (err) {
+    console.error('[identityClient] directory search warning:', err.message);
+    return null;
+  }
+}
+
+/** Display rows for a successful batch/search call, or [] on any failure. */
+function displayUsers(result) {
+  if (!result || !result.ok || !result.body) return [];
+  return Array.isArray(result.body.users) ? result.body.users : [];
+}
+
+/** `[{id, ...}]` → `Map<id, row>` with normalised string keys. */
+function indexById(rows = []) {
+  const map = new Map();
+  for (const row of rows) {
+    if (row && (row.id || row._id)) map.set(String(row.id || row._id), row);
+  }
+  return map;
+}
+
 /** Resolve an identity by email — used by the admin shop list's owner filter. */
 async function findUserByEmail(email) {
   return get('/internal/users/by-email/' + encodeURIComponent(String(email)));
@@ -88,6 +138,17 @@ async function checkMembershipStatus(userId, role) {
 }
 
 /**
+ * Mark the seller onboarding wizard complete.
+ *
+ * Relayed the moment a seller SUBMITS their application: it tells Identity the
+ * applicant finished the store setup, so the abandoned-application sweep will not
+ * reclaim their PENDING membership. Idempotent, and it never grants a role.
+ */
+async function markOnboardingComplete(userId) {
+  return post('/internal/onboarding/SELLER/complete', { userId });
+}
+
+/**
  * Platform user aggregates for the admin dashboard. Internal route: the cluster
  * credential is required, a user identity is not.
  */
@@ -99,6 +160,10 @@ module.exports = {
   identityClient: {
     linkShopId,
     findUser,
+    findUsersByIds,
+    searchUsers,
+    displayUsers,
+    indexById,
     findUserByEmail,
     grantSellerRole,
     suspendSeller,
@@ -106,6 +171,7 @@ module.exports = {
     getSellerStatus,
     setSellerStatus,
     checkMembershipStatus,
+    markOnboardingComplete,
     countUsers,
   },
   // Exposed for health checks and diagnostics.

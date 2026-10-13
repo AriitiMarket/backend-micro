@@ -50,7 +50,7 @@ async function getChildren(req, res, next) {
 
 async function getLocations(req, res, next) {
   try {
-    const { type, parentId, q, status, serviceable, hub, expansionStatus, page = 1, limit = 50 } = req.query;
+    const { type, parentId, q, status, serviceable, port, expansionStatus, page = 1, limit = 50 } = req.query;
     const filter = {};
     if (type) filter.type = type;
     if (parentId) filter.parentId = parentId;
@@ -58,7 +58,7 @@ async function getLocations(req, res, next) {
     else if (status === 'inactive') filter.isActive = false;
     else if (status !== 'all') filter.isActive = true;
     if (serviceable === 'true' || serviceable === 'false') filter['serviceability.serviceable'] = serviceable === 'true';
-    if (hub === 'true' || hub === 'false') filter['hub.isHub'] = hub === 'true';
+    if (port === 'true' || port === 'false') filter['port.isPort'] = port === 'true';
     if (expansionStatus) filter.expansionStatus = expansionStatus;
     if (q) {
       const rx = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');

@@ -2,6 +2,7 @@
   "name": "aritii-market",
   "version": "1.0.0",
   "private": true,
+  "lockfileVersion": 1,
   "description": "Aritii Market — API Gateway, Identity, Commerce and Delivery services in one repository. This root manifest owns no runtime dependency: it exists so the whole platform can be linted, tested and brought up with one command, and so CI has a single entry point.",
   "scripts": {
     "test": "npm run test:architecture && npm run test:gateway && npm run test:services",

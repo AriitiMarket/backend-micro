@@ -26,6 +26,8 @@ const CATEGORIES = [
   { title: 'Manufacturing', description: 'Production and assembly businesses', type: 'business', sortOrder: 10 },
   { title: 'Agriculture', description: 'Farming and agricultural products', type: 'business', sortOrder: 11 },
   { title: 'Technology', description: 'Software, IT, and tech services', type: 'business', sortOrder: 12 },
+  { title: 'Sports Equipment', description: 'Sports gear, fitness equipment, and outdoor gear', type: 'product', sortOrder: 13 },
+  { title: 'Books & Magazines', description: 'Books, e-books, and publications', type: 'product', sortOrder: 14 },
 ];
 
 // ─── Shops ────────────────────────────────────────────────────────────────────
@@ -63,6 +65,28 @@ const SHOPS = [
     zipCode: 10003,
     status: 'APPROVED',
   },
+  {
+    name: 'Organic Market',
+    email: 'shop4@aritii.com',
+    ownerId: 'seller4-identity-id',
+    description: 'Organic produce and whole foods',
+    category: 'Groceries & Food',
+    address: '150 Green Street, Addis Ababa',
+    phoneNumber: 55510004,
+    zipCode: 10004,
+    status: 'APPROVED',
+  },
+  {
+    name: 'Tech Accessories',
+    email: 'shop5@aritii.com',
+    ownerId: 'seller5-identity-id',
+    description: 'Phone cases, chargers, and tech gadgets',
+    category: 'Electronics',
+    address: '250 Circuit Lane, Addis Ababa',
+    phoneNumber: 55510005,
+    zipCode: 10005,
+    status: 'APPROVED',
+  },
 ];
 
 // ─── Products ─────────────────────────────────────────────────────────────────
@@ -87,6 +111,12 @@ const PRODUCTS = [
   { name: 'Extra Virgin Olive Oil 500ml', description: 'Cold pressed, organic, peppery finish', category: 'Groceries & Food', originalPrice: 24.99, discountPrice: 19.99, stock: 45, shopIndex: 2 },
   { name: 'Mixed Nuts Premium 500g', description: 'Roasted almonds, cashews, pistachios', category: 'Groceries & Food', originalPrice: 18.99, discountPrice: 14.99, stock: 70, shopIndex: 2 },
   { name: 'Organic Green Tea 100 bags', description: 'Premium Japanese sencha, antioxidant rich', category: 'Groceries & Food', originalPrice: 16.99, discountPrice: 12.99, stock: 90, shopIndex: 2 },
+  // Additional products
+  { name: 'Yoga Mat', description: 'Extra-thick non-slip yoga mat for home practice', category: 'Sports Equipment', originalPrice: 39.99, discountPrice: 29.99, stock: 45, shopIndex: 0 },
+  { name: 'Running Shoes', description: 'Breathable running shoes for long-distance training', category: 'Sports Equipment', originalPrice: 99.99, discountPrice: 79.99, stock: 30, shopIndex: 0 },
+  { name: 'Kindle E-Reader', description: 'Lightweight e-reader with high-resolution display and weeks of battery', category: 'Books & Magazines', originalPrice: 149.99, discountPrice: 129.99, stock: 25, shopIndex: 1 },
+  { name: 'Hardcover Novel Set', description: 'Collection of 3 classic literature novels in one volume', category: 'Books & Magazines', originalPrice: 49.99, discountPrice: 34.99, stock: 20, shopIndex: 1 },
+  { name: 'Lego Star Wars Millennium Falcon', description: '1351-piece building set for Star Wars fans', category: 'Toys & Games', originalPrice: 199.99, discountPrice: 179.99, stock: 15, shopIndex: 0 },
 ];
 
 async function seed() {
@@ -128,6 +158,13 @@ async function seed() {
         console.log(`  + Created shop: ${shop.name} (id: ${created._id})`);
         shops.push(created);
       }
+    }
+
+    // User -> Seller Actor -> Business -> Shop: seeded shops must belong to a
+    // business before any product/order points at them.
+    const { resolveShopBusinessId } = require('../modules/selling/services/business.service');
+    for (const shop of shops) {
+      if (shop.ownerId && !shop.businessId) await resolveShopBusinessId(shop);
     }
 
     // ─── Products ──────────────────────────────────────────────────────────

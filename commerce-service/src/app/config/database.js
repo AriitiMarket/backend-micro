@@ -11,6 +11,9 @@ const env = require('./env');
 //  2. the buy-side owner of an order (and of a request) was `customerId`; the
 //     canonical actor name is BUYER, so the field is `buyerId`.
 //
+// A legacy index drop also lives here: `sellerapplications.ownerId_1` (non-
+// unique) is replaced by the unique per-owner index the model declares.
+//
 // For every rename the `$exists` guards mean a document that already has the
 // new field (or never had the old one) is not matched — running this on every
 // boot is a no-op the second time and can never overwrite a value written after
@@ -52,6 +55,49 @@ async function runMigrations(db) {
     );
     if (result.modifiedCount > 0) {
       changed.push(`${collection}.${from} -> ${to} (${result.modifiedCount} document(s))`);
+    }
+  }
+
+  // Order.status gains a real enum, which is only safe once the legacy
+  // spellings are gone: mongoose validates an enum on every `.save()`, so a
+  // document still carrying 'PENDING' would start throwing on unrelated writes
+  // (a payment flag, an address fix) the moment the model is loaded. Every
+  // stored value is therefore rewritten onto its canonical spelling first.
+  //
+  // `STATUS_ALIASES` is the same table the state machine already uses, so this
+  // cannot invent a mapping: a value it does not recognise is left alone (and
+  // will still fail validation, loudly, which is the intent).
+  if (existing.has('orders')) {
+    const { ORDER_STATUSES, STATUS_ALIASES } = require('../../modules/fulfillment/constants/orderStatuses');
+    const canonical = new Set(Object.values(ORDER_STATUSES));
+    const legacyToCanonical = { ...STATUS_ALIASES };
+    // Spellings that normalize() resolves by title-casing rather than by table.
+    for (const value of canonical) {
+      for (const spelling of [value.toUpperCase().replace(/\s+/g, '_'), value.toUpperCase()]) {
+        if (!canonical.has(spelling)) legacyToCanonical[spelling] = value;
+      }
+    }
+    for (const [from, to] of Object.entries(legacyToCanonical)) {
+      if (from === to || canonical.has(from)) continue;
+      const result = await db.collection('orders').updateMany(
+        { status: from },
+        { $set: { status: to } }
+      );
+      if (result.modifiedCount > 0) {
+        changed.push(`orders: status ${from} -> ${to} (${result.modifiedCount} document(s))`);
+      }
+    }
+  }
+
+  // The old non-unique ownerId index predates the unique per-owner index the
+  // SellerApplication model now declares; drop it so the new one (different
+  // options, explicitly named) can be built. Missing index = no-op.
+  const SELLER_APPLICATION_COLLECTION = 'sellerapplications';
+  if (existing.has(SELLER_APPLICATION_COLLECTION)) {
+    const indexes = await db.collection(SELLER_APPLICATION_COLLECTION).indexes();
+    if (indexes.some((ix) => ix.name === 'ownerId_1')) {
+      await db.collection(SELLER_APPLICATION_COLLECTION).dropIndex('ownerId_1');
+      changed.push(`${SELLER_APPLICATION_COLLECTION}: dropped legacy index ownerId_1`);
     }
   }
 

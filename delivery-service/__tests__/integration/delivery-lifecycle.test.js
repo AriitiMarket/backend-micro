@@ -50,7 +50,7 @@ async function seededProvider(overrides = {}) {
     identityUserId: `user-provider-${providerSeq}`,
     zoneId: geo.zone._id,
     zoneIds: [geo.zone._id],
-    sectorId: geo.sector._id,
+    portId: geo.port._id,
     serviceId: geo.service._id,
     ...overrides,
   });

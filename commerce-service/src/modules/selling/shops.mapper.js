@@ -80,6 +80,11 @@ function toAdminRow(shop) {
     locationId: shop.locationId || null,
     sectorId: shop.sectorId || null,
     applicationId: shop.applicationId || null,
+    // The business that OWNS this shop (SellerApplication _id). `applicationId`
+    // is only which application *initiated* it and may be null on a shop the
+    // owner created later, so the two are not interchangeable — the console
+    // links on `businessId`.
+    businessId: shop.businessId || null,
     showOnPublic: shop.showOnPublic !== false,
     locationSnapshot: shop.locationSnapshot || null,
     // Computed stats are attached by the service layer when available

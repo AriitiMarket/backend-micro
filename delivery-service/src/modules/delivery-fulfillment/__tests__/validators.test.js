@@ -171,11 +171,59 @@ test('the failure payload requires a reason and a known next action', () => {
     () => validators.validateFailPayload({ reason: 'x', nextAction: 'teleport' }),
     (err) => err.code === 'VALIDATION_ERROR',
   );
-  assert.equal(validators.validateFailPayload({ reason: 'x', nextAction: 'return' }).nextAction, 'return');
+  assert.equal(validators.validateFailPayload({ reason: 'x', nextAction: 'retry' }).nextAction, 'retry');
+  // `return` went with the returns flow: there is no flow that can act on it, so
+  // recording it would only ever produce a delivery nothing will move again.
+  assert.throws(
+    () => validators.validateFailPayload({ reason: 'x', nextAction: 'return' }),
+    (err) => err.code === 'VALIDATION_ERROR',
+  );
+});
+
+test('a status update runs the validator for the status it is moving to', () => {
+  // The branch validators used to be dead code: `status` was the only check, so
+  // a `failed` delivery could be written with no reason at all.
+  assert.throws(
+    () => validators.validateStatusPayload({ status: 'failed' }),
+    (err) => err.code === 'VALIDATION_ERROR' && /"reason" is required/.test(err.errors.join(' ')),
+  );
+  assert.equal(
+    validators.validateStatusPayload({ status: 'failed', reason: 'Closed', nextAction: 'retry' }).nextAction,
+    'retry',
+  );
+  assert.throws(
+    () => validators.validateStatusPayload({ status: 'cancelled' }),
+    (err) => err.code === 'VALIDATION_ERROR' && /"reason" is required/.test(err.errors.join(' ')),
+  );
+  // Either spelling of the proof is accepted, never both.
+  const viaProof = validators.validateStatusPayload({ status: 'delivered', proof: { type: 'photo' } });
+  assert.deepEqual(viaProof.proof, { type: 'photo' });
+  assert.deepEqual(
+    validators.validateStatusPayload({ status: 'delivered', proofOfDelivery: { type: 'signature' } }).proof,
+    { type: 'signature' },
+  );
+  assert.throws(
+    () => validators.validateStatusPayload({
+      status: 'delivered', proof: { type: 'photo' }, proofOfDelivery: { type: 'photo' },
+    }),
+    (err) => err.code === 'VALIDATION_ERROR',
+  );
+});
+
+test('a status update rejects fields outside the status payload contract', () => {
+  // `status` used to spread the whole body, so a status change could also
+  // assign providerId / retryCount / anything else on the document.
+  assert.throws(
+    () => validators.validateStatusPayload({ status: 'in_transit', providerId: '507f1f77bcf86cd799439011' }),
+    (err) => err.code === 'VALIDATION_ERROR' && /Unsupported field/.test(err.errors.join(' ')),
+  );
+  const clean = validators.validateStatusPayload({ status: 'in_transit', note: 'Left the hub' });
+  assert.equal(clean.note, 'Left the hub');
+  assert.equal(clean.providerId, undefined);
 });
 
 test('the patch payload rejects unknown fields (no mass assignment)', () => {
-  assert.ok(validators.validatePatchPayload({ hubId: '507f1f77bcf86cd799439011' }));
+  assert.ok(validators.validatePatchPayload({ portId: '507f1f77bcf86cd799439011' }));
   assert.throws(
     () => validators.validatePatchPayload({ status: 'delivered', deliveredAt: new Date() }),
     (err) => err.errors.join(' ').includes('Unknown'),

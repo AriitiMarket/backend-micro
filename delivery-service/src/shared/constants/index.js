@@ -1,28 +1,35 @@
 // ── Delivery lifecycle ─────────────────────────────────────────────────────
 // Canonical persisted statuses of a delivery (the physical fulfilment record).
 //
-// The first eight values are the original MVP vocabulary and stay byte-stable
-// so existing documents, the admin UI and Commerce's webhook keep working.
-// The remaining values add the stages the delivery domain needs: request
-// validation, readiness, hub hand-off, last mile and returns.
+// Every value here has a writer in the codebase. That is the rule the vocabulary
+// is held to: a state that no dispatch, assignment, batch or admin flow can ever
+// produce is dead weight — it renders in the console, passes the enum, and can
+// never be entered, which is exactly how the console came to offer a
+// "Ready for Pickup" button that dispatch then refused (dispatch only ever looks
+// at `pending`, so `pending` IS "ready for pickup" here).
 //
-//   REQUESTED        → pending
-//   VALIDATED        → validated
-//   READY_FOR_PICKUP → ready_for_pickup
-//   PICKED_UP        → pickup
-//   IN_TRANSIT       → in_transit
-//   ARRIVED_AT_HUB   → arrived_at_hub
-//   OUT_FOR_DELIVERY → out_for_delivery
-//   DELIVERED        → delivered
-//   (+ assigned / reassigned: assignment states owned by Operations)
-//   FAILED / CANCELLED / RETURN_REQUESTED / RETURNED: exception states
+//   REQUESTED → assigned → pickup → in_transit → delivered
+//                ↕ reassigned (assignment state owned by Operations)
+//   FAILED (retry → pending) / CANCELLED: the exception outcomes
+//
+// Deliberately NOT modelled:
+//   `validated` / `ready_for_pickup` — pre-assignment readiness. `pending` is
+//     the ready pool (READY_DELIVERY_STATUSES); a second pre-assignment state
+//     can only be a delivery that dispatch will not pick up.
+//   `out_for_delivery` — no multi-drop last-mile stage exists; a rider on the
+//     customer leg is `in_transit`.
+//   `return_requested` / `returned` — no returns flow. `delivered` is final.
+//
+// Aliases for the removed spellings are kept below so an old filter, a stale
+// client or a historical document still resolves to the state that replaced it.
+// The return spellings are intentionally NOT aliased: a return is not a
+// cancellation, so silently rewriting one into the other would corrupt meaning.
 const DELIVERY_STATUSES = [
-  'pending', 'validated', 'ready_for_pickup',
+  'pending',
   'assigned', 'reassigned',
-  'pickup', 'in_transit', 'arrived_at_hub', 'out_for_delivery',
+  'pickup', 'in_transit',
   'delivered',
   'failed', 'cancelled',
-  'return_requested', 'returned',
 ];
 
 // Accepted spellings of a status at the API boundary (query filters, status
@@ -35,23 +42,23 @@ const DELIVERY_STATUS_ALIASES = {
   // `PENDING` — the spelling the platform's own state machine uses — was
   // rejected as an unknown status while every other canonical name was accepted.
   PENDING: 'pending',
-  VALIDATED: 'validated',
-  READY_FOR_PICKUP: 'ready_for_pickup',
-  READY: 'ready_for_pickup',
+  // Removed pre-assignment stages: they collapsed onto the ready pool.
+  VALIDATED: 'pending',
+  READY_FOR_PICKUP: 'pending',
+  READY: 'pending',
   ASSIGNED: 'assigned',
   REASSIGNED: 'reassigned',
   PICKED_UP: 'pickup',
   PICKUP: 'pickup',
   IN_TRANSIT: 'in_transit',
   TRANSIT: 'in_transit',
-  ARRIVED_AT_HUB: 'arrived_at_hub',
-  HUB: 'arrived_at_hub',
-  OUT_FOR_DELIVERY: 'out_for_delivery',
+  // Removed last-mile stage: the customer leg is `in_transit`.
+  OUT_FOR_DELIVERY: 'in_transit',
   DELIVERED: 'delivered',
+  COMPLETED: 'delivered',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
-  RETURN_REQUESTED: 'return_requested',
-  RETURNED: 'returned',
+  CANCELED: 'cancelled',
 };
 
 function tryNormalizeDeliveryStatus(value) {
@@ -66,7 +73,6 @@ function tryNormalizeDeliveryStatus(value) {
 }
 
 // Allowed transitions: FROM -> [allowed TO]. Nothing else may move a delivery.
-// Terminal states (`cancelled`, `returned`) have no outgoing transitions.
 // `pending` is re-enterable as the "released/requeued to the ready pool"
 // operation used by dispatch (rider rejects, assignment released, retry).
 //
@@ -75,78 +81,55 @@ function tryNormalizeDeliveryStatus(value) {
 // this rule an unassigned (`pending`) delivery could be marked picked up, which
 // no provider could ever account for.
 const VALID_TRANSITIONS = {
-  pending:           ['validated', 'ready_for_pickup', 'assigned', 'failed', 'cancelled'],
-  validated:         ['ready_for_pickup', 'assigned', 'failed', 'cancelled'],
-  ready_for_pickup:  ['assigned', 'failed', 'cancelled'],
-  assigned:          ['pickup', 'reassigned', 'pending', 'failed', 'cancelled'],
-  reassigned:        ['assigned', 'pickup', 'pending', 'failed', 'cancelled'],
-  pickup:            ['in_transit', 'arrived_at_hub', 'out_for_delivery', 'assigned', 'reassigned', 'pending', 'failed', 'cancelled'],
-  in_transit:        ['arrived_at_hub', 'out_for_delivery', 'delivered', 'assigned', 'reassigned', 'pending', 'failed', 'cancelled'],
-  arrived_at_hub:    ['out_for_delivery', 'in_transit', 'delivered', 'assigned', 'pending', 'failed', 'cancelled'],
-  out_for_delivery:  ['delivered', 'assigned', 'failed', 'cancelled'],
-  delivered:         ['return_requested'],
-  failed:            ['pending', 'cancelled', 'return_requested'],
-  cancelled:         [],
-  return_requested:  ['returned'],
-  returned:          [],
+  pending:    ['assigned', 'failed', 'cancelled'],
+  assigned:   ['pickup', 'reassigned', 'pending', 'failed', 'cancelled'],
+  reassigned: ['assigned', 'pickup', 'pending', 'failed', 'cancelled'],
+  pickup:     ['in_transit', 'assigned', 'reassigned', 'pending', 'failed', 'cancelled'],
+  in_transit: ['delivered', 'assigned', 'reassigned', 'pending', 'failed', 'cancelled'],
+  delivered:  [],
+  // `failed` is recoverable, so it is BLOCKED but not TERMINAL: the only way
+  // out is the retry requeue back to the ready pool.
+  failed:     ['pending', 'cancelled'],
+  cancelled:  [],
 };
 
 // Status groupings shared by Deliveries and Operations (dashboards, dispatch
-// eligibility, counters) so the two modules never drift apart.
-const READY_DELIVERY_STATUSES = ['pending', 'validated', 'ready_for_pickup'];
-const IN_PROGRESS_DELIVERY_STATUSES = [
-  'assigned', 'reassigned', 'pickup', 'in_transit', 'arrived_at_hub', 'out_for_delivery',
-];
+// eligibility, counters) so the two modules never drift apart. Every consumer
+// derives its lists from these — none may re-spell a status list locally.
+const READY_DELIVERY_STATUSES = ['pending'];
+const IN_PROGRESS_DELIVERY_STATUSES = ['assigned', 'reassigned', 'pickup', 'in_transit'];
 const ACTIVE_DELIVERY_STATUSES = [...READY_DELIVERY_STATUSES, ...IN_PROGRESS_DELIVERY_STATUSES];
-// Not eligible for (re)assignment — a completed, failed, cancelled or
-// in-return delivery must never enter dispatch again.
-const BLOCKED_DELIVERY_STATUSES = ['delivered', 'failed', 'cancelled', 'return_requested', 'returned'];
-// True terminal states: no transition ever leaves them.
-const TERMINAL_DELIVERY_STATUSES = ['cancelled', 'returned'];
+// Not eligible for (re)assignment — a completed, failed or cancelled delivery
+// must never enter dispatch again.
+const BLOCKED_DELIVERY_STATUSES = ['delivered', 'failed', 'cancelled'];
+// True terminal states: no transition ever leaves them. Deliberately excludes
+// `failed`, which the retry requeue can still leave.
+const TERMINAL_DELIVERY_STATUSES = ['delivered', 'cancelled'];
 
-// Lifecycle event names emitted on tracking/audit records for each target
-// status. `delivery.created` is emitted when a delivery is first materialized.
-const DELIVERY_CREATED_EVENT = 'delivery.created';
 const DELIVERY_EVENTS = {
   pending: 'delivery.requeued',
-  validated: 'delivery.validated',
-  ready_for_pickup: 'delivery.ready_for_pickup',
   assigned: 'delivery.assigned',
   reassigned: 'delivery.reassigned',
   pickup: 'delivery.picked_up',
   in_transit: 'delivery.in_transit',
-  arrived_at_hub: 'delivery.arrived_at_hub',
-  out_for_delivery: 'delivery.out_for_delivery',
   delivered: 'delivery.delivered',
   failed: 'delivery.failed',
   cancelled: 'delivery.cancelled',
-  return_requested: 'delivery.return_requested',
-  returned: 'delivery.returned',
 };
 
-// Commerce compatibility: its delivery webhook accepts only the original
-// eight statuses (anything else is rejected with 400) and maps them onto order
-// statuses. Intermediate stages collapse onto the closest accepted value;
-// return states are delivery-internal (Commerce handles refunds separately)
-// and are therefore not pushed.
+// Commerce compatibility: its delivery webhook accepts exactly this
+// vocabulary, so the map is now 1:1. The lifecycle above and the webhook
+// contract were previously kept in step by hand, which let them drift.
 const DELIVERY_TO_COMMERCE_STATUS = {
   pending: 'pending',
-  validated: 'pending',
-  ready_for_pickup: 'pending',
   assigned: 'assigned',
   reassigned: 'reassigned',
   pickup: 'pickup',
   in_transit: 'in_transit',
-  arrived_at_hub: 'in_transit',
-  out_for_delivery: 'in_transit',
   delivered: 'delivered',
   failed: 'failed',
   cancelled: 'cancelled',
-  return_requested: null,
-  returned: null,
 };
-
-const PROVIDER_STATUSES = ['pending', 'available', 'busy', 'offline', 'suspended'];
 
 // Multi-order assignment (a "batch" / dispatch job). One batch groups many
 // deliveries for a single rider, carries its own state machine and keeps the
@@ -165,7 +148,6 @@ const ASSIGNMENT_BATCH_STATUSES = [
 const ACTIVE_ASSIGNMENT_BATCH_STATUSES = [
   'waiting_acceptance', 'accepted', 'picking_up', 'picked_up', 'in_transit',
 ];
-const TERMINAL_ASSIGNMENT_BATCH_STATUSES = ['completed', 'rejected', 'cancelled'];
 
 // Allowed transitions: FROM -> [allowed TO] for a multi-order assignment.
 const ASSIGNMENT_BATCH_TRANSITIONS = {
@@ -186,23 +168,18 @@ const VEHICLE_TYPES = ['bicycle', 'motorcycle', 'car', 'van', 'truck', 'foot'];
 
 const DELIVERY_SERVICE_TYPES = ['standard', 'express', 'same_day', 'next_day', 'rural', 'scheduled'];
 
-const LOCATION_TYPES = [
-  'country', 'region', 'city', 'town', 'area', 'sector',
-  'community', 'village', 'rural', 'other',
-];
+// MVP geography is Region (optional) -> City. Zone and Port are separate models
+// (a coverage area and a known local point inside it) and must never appear as
+// location types.
+const LOCATION_TYPES = ['country', 'region', 'city', 'other'];
 
-const ROOT_LOCATION_TYPES = ['country', 'region', 'rural', 'other'];
+const ROOT_LOCATION_TYPES = ['country', 'other'];
 
 const LOCATION_CHILD_TYPES = {
-  country:   ['region', 'city', 'town', 'area', 'rural', 'other'],
-  region:    ['city', 'town', 'area', 'sector', 'community', 'village', 'rural', 'other'],
-  city:      ['town', 'area', 'sector', 'community', 'village', 'other'],
-  town:      ['area', 'sector', 'community', 'village', 'other'],
-  area:      ['sector', 'community', 'village', 'other'],
-  sector:    ['community', 'village', 'other'],
-  community: ['village', 'other'],
-  village:   ['other'],
-  rural:     ['community', 'village', 'other'],
+  country: ['region', 'city', 'other'],
+  region:  ['city', 'other'],
+  city:    ['other'],
+  other:   [],
 };
 
 module.exports = {
@@ -215,13 +192,10 @@ module.exports = {
   ACTIVE_DELIVERY_STATUSES,
   BLOCKED_DELIVERY_STATUSES,
   TERMINAL_DELIVERY_STATUSES,
-  DELIVERY_CREATED_EVENT,
   DELIVERY_EVENTS,
   DELIVERY_TO_COMMERCE_STATUS,
-  PROVIDER_STATUSES,
   ASSIGNMENT_BATCH_STATUSES,
   ACTIVE_ASSIGNMENT_BATCH_STATUSES,
-  TERMINAL_ASSIGNMENT_BATCH_STATUSES,
   ASSIGNMENT_BATCH_TRANSITIONS,
   MAX_BATCH_ORDERS,
   VEHICLE_TYPES,

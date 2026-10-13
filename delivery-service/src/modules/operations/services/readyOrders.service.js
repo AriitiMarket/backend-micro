@@ -1,17 +1,18 @@
 /**
  * Orders the admin may select for assignment right now.
  *
- * An order is "ready" only when its delivery is still `pending` (Ready for
- * Pickup) AND it is not already held by an active assignment. The list is
- * enriched with the display fields the admin table needs (seller, pickup,
- * customer, zone) so the screen needs no extra joins.
+ * An order is "ready" only when its delivery is still in the ready pool
+ * (`READY_DELIVERY_STATUSES`) AND it is not already held by an active
+ * assignment. The list is enriched with the display fields the admin table
+ * needs (seller, pickup, customer, zone) so the screen needs no extra joins.
  */
 const batchesRepo = require('../repositories/assignmentBatches.repository');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const zonesService = require('../../locations-expansion/services/zones.service');
+const { READY_DELIVERY_STATUSES } = require('../../../shared/constants');
 
-async function listReadyOrders({ search, zoneId, sellerId, page = 1, limit = 20 }) {
-  const filter = { status: 'pending', shipmentId: null };
+async function listReadyOrders({ search, zoneId, sellerId, page = 1, limit = 20 } = {}) {
+  const filter = { status: { $in: READY_DELIVERY_STATUSES }, shipmentId: null };
   if (zoneId) filter['destination.zoneId'] = zoneId;
   if (sellerId) filter.sellerId = sellerId;
   if (search) {
@@ -19,9 +20,7 @@ async function listReadyOrders({ search, zoneId, sellerId, page = 1, limit = 20 
     filter.$or = [
       { orderId: rx },
       { 'origin.shopName': rx },
-      { 'origin.sectorName': rx },
       { 'destination.addressDetail': rx },
-      { 'destination.sectorName': rx },
     ];
   }
 
@@ -57,11 +56,9 @@ async function listReadyOrders({ search, zoneId, sellerId, page = 1, limit = 20 
     sellerName: (d.origin && d.origin.shopName) || d.sellerId,
     shopName: (d.origin && d.origin.shopName) || '',
     pickup: [
-      d.origin && d.origin.sectorName,
       d.origin && d.origin.cityName,
     ].filter(Boolean).join(', ') || '—',
     customer: [
-      d.destination && d.destination.sectorName,
       d.destination && d.destination.addressDetail,
     ].filter(Boolean).join(', ') || '—',
     zoneId: (d.destination && d.destination.zoneId) || null,

@@ -1,0 +1,31 @@
+{
+  "name": "@aritii/service-client",
+  "version": "1.0.0",
+  "description": "Service-to-service HTTP client for Aritii microservices",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./errors": "./src/errors.js",
+    "./retry": "./src/retry.js"
+  },
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "aritii",
+    "service-client",
+    "microservices",
+    "http-client"
+  ],
+  "author": "Aritii",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "eslint": "^8.0.0"
+  }
+}

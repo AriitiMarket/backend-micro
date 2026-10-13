@@ -5,7 +5,13 @@ const zoneSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true, trim: true },
   description: { type: String, default: '' },
   status: { type: String, default: 'active', enum: ['active', 'inactive', 'suspended'] },
-  sectorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+  // MVP lifecycle: DRAFT -> READY -> LIVE <-> PAUSED. PAUSED/DRAFT zones
+  // do not accept NEW requests; existing deliveries in them continue normally.
+  lifecycle: { type: String, default: 'LIVE', enum: ['DRAFT', 'READY', 'LIVE', 'PAUSED'] },
+  // MVP traceability: which port/port serves this zone. Optional until all data
+  // is backfilled — Port is the current port equivalent in existing data.
+  portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
+  portName: { type: String, default: '' },
   locationIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
   coverage: {
     radiusKm: { type: Number, default: null },
@@ -31,7 +37,7 @@ const zoneSchema = new mongoose.Schema({
   operationalRules: {
     allowedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Provider' }],
     allowedRiders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Rider' }],
-    hubId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+    portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
     priority: { type: Number, default: 5, min: 1, max: 10 },
     operatingHours: {
       open: { type: String, default: null },
@@ -40,15 +46,14 @@ const zoneSchema = new mongoose.Schema({
     },
   },
   priority: { type: Number, default: 5, min: 1, max: 10 },
-  hubId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+  portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
 }, { timestamps: true });
 
 zoneSchema.index({ status: 1 });
-zoneSchema.index({ sectorId: 1 });
 zoneSchema.index({ locationIds: 1 });
 zoneSchema.index({ 'coverage.center': '2dsphere' }, { sparse: true });
 zoneSchema.index({ priority: 1 });
-zoneSchema.index({ hubId: 1 });
+zoneSchema.index({ portId: 1 });
 zoneSchema.index({ 'deliveryRules.serviceable': 1 });
 
 module.exports = mongoose.model('Zone', zoneSchema);

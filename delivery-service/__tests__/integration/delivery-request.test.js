@@ -46,10 +46,9 @@ it('a valid handoff creates a request and a pending delivery', async () => {
   assert.equal(delivery.status, 'pending');
   assert.equal(delivery.sellerId, 'seller-1');
   assert.equal(delivery.buyerId, 'buyer-1');
-  assert.equal(String(delivery.destination.locationId), String(geo.sector._id));
-  assert.equal(String(delivery.destination.sectorId), String(geo.sector._id), 'sectorId carries the sector, never the generic location');
+  assert.equal(String(delivery.destination.locationId), String(geo.city._id));
   assert.equal(String(delivery.origin.locationId), String(geo.city._id));
-  assert.equal(delivery.destination.sectorName, geo.sector.name);
+  assert.equal(delivery.destination.cityName, geo.city.name);
   assert.equal(String(delivery.destination.zoneId), String(geo.zone._id), 'the zone is resolved from the destination');
   assert.equal(delivery.idempotencyKey, 'order:ORD-1');
 });
@@ -107,7 +106,7 @@ it('an invalid location reference, coordinates or package quantities are rejecte
 
 it('a handoff of an inactive destination location is refused', async () => {
   const res = await handoff(harness, handoffPayload(geo, 'ORD-5', {
-    destinationLocationId: String(geo.inactiveSector._id),
+    destinationLocationId: String(geo.inactiveCity._id),
   }));
   assert.equal(res.status, 400);
   assert.match(String(res.body.message), /inactive/i);
@@ -122,7 +121,7 @@ it('an unknown (but well-formed) location id is stored as null, never as an orph
   const delivery = await harness.models.Delivery.findOne({ orderId: 'ORD-6' });
   assert.equal(delivery.destination.locationId, null);
   assert.equal(delivery.origin.locationId, null);
-  assert.equal(delivery.destination.sectorName, geo.sector.name, 'the text snapshot still carries the address');
+  assert.equal(delivery.destination.cityName, geo.city.name, 'the text snapshot still carries the address');
 });
 
 

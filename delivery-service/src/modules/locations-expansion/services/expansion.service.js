@@ -62,7 +62,7 @@ async function checkReadiness(locationId) {
     locationActive: loc.isActive,
     serviceability: loc.serviceability && loc.serviceability.serviceable,
     zone: false,
-    hub: false,
+    port: false,
     route: false,
     deliveryService: false,
   };
@@ -106,25 +106,25 @@ async function checkReadiness(locationId) {
     blockingReasons.push('No active delivery service is available');
   }
 
-  // Check hub - requirement depends on business logic, let's say it's required if it's a sector or above
+  // Check port - requirement depends on business logic, let's say it's required if it's a city or above
   if (loc.type !== 'community' && loc.type !== 'village' && loc.type !== 'other') {
-     if (loc.hub && loc.hub.isHub && loc.hub.operatingStatus === 'active') {
-       checks.hub = true;
+     if (loc.port && loc.port.isPort && loc.port.operatingStatus === 'active') {
+       checks.port = true;
      } else {
-       // Look if any parent has a hub, or if the zone has a hub
-       let hasHub = false;
-       if (zones && zones.some(z => z.hubId)) hasHub = true;
-       if (hasHub) {
-         checks.hub = true;
+       // Look if any parent has a port, or if the zone has a port
+       let hasPort = false;
+       if (zones && zones.some(z => z.portId)) hasPort = true;
+       if (hasPort) {
+         checks.port = true;
        } else {
-         blockingReasons.push('Required hub is not active or missing in the zone');
+         blockingReasons.push('Required port is not active or missing in the zone');
        }
      }
   } else {
-    checks.hub = true; // Not strictly required for small children, they inherit zone hub
+    checks.port = true; // Not strictly required for small children, they inherit zone port
   }
 
-  const ready = checks.locationActive && checks.serviceability && checks.zone && checks.route && checks.deliveryService && checks.hub;
+  const ready = checks.locationActive && checks.serviceability && checks.zone && checks.route && checks.deliveryService && checks.port;
 
   return {
     locationId,

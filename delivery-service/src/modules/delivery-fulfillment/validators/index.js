@@ -31,7 +31,7 @@ function isNonEmptyString(value, max = 255) {
 function hasAddressInfo(address) {
   if (!isPlainObject(address)) return false;
   return Boolean(
-    address.regionId || address.areaId || address.cityId || address.sectorId
+    address.regionId || address.areaId || address.cityId
     || address.locationId || address.zoneId
     || (isNonEmptyString(address.addressDetail, 500) && address.addressDetail.trim() !== '')
     || address.shopId || (address.coordinates && address.coordinates.latitude != null),
@@ -180,20 +180,60 @@ function validateRequestHandoffInput(data) {
   return validateDeliveryCreationInput(data);
 }
 
-/** Generic status change (`PUT /deliveries/:id/status`, `PATCH` with status). */
+/**
+ * Generic status change (`PUT /deliveries/:id/status`).
+ *
+ * Two jobs, both of which used to be skipped:
+ *   1. Strip every key outside STATUS_PAYLOAD_FIELDS, so a status update can
+ *      never mass-assign arbitrary document fields (`status` spreading the whole
+ *      body meant `providerId`, `failureReason`, anything, rode along).
+ *   2. Run the target-status validator (fail / cancel / deliver / retry). Those
+ *      functions existed but nothing called them, so `nextAction`, `override`
+ *      and `proof` reached the service unvalidated — a `failed` delivery could
+ *      be written with no reason at all, which is the field the retry cap and
+ *      the audit trail both read.
+ */
 function validateStatusPayload(payload) {
   if (!isPlainObject(payload)) throw validationError(['A JSON body is required']);
   const status = tryNormalizeDeliveryStatus(payload.status);
   if (!status) throw validationError(['"status" is required and must be a known delivery status']);
+
+  const unknown = Object.keys(payload).filter((key) => !moduleConstants.STATUS_PAYLOAD_FIELDS.includes(key));
+  if (unknown.length > 0) {
+    throw validationError([
+      `Unsupported field(s) in a status update: ${unknown.join(', ')}. Allowed: ${moduleConstants.STATUS_PAYLOAD_FIELDS.join(', ')}`,
+    ]);
+  }
+
+  const scoped = {};
+  for (const key of moduleConstants.STATUS_PAYLOAD_FIELDS) {
+    if (key === 'status') continue;
+    if (payload[key] !== undefined) scoped[key] = payload[key];
+  }
+  // `proofOfDelivery` is the field the model stores; `proof` is the documented
+  // API spelling. Accept either, never both (they would silently disagree).
+  if (scoped.proof !== undefined && scoped.proofOfDelivery !== undefined) {
+    throw validationError(['Send either "proof" or "proofOfDelivery", not both']);
+  }
+  if (scoped.proofOfDelivery !== undefined && scoped.proof === undefined) {
+    scoped.proof = scoped.proofOfDelivery;
+  }
+  delete scoped.proofOfDelivery;
+
   const errors = [];
-  if (payload.note !== undefined && payload.note !== null && !isNonEmptyString(payload.note, MAX_TEXT) && payload.note !== '') {
+  if (scoped.note !== undefined && scoped.note !== null && scoped.note !== ''
+    && !isNonEmptyString(scoped.note, MAX_TEXT)) {
     errors.push(`"note" must be a string of at most ${MAX_TEXT} characters`);
   }
-  if (payload.reason !== undefined && payload.reason !== null && typeof payload.reason !== 'string') {
+  if (scoped.reason !== undefined && scoped.reason !== null && typeof scoped.reason !== 'string') {
     errors.push('"reason" must be a string');
   }
   if (errors.length > 0) throw validationError(errors);
-  return { ...payload, status };
+
+  if (status === 'failed') return { ...validateFailPayload(scoped), status };
+  if (status === 'cancelled') return { ...validateCancelPayload(scoped), status };
+  if (status === 'delivered') return { ...validateDeliverPayload(scoped), status };
+  return { ...scoped, status };
 }
 
 function validateFailPayload(payload, { requireReason = true } = {}) {
@@ -303,7 +343,7 @@ function validatePatchPayload(payload) {
   const allowed = [...moduleConstants.PATCHABLE_REFERENCE_FIELDS, 'status', 'note', 'reason', 'proof', 'override', 'evidence', 'nextAction'];
   assertNoUnknownKeys(payload, allowed);
   const errors = [];
-  for (const field of ['hubId', 'routeId', 'shipmentId', 'serviceId']) {
+  for (const field of ['portId', 'routeId', 'shipmentId', 'serviceId']) {
     if (payload[field] === undefined) continue;
     if (payload[field] !== null && payload[field] !== '' && !isValidObjectId(payload[field])) {
       errors.push(`"${field}" must be a valid identifier or null`);
@@ -359,7 +399,6 @@ function buildDeliveryFilter(query = {}) {
   // already-deployed client keeps narrowing the list correctly.
   const providerId = query.providerId || query.partnerId;
   if (providerId) filter.providerId = providerId;
-  if (query.sectorId) filter['destination.sectorId'] = query.sectorId;
   if (query.zoneId) filter['destination.zoneId'] = query.zoneId;
   if (query.orderId) filter.orderId = query.orderId;
   if (query.shipmentId) filter.shipmentId = query.shipmentId;
@@ -367,7 +406,6 @@ function buildDeliveryFilter(query = {}) {
     const rx = new RegExp(String(query.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     filter.$or = [
       { orderId: rx },
-      { 'destination.sectorName': rx },
       { 'destination.addressDetail': rx },
       { 'destination.cityName': rx },
     ];

@@ -128,7 +128,7 @@ function createHarness(suffix) {
     TrackingEvent: require('../../src/modules/tracking/models/TrackingEvent'),
     Location: require('../../src/modules/locations-expansion/models/Location'),
     Zone: require('../../src/modules/locations-expansion/models/Zone'),
-    Hub: require('../../src/modules/operations/models/Hub'),
+    Port: require('../../src/modules/operations/models/Port'),
     DeliveryRoute: require('../../src/modules/locations-expansion/models/DeliveryRoute'),
     DeliveryService: require('../../src/modules/locations-expansion/models/DeliveryService'),
   };

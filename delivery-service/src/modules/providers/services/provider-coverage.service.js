@@ -3,14 +3,13 @@ const locationsRepo = require('../../locations-expansion/repositories/locations.
 const zonesRepo = require('../../locations-expansion/repositories/zones.repository');
 
 // Admin controlled changes
-async function updateCoverage(providerId, { serviceId, zoneIds, sectorId, hubId }, actor) {
+async function updateCoverage(providerId, { serviceId, zoneIds, portId }, actor) {
   const provider = await providersRepo.findById(providerId);
   if (!provider) throw Object.assign(new Error('Provider not found'), { status: 404 });
 
   const fields = {};
   if (serviceId !== undefined) fields.serviceId = serviceId;
-  if (sectorId !== undefined) fields.sectorId = sectorId;
-  if (hubId !== undefined) fields.hubId = hubId;
+  if (portId !== undefined) fields.portId = portId;
 
   if (zoneIds !== undefined) {
     // Validate zones

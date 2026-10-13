@@ -19,7 +19,12 @@ test('status normalization accepts canonical, persisted and historical spellings
   assert.equal(lifecycle.normalizeStatus('REQUESTED'), 'pending');
   assert.equal(lifecycle.normalizeStatus('PICKED_UP'), 'pickup');
   assert.equal(lifecycle.normalizeStatus('IN_TRANSIT'), 'in_transit');
-  assert.equal(lifecycle.normalizeStatus('READY'), 'ready_for_pickup');
+  // The retired pre-assignment stages collapse onto the ready pool, so a stale
+  // client or an old bookmarked filter still resolves to the live state.
+  assert.equal(lifecycle.normalizeStatus('READY'), 'pending');
+  assert.equal(lifecycle.normalizeStatus('READY_FOR_PICKUP'), 'pending');
+  assert.equal(lifecycle.normalizeStatus('VALIDATED'), 'pending');
+  assert.equal(lifecycle.normalizeStatus('OUT_FOR_DELIVERY'), 'in_transit');
   assert.equal(lifecycle.normalizeStatus('ASSIGNED'), 'assigned');
   assert.equal(lifecycle.normalizeStatus('DELIVERED'), 'delivered');
   assert.throws(() => lifecycle.normalizeStatus('teleported'), /Unknown delivery status/);
@@ -63,14 +68,14 @@ test('invalid transitions are rejected with a 409 business error', () => {
     ['pending', 'in_transit'],
     // Pickup without an assignment is not a delivery in progress.
     ['pending', 'pickup'],
-    ['validated', 'pickup'],
-    ['ready_for_pickup', 'pickup'],
+    // The removed stages are not states any more: naming one is an unknown
+    // status, and there is no transition table to consult.
     ['delivered', 'pending'],
     ['delivered', 'in_transit'],
     ['cancelled', 'assigned'],
     ['cancelled', 'pending'],
-    ['returned', 'pickup'],
     ['assigned', 'delivered'],
+    ['failed', 'delivered'],
   ];
   for (const [from, to] of invalid) {
     assert.throws(
@@ -162,36 +167,59 @@ test('the label map covers every status (the admin UI never renders a raw enum)'
 
 test('terminal states never leave themselves', () => {
   assert.deepEqual(lifecycle.allowedTransitions('cancelled'), []);
-  assert.deepEqual(lifecycle.allowedTransitions('returned'), []);
+  assert.deepEqual(lifecycle.allowedTransitions('delivered'), []);
   assert.equal(lifecycle.isTerminal('cancelled'), true);
-  assert.equal(lifecycle.isTerminal('returned'), true);
-  assert.equal(lifecycle.isTerminal('delivered'), false, 'a delivered order can still be returned');
+  assert.equal(lifecycle.isTerminal('delivered'), true, 'delivery is the end of the road');
+  // `failed` is BLOCKED but not terminal: the retry requeue is the one way out,
+  // so treating it as terminal would strand every failed delivery forever.
+  assert.equal(lifecycle.isTerminal('failed'), false);
+  assert.equal(lifecycle.isBlocked('failed'), true);
+  assert.deepEqual(lifecycle.allowedTransitions('failed'), ['pending', 'cancelled']);
+});
+
+test('every persisted status is reachable, blocked or terminal — none is dead', () => {
+  // The rule the lifecycle is held to: a status nobody can write is a status the
+  // console can only ever render. Each one must appear in the transition table.
+  for (const status of constants.DELIVERY_STATUSES) {
+    const targets = lifecycle.allowedTransitions(status);
+    const reachable = Object.values(constants.VALID_TRANSITIONS).some((list) => list.includes(status));
+    assert.ok(
+      targets.length > 0 || reachable,
+      `${status} has no outgoing transition and nothing transitions into it`,
+    );
+  }
+  // And every transition target is itself a real status — a table that points at
+  // a status the enum rejects is how `out_for_delivery` survived the last pass.
+  for (const [from, targets] of Object.entries(constants.VALID_TRANSITIONS)) {
+    assert.ok(constants.DELIVERY_STATUSES.includes(from), `${from} is not a delivery status`);
+    for (const to of targets) {
+      assert.ok(constants.DELIVERY_STATUSES.includes(to), `${from} -> ${to} targets a non-status`);
+    }
+  }
 });
 
 
 test('cancellation is only allowed while the delivery is not dispatched', () => {
   assert.equal(lifecycle.assertCancellable('pending'), true);
   assert.equal(lifecycle.assertCancellable('assigned'), true);
-  // Guarded stage: an explicit administrative override is required.
+  // Guarded stage: the rider is on the customer leg, so an explicit
+  // administrative override is required.
   assert.throws(
-    () => lifecycle.assertCancellable('out_for_delivery'),
+    () => lifecycle.assertCancellable('in_transit'),
     (err) => err.status === 409 && err.code === 'OVERRIDE_REQUIRED',
   );
-  assert.equal(lifecycle.assertCancellable('out_for_delivery', true), true);
-  // Never: the return flow exists for a completed delivery.
-  for (const status of ['delivered', 'returned', 'return_requested']) {
-    assert.throws(
-      () => lifecycle.assertCancellable(status),
-      (err) => err.status === 409 && err.code === 'CANCEL_NOT_ALLOWED',
-      `${status} must not be cancellable`,
-    );
-  }
+  assert.equal(lifecycle.assertCancellable('in_transit', true), true);
+  // Never: it already reached the customer.
+  assert.throws(
+    () => lifecycle.assertCancellable('delivered'),
+    (err) => err.status === 409 && err.code === 'CANCEL_NOT_ALLOWED',
+  );
 });
 
 test('a delivery cannot be completed from a dead state', () => {
   assert.equal(lifecycle.assertDeliverable('in_transit'), true);
   assert.equal(lifecycle.assertDeliverable('pickup'), true);
-  for (const status of ['cancelled', 'returned', 'return_requested', 'failed']) {
+  for (const status of ['cancelled', 'failed']) {
     assert.throws(
       () => lifecycle.assertDeliverable(status),
       (err) => err.status === 409 && err.code === 'ALREADY_COMPLETED',

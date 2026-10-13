@@ -3,6 +3,7 @@ const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery
 const providersRepo = require('../../providers/repositories/providers.repository');
 const providersService = require('../../providers/services/providers.service');
 const zonesService = require('../../locations-expansion/services/zones.service');
+const portsService = require('../services/ports.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { forbidden, notFound } = require('../../../shared/errors');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
@@ -16,13 +17,33 @@ async function createAssignment(req, res, next) {
     const body = { ...req.body };
     if (!body.deliveryId && body.deliveryRequestId) body.deliveryId = body.deliveryRequestId;
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
+    // The actor is ALWAYS the authenticated caller — a force request without an
+    // admin identity is rejected downstream even if the body claims one.
     body.actorId = adminId;
     body.actorName = adminName;
     body.actorRole = req.user ? req.user.role : 'ADMIN';
     const assignment = await svc.createAssignment(body);
+    const forced = assignment.forcedAssignment === true;
     sendAudit({
-      action: 'DELIVERY_ASSIGNED', adminId, adminName, targetEntity: 'delivery',
-      targetId: body.deliveryId, newValue: { providerId: assignment.providerId }, ipAddress,
+      action: 'DELIVERY_ASSIGNED',
+      // A forced assignment is an exception worth flagging in the audit trail.
+      level: forced ? 'WARNING' : 'INFO',
+      adminId, adminName, targetEntity: 'delivery',
+      targetId: body.deliveryId,
+      newValue: {
+        providerId: assignment.providerId,
+        forcedAssignment: forced,
+      },
+      reason: forced ? assignment.forceReason : null,
+      details: forced
+        ? {
+            originalZoneId: assignment.originalZoneId,
+            originalPortId: assignment.originalPortId,
+            providerZoneId: assignment.providerZoneId,
+            providerPortId: assignment.providerPortId,
+          }
+        : {},
+      ipAddress,
     });
     return created(res, { assignment }, 'Assignment created');
   } catch (err) { return next(err); }
@@ -73,12 +94,23 @@ async function reassign(req, res, next) {
   const providerId = req.body.providerId || req.body.partnerId;
   try {
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    const assignment = await svc.reassign(req.body.deliveryId, providerId, {
-      id: adminId, name: adminName, role: req.user ? req.user.role : 'ADMIN',
-    });
+    // Force fields ride along to the service, which validates them (reason +
+    // admin identity) before the outgoing provider is released.
+    const assignment = await svc.reassign(
+      req.body.deliveryId,
+      providerId,
+      { id: adminId, name: adminName, role: req.user ? req.user.role : 'ADMIN' },
+      { forceAssignment: req.body.forceAssignment, reason: req.body.reason },
+    );
+    const forced = req.body.forceAssignment === true || req.body.forceAssignment === 'true';
     sendAudit({
-      action: 'DELIVERY_REASSIGNED', adminId, adminName, targetEntity: 'delivery',
-      targetId: req.body.deliveryId, newValue: { providerId }, ipAddress,
+      action: 'DELIVERY_REASSIGNED',
+      level: forced ? 'WARNING' : 'INFO',
+      adminId, adminName, targetEntity: 'delivery',
+      targetId: req.body.deliveryId, newValue: { providerId },
+      reason: forced ? (req.body.reason || null) : null,
+      details: forced ? { forcedAssignment: true } : {},
+      ipAddress,
     });
     return ok(res, { assignment }, 'Reassigned');
   } catch (err) { return next(err); }
@@ -121,23 +153,35 @@ async function getAssignments(req, res, next) {
 
 /**
  * Providers an admin may pick for this assignment (MVP §8): available, online,
- * under capacity and actually serving the delivery's zone/service/sector.
+ * under capacity and actually serving the delivery's Zone/Port.
  * Resolves the constraints from `deliveryId` when given, so the picker shows
  * only riders that will pass the real assignment check.
+ *
+ * `?force=true` returns the FORCE list instead: the same availability /
+ * account / capacity rules, but WITHOUT the Zone/Port coverage — for the
+ * admin's explicit "Force Assign". Every row carries its zone/port names and an
+ * `inCoverage` flag so the UI can label out-of-area providers ("Other Zone" /
+ * "Other Port"); the delivery itself is never moved (§12).
  */
 async function eligibleProviders(req, res, next) {
   try {
-    const { deliveryId, zoneId, serviceId, sectorId } = req.query;
+    const { deliveryId, zoneId, serviceId } = req.query;
+    const force = req.query.force === 'true' || req.query.force === '1';
     let destZone = zoneId || null;
     let svcId = serviceId || null;
-    let destSector = sectorId || null;
+    // The Port is resolved once, here and in the assignment service, so the
+    // console's candidate list and the real assignment check agree.
+    let destPort = null;
 
     if (deliveryId) {
       const delivery = await deliveriesRepo.findById(deliveryId);
       if (!delivery) return next(notFound('Delivery not found'));
       destZone = destZone || (delivery.destination && delivery.destination.zoneId) || null;
+      // Same port resolution as the assignment service (`destination.portId`,
+      // falling back to the legacy top-level `portId`) so the candidate list and
+      // the real eligibility check can never disagree.
+      destPort = (delivery.destination && delivery.destination.portId) || delivery.portId || null;
       svcId = svcId || delivery.serviceId || null;
-      destSector = destSector || (delivery.destination && delivery.destination.sectorId) || null;
       if (!destZone && delivery.destination && delivery.destination.locationId) {
         try {
           const zs = await zonesService.findZoneForLocation(delivery.destination.locationId);
@@ -146,26 +190,73 @@ async function eligibleProviders(req, res, next) {
       }
     }
 
-    const candidates = await providersService.findAvailableForAssignment(svcId, destZone);
-    const providers = candidates
+    // Normal: candidates are pre-filtered to the delivery's zone. Force: the
+    // candidate pool spans every zone — coverage is exactly what the exception
+    // relaxes; availability and capacity are still enforced below.
+    const candidates = await providersService.findAvailableForAssignment(
+      svcId,
+      force ? null : destZone,
+    );
+    const eligible = providersService.findEligibleProviders(
+      { zoneId: destZone, portId: destPort, serviceId: svcId, ignoreCoverage: force },
+      candidates,
+    );
+
+    // Resolve display names once per distinct zone/port in the result.
+    const zoneNameById = new Map();
+    const portNameById = new Map();
+    await Promise.all([
+      ...[...new Set(eligible.map((p) => p.zoneId && String(p.zoneId)).filter(Boolean))]
+        .map(async (zid) => {
+          if (zoneNameById.has(zid)) return;
+          try { zoneNameById.set(zid, (await zonesService.getZone(zid)).name); }
+          catch { zoneNameById.set(zid, null); }
+        }),
+      ...[...new Set(eligible.map((p) => p.portId && String(p.portId)).filter(Boolean))]
+        .map(async (pid) => {
+          if (portNameById.has(pid)) return;
+          try { portNameById.set(pid, (await portsService.getPort(pid)).name); }
+          catch { portNameById.set(pid, null); }
+        }),
+    ]);
+
+    const inCoverage = (p) => {
+      const zoneOk = !destZone
+        || String(p.zoneId) === String(destZone)
+        || (p.zoneIds || []).some((z) => String(z) === String(destZone));
+      const portOk = !destPort || !p.portId || String(p.portId) === String(destPort);
+      return zoneOk && portOk;
+    };
+
+    const providers = eligible
       .map((p) => {
-        const eligibility = providersService.isProviderEligible(p, { zoneId: destZone, serviceId: svcId });
-        if (!eligibility.eligible) return null;
-        if (destSector && p.sectorId && String(p.sectorId) !== String(destSector)) return null;
+        const zoneIdStr = p.zoneId ? String(p.zoneId) : null;
+        const portIdStr = p.portId ? String(p.portId) : null;
         return {
           _id: p._id,
           name: p.name,
+          // Availability is provider/system owned — shown read-only here.
           status: p.status,
+          isOnline: Boolean(p.availability && p.availability.isOnline),
           rating: p.rating ?? null,
           activeDeliveries: p.activeDeliveries ?? 0,
           maxActiveAssignments: p.maxActiveAssignments ?? null,
-          zoneId: p.zoneId ?? null,
-          sectorId: p.sectorId ?? null,
+          zoneId: zoneIdStr,
+          zoneName: zoneIdStr ? zoneNameById.get(zoneIdStr) ?? null : null,
+          portId: portIdStr,
+          portName: portIdStr ? portNameById.get(portIdStr) ?? null : null,
+          inCoverage: inCoverage(p),
         };
       })
       .filter(Boolean);
 
-    return ok(res, { providers, count: providers.length });
+    return ok(res, {
+      providers,
+      count: providers.length,
+      deliveryZoneId: destZone ? String(destZone) : null,
+      deliveryPortId: destPort ? String(destPort) : null,
+      force,
+    });
   } catch (err) { return next(err); }
 }
 

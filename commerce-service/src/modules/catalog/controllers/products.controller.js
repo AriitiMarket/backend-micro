@@ -138,6 +138,10 @@ async function getAllProducts(req, res, next) {
         status: req.query.status,
         category: req.query.category,
         shopId: req.query.shopId,
+        // Ownership filters: pick a whole seller or a whole business from the
+        // console's filter bar instead of pasting an id into the search box.
+        ownerId: req.query.ownerId || req.query.sellerId,
+        businessId: req.query.businessId,
         priceMin: req.query.priceMin,
         priceMax: req.query.priceMax,
         dateFrom: req.query.dateFrom,

@@ -7,7 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const Order = require('../models/Orders');
-const { ORDER_STATUSES, canTransition } = require('../constants/orderStatuses');
+const { ORDER_STATUSES, ORDER_STATUS_VALUES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 const productService = require('../../catalog/services/products.service');
 const orderService = require('../services/orders.service');
 const { authenticate } = require('../../../app/middleware/authenticate');
@@ -19,7 +19,24 @@ router.get('/admin', authenticate, authorize('ADMIN'), async (req, res, next) =>
   try {
     const { page = 1, limit = 10, status } = req.query;
     const query = {};
-    if (status && status !== '') query.status = status;
+    if (status && status !== '') {
+      // The filter must go through the same normalization the write path uses.
+      // A raw pass-through meant `?status=Delivered` silently missed every
+      // legacy `DELIVERED` row, so the console reported an order as missing
+      // while the analytics endpoint (which does normalize) counted it.
+      const requested = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+      const normalized = requested.map((s) => normalizeStatus(s));
+      const unknown = normalized.filter((s) => !ORDER_STATUS_VALUES.includes(s));
+      if (unknown.length > 0) {
+        return res.status(400).json({
+          success: false,
+          code: 'UNKNOWN_STATUS',
+          message: `Unknown order status: ${unknown.join(', ')}`,
+          allowed: ORDER_STATUS_VALUES,
+        });
+      }
+      query.status = normalized.length === 1 ? normalized[0] : { $in: normalized };
+    }
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, parseInt(limit, 10) || 10);

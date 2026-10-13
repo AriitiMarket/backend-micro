@@ -16,7 +16,7 @@ const timelineEntrySchema = new mongoose.Schema({
 // `ownerId` references the Identity Service user (the Aritii account).
 // Status lifecycle: DRAFT -> PENDING_REVIEW -> APPROVED | REJECTED | SUSPENDED
 const sellerApplicationSchema = new mongoose.Schema({
-  ownerId: { type: String, index: true, required: [true, 'Owner (user id) is required'] },
+  ownerId: { type: String, required: [true, 'Owner (user id) is required'] },
   // Canonical name for new clients; ownerId is retained for backward compatibility.
   userId: { type: String, index: true },
 
@@ -102,6 +102,13 @@ const sellerApplicationSchema = new mongoose.Schema({
   // Set once the application is approved and a Shop is created from it.
   shopId: { type: String },
 
+  // True when this business record was synthesised by `createShop`/the
+  // hierarchy migration because the owner already had a live Shop but no
+  // business record. It exists to keep User -> Seller -> Business -> Shop
+  // unbroken, NOT to represent a reviewed registration, so the seller may
+  // still edit it (see `saveApplication`).
+  provisionedFromShop: { type: Boolean, default: false },
+
   submittedAt: { type: Date },
   approvedAt: { type: Date },
   rejectedAt: { type: Date },
@@ -109,4 +116,23 @@ const sellerApplicationSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-module.exports = mongoose.model('SellerApplication', sellerApplicationSchema);
+// One application per owner. The old check lived only in application code
+// (`findByOwner` before create), so two concurrent submissions could still
+// produce duplicate businesses for one account. Named explicitly because it
+// replaces the legacy non-unique `ownerId_1` index (dropped by the boot
+// migration) — reusing that name would collide with its options.
+sellerApplicationSchema.index(
+  { ownerId: 1 },
+  { name: 'ownerId_unique_application', unique: true }
+);
+
+const SellerApplication = mongoose.model('SellerApplication', sellerApplicationSchema);
+
+// A failed index build (e.g. duplicate owners already in existing data) is a
+// loud warning, not a boot crash: mongoose emits an unhandled 'error' event on
+// the model, which otherwise takes the service down.
+SellerApplication.on('error', (err) => {
+  console.error('[commerce] SellerApplication index warning:', err.message);
+});
+
+module.exports = SellerApplication;

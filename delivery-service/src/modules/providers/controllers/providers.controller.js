@@ -58,12 +58,12 @@ async function updateProvider(req, res, next) {
 
 async function getProviders(req, res, next) {
   try {
-    const { status, serviceId, zoneId, sectorId, providerType, search, page = 1, limit = 50 } = req.query;
+    const { status, serviceId, zoneId, providerType, search, page = 1, limit = 50 } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (serviceId) filter.serviceId = serviceId;
     if (zoneId) filter.zoneIds = zoneId;
-    if (sectorId) filter.sectorId = sectorId;
+    if (req.query.portId) filter.portId = req.query.portId;
     if (providerType) filter.providerType = providerType;
     // Availability filter is on the nested availability flag.
     if (req.query.isOnline === 'true') filter['availability.isOnline'] = true;
@@ -87,9 +87,21 @@ async function getAvailableProviders(req, res, next) {
 
 async function setProviderStatus(req, res, next) {
   try {
-    const result = await svc.setProviderStatus(req.params.id, req.body.status);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PROVIDER_STATUS_CHANGED', level: 'WARNING', adminId, adminName, targetEntity: 'provider', targetId: req.params.id, newValue: { status: req.body.status }, ipAddress });
+    // The actor comes from the authenticated request (never the body), and the
+    // optional reason is stored for deactivation so the record explains itself.
+    const result = await svc.setProviderStatus(
+      req.params.id,
+      req.body.status,
+      { id: adminId, name: adminName },
+      req.body.reason
+    );
+    sendAudit({
+      action: 'PROVIDER_STATUS_CHANGED', level: 'WARNING', adminId, adminName,
+      targetEntity: 'provider', targetId: req.params.id,
+      newValue: { status: req.body.status },
+      reason: req.body.reason || null, ipAddress,
+    });
     return ok(res, { provider: result }, 'Provider status updated');
   } catch (err) { return next(err); }
 }
@@ -131,7 +143,9 @@ async function approveProvider(req, res, next) {
     }
     const result = await svc.approveProvider(req.params.id);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PROVIDER_APPROVED', adminId, adminName, targetEntity: 'provider', targetId: req.params.id, newValue: { status: 'available' }, ipAddress });
+    // Approval lands the provider at `offline`: the account is active, but their
+    // availability is theirs to switch on — the admin never sets Online/Offline.
+    sendAudit({ action: 'PROVIDER_APPROVED', adminId, adminName, targetEntity: 'provider', targetId: req.params.id, newValue: { status: 'offline' }, ipAddress });
     return ok(res, { provider: result, provisioning }, 'Provider approved');
   } catch (err) { return next(err); }
 }
@@ -157,13 +171,22 @@ async function getProviderDetail(req, res, next) {
   try {
     const provider = await svc.getProvider(req.params.id);
     const zoneIds = (provider.zoneIds || []).map(String);
-    const [zones, routes, assignments, deliveries, location] = await Promise.all([
+    const [zones, routes, assignments, deliveries] = await Promise.all([
       zoneIds.length ? zonesService.getZones({ _id: { $in: zoneIds } }) : Promise.resolve([]),
       routesService.getRoutes({ providerId: provider._id }),
       assignmentsRepo.findAll({ providerId: provider._id }, { skip: 0, limit: 100 }),
       deliveriesRepo.findByProviderId(provider._id).catch(() => []),
-      provider.sectorId ? locationsService.getLocation(provider.sectorId).catch(() => null) : Promise.resolve(null),
     ]);
+
+    // City name for the Provider -> City / Zone / Port location block. A missing
+    // or unknown city simply reads as null instead of failing the whole detail.
+    let cityName = null;
+    if (provider.cityId) {
+      try {
+        const city = await locationsService.getLocation(provider.cityId);
+        cityName = city ? city.name : null;
+      } catch { cityName = null; }
+    }
 
     const activeAssignments = assignments.filter((a) =>
       ['waiting_acceptance', 'accepted', 'picking_up', 'picked_up', 'in_transit'].includes(a.status));
@@ -171,7 +194,7 @@ async function getProviderDetail(req, res, next) {
     return ok(res, {
       provider: {
         ...provider.toObject(),
-        operatingLocationName: location ? location.name : null,
+        cityName,
         zones,
         routes,
         assignments,

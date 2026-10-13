@@ -6,11 +6,11 @@ async function getDashboard(req, res, next) {
   try {
     // A seller only ever sees their own operation — never platform totals.
     const scope = req.user && isSeller(req.user) ? { sellerId: req.user.id } : {};
-    const { zoneId, serviceId, providerId, status, sectorId, dateFrom, dateTo } = req.query;
+    const { zoneId, serviceId, providerId, status, dateFrom, dateTo } = req.query;
     // Legacy spelling of the provider filter, still sent by deployed clients.
     const requestedProviderId = providerId || req.query.partnerId;
     const dashboard = await svc.getDashboard(
-      { zoneId, serviceId, providerId: requestedProviderId, status, sectorId, dateFrom, dateTo }, scope
+      { zoneId, serviceId, providerId: requestedProviderId, status, dateFrom, dateTo }, scope
     );
     return ok(res, { dashboard });
   }

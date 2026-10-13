@@ -172,6 +172,13 @@ async function initSchema(p) {
   // are held here instead, so granting a provider membership to an existing
   // seller no longer overwrites their seller role. BUYER is implicit for
   // every account, so a buyer needs no row.
+  //
+  // `onboarding_completed` records whether the applicant actually finished the
+  // role-specific wizard (store/vehicle setup) after registering, as opposed to
+  // registering and walking away. A registration writes it as `false`; the first
+  // application submission (or an admin approval) flips it to `true`. It is what
+  // lets the abandoned-application sweep tell "registered but never submitted"
+  // apart from "submitted and awaiting review" — both of which live in PENDING.
   await p.query(`
     CREATE TABLE IF NOT EXISTS user_roles (
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -180,11 +187,46 @@ async function initSchema(p) {
       source TEXT NOT NULL DEFAULT 'ADMIN',
       granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      onboarding_completed BOOLEAN NOT NULL DEFAULT true,
+      onboarding_started_at TIMESTAMPTZ,
+      onboarding_completed_at TIMESTAMPTZ,
       PRIMARY KEY (user_id, role)
     );
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_user_roles_role_status ON user_roles(role, status);`);
+
+  // Onboarding columns — idempotent upgrade for a database created before the
+  // abandoned-application sweep existed. `DEFAULT true` keeps every pre-existing
+  // membership reading as already-onboarded, so the sweep can never delete a row
+  // that merely predates the column.
+  await p.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns WHERE table_name = 'user_roles' AND column_name = 'onboarding_completed'
+      ) THEN
+        ALTER TABLE user_roles ADD COLUMN onboarding_completed BOOLEAN NOT NULL DEFAULT true;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns WHERE table_name = 'user_roles' AND column_name = 'onboarding_started_at'
+      ) THEN
+        ALTER TABLE user_roles ADD COLUMN onboarding_started_at TIMESTAMPTZ;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns WHERE table_name = 'user_roles' AND column_name = 'onboarding_completed_at'
+      ) THEN
+        ALTER TABLE user_roles ADD COLUMN onboarding_completed_at TIMESTAMPTZ;
+      END IF;
+    END $$;
+  `);
+  // The sweep filters on exactly this shape (role + status + not-yet-onboarded),
+  // so give it a partial index rather than scanning the whole membership table.
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_roles_abandoned_onboarding
+      ON user_roles (role, COALESCE(onboarding_started_at, granted_at))
+      WHERE status = 'PENDING' AND onboarding_completed = false;
+  `);
 
   // Legacy role vocabulary — CUSTOMER becomes BUYER.
   //

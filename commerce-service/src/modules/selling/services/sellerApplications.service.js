@@ -30,6 +30,23 @@ function timelineEntry(status, changedBy, reason) {
   return { status, changedBy, changedAt: new Date(), ...(reason ? { reason } : {}) };
 }
 
+/**
+ * Tell Identity the applicant finished the onboarding wizard.
+ *
+ * Called on submit so the membership stops reading "registered but never
+ * onboarded" and the abandoned-application sweep leaves it alone. Non-fatal: the
+ * application document is the source of truth for the review queue, and approval
+ * marks onboarding complete anyway.
+ */
+async function markOnboardingComplete(ownerId) {
+  if (!ownerId) return;
+  try {
+    await identityClient.markOnboardingComplete(ownerId);
+  } catch (e) {
+    console.warn('[saveApplication] onboarding completion sync warning:', e.message);
+  }
+}
+
 function validateSubmission(payload) {
   const errors = [];
   const business = payload.businessInformation || {};
@@ -129,7 +146,15 @@ class SellerApplicationService {
 
     const existing = await sellerAppRepository.findByOwner(ownerId);
     if (existing) {
-      if (!EDITABLE_STATUSES.includes(existing.status)) {
+      // A `provisionedFromShop` business carries status APPROVED because its
+      // shops are already live, so the ordinary EDITABLE_STATUSES gate would
+      // lock the seller out of their own record the moment they open the
+      // registration wizard. Let them fill it in — while still refusing edits
+      // mid-review, exactly like any other application.
+      const editable =
+        EDITABLE_STATUSES.includes(existing.status) ||
+        (Boolean(existing.provisionedFromShop) && existing.status !== 'PENDING_REVIEW');
+      if (!editable) {
         throw new ApiError(`Application cannot be modified while ${existing.status}`, 409);
       }
       if (payload.submit) {
@@ -144,6 +169,19 @@ class SellerApplicationService {
           ...(existing.statusTimeline || []),
           timelineEntry('PENDING_REVIEW', ownerId),
         ];
+        // A rejection moved the Identity membership to REJECTED; resubmitting
+        // must put it back to PENDING or the role gate keeps saying "not
+        // approved" while the application is already back in the queue.
+        if (existing.status === 'REJECTED') {
+          try {
+            await identityClient.setSellerStatus(ownerId, 'PENDING');
+          } catch (e) {
+            console.warn('[saveApplication] membership reset to PENDING warning:', e.message);
+          }
+        }
+        // The applicant has now finished the wizard, so the PENDING membership
+        // must stop reading as "abandoned" and be safe from the cleanup sweep.
+        await markOnboardingComplete(ownerId);
       }
       // Update BY ID, never by `ownerId`: `findByOwner` matches `ownerId OR
       // userId`, so a legacy document keyed only by `userId` would be found but
@@ -158,6 +196,12 @@ class SellerApplicationService {
       sanitized.submittedAt = new Date();
     }
     const status = sanitized.status || 'DRAFT';
+
+    // A first submission finishes onboarding too, so the registration-time
+    // PENDING membership is no longer a candidate for the abandoned sweep.
+    if (payload.submit) {
+      await markOnboardingComplete(ownerId);
+    }
     
     // Check if user already has a PENDING SELLER membership from registration
     // If so, link this application to that membership
@@ -328,6 +372,38 @@ class SellerApplicationService {
       throw new ApiError(`Cannot approve application while ${app.status}`, 409);
     }
 
+    // A `provisionedFromShop` business was synthesised BECAUSE the owner
+    // already runs a Shop. Re-approving it must link those shops, not mint a
+    // duplicate storefront for the same account.
+    if (app.provisionedFromShop) {
+      const owned = await shopRepository.find({ filter: { ownerId: app.ownerId } });
+      if (owned.length) {
+        const wanted = String((app.shopInformation || {}).shopName || '').trim().toLowerCase();
+        const shop =
+          owned.find((s) => wanted && String(s.name).trim().toLowerCase() === wanted) ||
+          owned[0];
+        const link = {
+          businessId: String(app._id),
+          applicationId: String(app._id),
+        };
+        for (const s of owned) {
+          await shopRepository.updateOneById(s._id, link);
+        }
+        const application = await sellerAppRepository.updateById(id, {
+          status: 'APPROVED',
+          shopId: String(shop._id),
+          approvedAt: new Date(),
+          provisionedFromShop: false,
+          review: { reviewedBy, reviewedAt: new Date(), rejectionReason: null },
+          statusTimeline: [
+            ...(app.statusTimeline || []),
+            timelineEntry('APPROVED', reviewedBy, 'Application approved'),
+          ],
+        });
+        return { application, shop, shopWasCreated: false };
+      }
+    }
+
     // 1) Build the shop from the application's shop information.
     const shopInfo = app.shopInformation || {};
     const location = app.location || {};
@@ -364,6 +440,7 @@ class SellerApplicationService {
       locationId: locationId || null,
       sectorId: sectorId || null,
       applicationId: String(app._id),
+      businessId: String(app._id),
       status: 'APPROVED',
       approvalMetadata: {
         approvedBy: reviewedBy,
@@ -457,6 +534,16 @@ class SellerApplicationService {
         },
       ],
     });
+
+    // Keep Identity in step: without this the account keeps a PENDING
+    // membership forever and the role gate shows "under review" for an
+    // application that was already rejected. Best-effort — the Commerce
+    // decision is committed and must not be rolled back by an Identity outage.
+    try {
+      await identityClient.setSellerStatus(app.ownerId, 'REJECTED');
+    } catch (e) {
+      console.error(`[reject] identity status sync warning for ${app.ownerId}:`, e.message);
+    }
 
     // Log the rejection action to audit
     try {

@@ -2,14 +2,22 @@ const usersRepo = require('../repositories/users.repository');
 const auditService = require('./audit.service');
 const { ROLES, normalizeRole } = require('../models/Role');
 
+function isValidUUID(id) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(id);
+}
+
 async function listUsers(opts) {
   return usersRepo.listAll(opts);
 }
 
 async function getUser(id) {
-  const user = await usersRepo.findById(id);
-  if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
-  return user;
+    if (!isValidUUID(id)) {
+        throw Object.assign(new Error('Invalid user ID'), { status: 400 });
+    }
+    const user = await usersRepo.findById(id);
+    if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+    return user;
 }
 
 async function setRole(userId, role, adminId = 'system', adminName = 'System', req = null) {
@@ -69,10 +77,13 @@ async function listSellers(opts) {
 }
 
 async function getSeller(id) {
-  const seller = await usersRepo.findById(id);
-  if (!seller) throw Object.assign(new Error('Seller not found'), { status: 404 });
-  if (normalizeRole(seller.role) !== ROLES.SELLER) throw Object.assign(new Error('User is not a seller'), { status: 400 });
-  return seller;
+    if (!isValidUUID(id)) {
+        throw Object.assign(new Error('Invalid seller ID'), { status: 400 });
+    }
+    const seller = await usersRepo.findById(id);
+    if (!seller) throw Object.assign(new Error('Seller not found'), { status: 404 });
+    if (normalizeRole(seller.role) !== ROLES.SELLER) throw Object.assign(new Error('User is not a seller'), { status: 400 });
+    return seller;
 }
 
 async function getDashboardStats() {

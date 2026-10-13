@@ -1,0 +1,20 @@
+{
+  "name": "@aritii/response-utils",
+  "version": "1.0.0",
+  "description": "Standardized response formatting for Aritii APIs",
+  "main": "src/index.js",
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": [
+    "aritii",
+    "response",
+    "api",
+    "formatting"
+  ],
+  "author": "Aritii",
+  "license": "MIT"
+}

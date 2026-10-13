@@ -32,6 +32,15 @@ function intParam(name) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Like intEnv, but a legitimate 0 is preserved (used for "disabled" switches such
+// as an interval of 0) instead of collapsing onto the default.
+function nonNegativeIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 const env = {
   port: parseInt(process.env.PORT, 10) || 8001,
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -80,6 +89,23 @@ const env = {
   // Legacy HMAC secret — retained ONLY so old internal callers can be detected;
   // no new tokens are ever signed or verified with it.
   legacyJwtSecret: process.env.JWT_SECRET || '',
+
+  // ── Onboarding lifecycle (abandoned-application sweep) ────────────────────
+  // A seller/provider who registers but never finishes the store/vehicle wizard
+  // is "abandoned". The sweep reclaims those memberships once they are this many
+  // days old (a submitted application is never touched — it is under review).
+  onboardingAbandonAfterDays: intEnv('ONBOARDING_ABANDON_AFTER_DAYS') || 30,
+  // How often the background sweep runs. 0 disables the scheduler entirely;
+  // the on-demand /internal/onboarding/cleanup route still works.
+  onboardingCleanupIntervalMs: nonNegativeIntEnv('ONBOARDING_CLEANUP_INTERVAL_MS', 6 * 60 * 60 * 1000),
+  // Run one pass shortly after boot (useful on a fresh deploy / in dev).
+  onboardingCleanupRunOnStart: (process.env.ONBOARDING_CLEANUP_RUN_ON_START || 'true') !== 'false',
+  // Also archive the (now empty) accounts whose abandoned membership was removed.
+  // Off by default: dropping the membership is enough to unblock the email, and
+  // locking accounts out is the operator's call.
+  onboardingCleanupArchiveAccounts: (process.env.ONBOARDING_CLEANUP_ARCHIVE_ACCOUNTS || 'false') === 'true',
+  // Max memberships reclaimed per pass (keeps one sweep from hogging the pool).
+  onboardingCleanupBatchLimit: intEnv('ONBOARDING_CLEANUP_BATCH_LIMIT') || 500,
 
   cloudinaryName: process.env.CLOUDINARY_NAME,
   cloudinaryKey: process.env.CLOUDINARY_API_KEY,

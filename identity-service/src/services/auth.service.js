@@ -29,6 +29,7 @@ const { ROLES, normalizeRole } = require('../models/Role');
 // gates (legacy `CUSTOMER` rows are canonicalized by models/Role.normalizeRole).
 const BUYER_ROLE = 'BUYER';
 const { resolveAdminAuthorization } = require('./adminAuthorization.service');
+const { withTransaction } = require('../config/transaction');
 const env = require('../config/env');
 
 const ACCESS_TOKEN_EXPIRES_IN_SEC = env.accessTokenExpiresInSec;
@@ -155,7 +156,7 @@ async function registerBuyer(payload) {
 // Role-specific registration — creates account and sets appropriate membership status
 async function registerWithRole(payload) {
   const { MEMBERSHIP_STATUSES, MEMBERSHIP_SOURCES, ACTOR_ROLES } = require('../models/Role');
-  
+
   const email = String(payload.email || '').trim();
   const existing = await usersRepository.findByEmail(email);
   if (existing) {
@@ -163,34 +164,47 @@ async function registerWithRole(payload) {
     err.statusCode = 409;
     throw err;
   }
-  
+
   const passwordHash = await hashPassword(payload.password);
   const registrationType = String(payload.registrationType || 'BUYER').toUpperCase();
-  
-  // Create the base account as a BUYER (everyone starts as a buyer; the actor
-  // application below only creates a PENDING membership, never a role grant).
-  const user = await usersRepository.create({
-    name: payload.name,
-    email: email,
-    passwordHash: passwordHash,
-    phoneNumber: payload.phoneNumber || null,
-    role: BUYER_ROLE,
-    avatarPublicId: payload.avatarPublicId || null,
-    avatarUrl: payload.avatarUrl || null,
+  const isActor = ACTOR_ROLES.includes(registrationType);
+
+  // The base account and its application membership are created together: a
+  // crash between the two INSERTs would otherwise leave either an account with
+  // no application (the seller form would think they never applied) or a
+  // membership whose account does not exist. One transaction, all or nothing.
+  const user = await withTransaction(async (client) => {
+    // Create the base account as a BUYER (everyone starts as a buyer; the actor
+    // application below only creates a PENDING membership, never a role grant).
+    const created = await usersRepository.create({
+      name: payload.name,
+      email: email,
+      passwordHash: passwordHash,
+      phoneNumber: payload.phoneNumber || null,
+      role: BUYER_ROLE,
+      avatarPublicId: payload.avatarPublicId || null,
+      avatarUrl: payload.avatarUrl || null,
+    }, { client });
+
+    // For SELLER and PROVIDER, create a PENDING membership that is flagged as
+    // NOT yet onboarded: the applicant still has to finish the store/vehicle
+    // wizard. Until they submit, the abandoned-application sweep can reclaim it.
+    if (isActor) {
+      await userRolesRepo.upsert({
+        userId: created.id,
+        role: registrationType,
+        status: MEMBERSHIP_STATUSES.PENDING,
+        source: registrationType === 'SELLER'
+          ? MEMBERSHIP_SOURCES.SELLER_APPLICATION
+          : MEMBERSHIP_SOURCES.PROVIDER_APPLICATION,
+        onboardingCompleted: false,
+        client,
+      });
+    }
+
+    return created;
   });
-  
-  // For SELLER and PROVIDER, create a PENDING membership
-  if (ACTOR_ROLES.includes(registrationType)) {
-    await userRolesRepo.upsert({
-      userId: user.id,
-      role: registrationType,
-      status: MEMBERSHIP_STATUSES.PENDING,
-      source: registrationType === 'SELLER' 
-        ? MEMBERSHIP_SOURCES.SELLER_APPLICATION 
-        : MEMBERSHIP_SOURCES.PROVIDER_APPLICATION,
-    });
-  }
-  
+
   return { user, registrationType };
 }
 

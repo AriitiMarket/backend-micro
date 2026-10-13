@@ -16,9 +16,9 @@ async function attachMemberships(rows) {
 }
 
 /** Attach memberships to a single row (profile reads, token minting). */
-async function attachMembershipsOne(row) {
+async function attachMembershipsOne(row, client) {
   if (!row) return null;
-  const memberships = await userRolesRepo.listForUser(row.id);
+  const memberships = await userRolesRepo.listForUser(row.id, client ? { client } : {});
   return { ...row, memberships };
 }
 
@@ -60,14 +60,16 @@ async function findByEmailForLogin(email) {
   return attachMembershipsOne(result.rows[0] || null);
 }
 
-async function findById(id) {
-  const pool = await getPool();
+async function findById(id, options = {}) {
+  const pool = options.client || (await getPool());
   const result = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1;`, [id]);
-  return result.rows[0] ? toUser(await attachMembershipsOne(result.rows[0])) : null;
+  return result.rows[0] ? toUser(await attachMembershipsOne(result.rows[0], options.client)) : null;
 }
 
-async function create(userData) {
-  const pool = await getPool();
+// Accept an optional (in-transaction) client so a create can join the same
+// transaction as the membership row it is paired with — see config/transaction.js.
+async function create(userData, options = {}) {
+  const pool = options.client || (await getPool());
   const id = crypto.randomUUID();
   const name = userData.name;
   const email = userData.email;
@@ -81,15 +83,15 @@ async function create(userData) {
     'INSERT INTO users (id, name, email, password_hash, phone_number, role, avatar_public_id, avatar_url, shop_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);',
     [id, name, email, passwordHash, phoneNumber, role, avatarPublicId, avatarUrl, shopId]
   );
-  return findById(id);
+  return findById(id, options);
 }
 
 async function updateFields(opts) {
-  const pool = await getPool();
+  const pool = opts.client || (await getPool());
   const id = opts.id;
   const fields = opts.fields;
   const keys = Object.keys(fields);
-  if (keys.length < 1) return findById(id);
+  if (keys.length < 1) return findById(id, opts.client ? { client: opts.client } : {});
   const assignments = keys.map(function (key, index) {
     return key + ' = $' + (index + 1);
   });
@@ -97,7 +99,7 @@ async function updateFields(opts) {
   values.push(id);
   const setSql = assignments.join(', ') + ', updated_at = NOW()';
   await pool.query('UPDATE users SET ' + setSql + ' WHERE id = $' + values.length + ';', values);
-  return findById(id);
+  return findById(id, opts.client ? { client: opts.client } : {});
 }
 
 async function updatePassword(opts) {
@@ -109,7 +111,7 @@ async function updateAvatar(opts) {
 }
 
 async function setShopId(opts) {
-  return updateFields({ id: opts.id, fields: { shop_id: opts.shopId } });
+  return updateFields({ id: opts.id, fields: { shop_id: opts.shopId }, client: opts.client });
 }
 
 async function addAddress(opts) {
@@ -147,7 +149,7 @@ async function setAddresses(opts) {
 }
 
 async function setSellerStatus(opts) {
-  return updateFields({ id: opts.id, fields: { seller_status: opts.status } });
+  return updateFields({ id: opts.id, fields: { seller_status: opts.status }, client: opts.client });
 }
 
 async function findByIdForAuth(id) {
@@ -157,6 +159,27 @@ async function findByIdForAuth(id) {
 }
 
 // --- Admin user management ---
+
+/**
+ * Free-text predicate over the three things a human recognises an account by:
+ * name, email and phone number. Phone used to be missing, so an admin given a
+ * seller's number could never find them — and the console's search box says it
+ * accepts one. The SAME term is bound to a single placeholder, so adding a
+ * column cannot desynchronise the placeholder counter from the value list.
+ *
+ * @returns {{ clause: string, value: string } | null}
+ */
+function searchClause(search, idx) {
+  const value = String(search || '').trim();
+  if (!value) return null;
+  return {
+    clause: `(name ILIKE $${idx} OR email ILIKE $${idx} OR phone_number ILIKE $${idx})`,
+    value: `%${value}%`,
+  };
+}
+
+/** Shared UUID shape used by every id-list filter on this table. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function listAll(opts = {}) {
   const pool = await getPool();
@@ -177,20 +200,19 @@ async function listAll(opts = {}) {
     }
   }
   if (status) { where.push(`status = $${idx++}`); params.push(status); }
-  if (search) { 
-    where.push(`(name ILIKE $${idx++} OR email ILIKE $${idx})`); 
-    params.push(`%${search}%`);
-    params.push(`%${search}%`);
+  const searchFilter = searchClause(search, idx);
+  if (searchFilter) {
+    where.push(searchFilter.clause);
+    params.push(searchFilter.value);
     idx++;
   }
   // `ids` resolves a page of foreign keys to display names (the admin console
   // never shows a raw user id). Malformed ids are dropped here rather than
   // cast-failed: a single typo would otherwise turn a name lookup into a 500.
   if (ids) {
-    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const valid = (Array.isArray(ids) ? ids : String(ids).split(','))
       .map((value) => String(value || '').trim())
-      .filter((value) => uuid.test(value));
+      .filter((value) => UUID_RE.test(value));
     if (valid.length === 0) return { users: [], total: 0 };
     where.push(`id = ANY($${idx++}::uuid[])`);
     params.push(valid);
@@ -268,20 +290,20 @@ async function countSellersByStatus() {
   return { total, byStatus: out };
 }
 
-async function setRole(id, role) {
-  return updateFields({ id, fields: { role } });
+async function setRole(id, role, options = {}) {
+  return updateFields({ id, fields: { role }, client: options.client });
 }
 
 /**
  * Set which actor role the account is currently acting as.
  * `null` clears the choice, meaning "use the primary role".
  */
-async function setActiveRole(id, role) {
-  return updateFields({ id, fields: { active_role: role || null } });
+async function setActiveRole(id, role, options = {}) {
+  return updateFields({ id, fields: { active_role: role || null }, client: options.client });
 }
 
-async function setStatus(id, status) {
-  return updateFields({ id, fields: { status } });
+async function setStatus(id, status, options = {}) {
+  return updateFields({ id, fields: { status }, client: options.client });
 }
 
 async function setAdminScope(id, scope) {
@@ -301,10 +323,10 @@ async function listSellers(opts = {}) {
     params.push(status); 
   }
   
-  if (search) { 
-    where.push(`(name ILIKE $${idx++} OR email ILIKE $${idx})`); 
-    params.push(`%${search}%`);
-    params.push(`%${search}%`);
+  const searchFilter = searchClause(search, idx);
+  if (searchFilter) {
+    where.push(searchFilter.clause);
+    params.push(searchFilter.value);
     idx++;
   }
   
@@ -321,6 +343,76 @@ async function listSellers(opts = {}) {
     page: Math.floor(offset / limit) + 1,
     limit 
   };
+}
+
+/**
+ * Display lookup for a bounded batch of ids: name / email / phone only.
+ *
+ * Commerce enriches its admin lists (shops, orders, products) with the human
+ * behind every `ownerId` / `sellerId` / `buyerId`. Doing that one HTTP call per
+ * row would turn a page of shops into N service calls, so it is ONE query here.
+ * The id list is capped and malformed ids are dropped rather than cast-failed —
+ * a single bad foreign key must not 500 the whole list.
+ */
+async function findDisplayByIds(ids = []) {
+  const valid = [...new Set((ids || []).filter(Boolean).map(String))]
+    .filter((value) => UUID_RE.test(value))
+    .slice(0, 200);
+  if (valid.length === 0) return [];
+  const pool = await getPool();
+  const result = await pool.query(
+    `SELECT ${USER_COLUMNS} FROM users WHERE id = ANY($1::uuid[]);`,
+    [valid]
+  );
+  return result.rows.map(toUser);
+}
+
+/**
+ * Free-text directory search used by Commerce to resolve an admin's search box
+ * into the accounts it matches (name, email or phone — the same three fields the
+ * console's own user search accepts). Returns display rows only, newest first,
+ * hard-capped so a broad term cannot stream the whole table.
+ */
+async function searchDirectory(term, limit = 25) {
+  const value = String(term || '').trim();
+  if (!value) return [];
+  const pool = await getPool();
+  const params = [`%${value}%`];
+  let clause = `name ILIKE $1 OR email ILIKE $1 OR phone_number ILIKE $1`;
+  if (UUID_RE.test(value)) {
+    params.push(value);
+    clause += ` OR id = $2::uuid`;
+  }
+  const capped = Math.min(200, Math.max(1, Number(limit) || 25));
+  const result = await pool.query(
+    `SELECT ${USER_COLUMNS} FROM users WHERE (${clause}) ORDER BY created_at DESC LIMIT ${capped};`,
+    params
+  );
+  return result.rows.map(toUser);
+}
+
+/**
+ * Of the given ids, the accounts that are safe to ARCHIVE once an abandoned
+ * application membership is removed: still `active`, never verified, with no shop
+ * and no remaining membership of any kind. Anything with a live role, a shop or a
+ * verified identity is a real account and is left untouched by the sweep.
+ * @returns {Promise<string[]>} the qualifying user ids
+ */
+async function findArchivableAccounts(userIds, options = {}) {
+  const ids = [...new Set((userIds || []).filter(Boolean).map(String))];
+  if (ids.length === 0) return [];
+  const pool = options.client || (await getPool());
+  const result = await pool.query(
+    `SELECT u.id
+       FROM users u
+      WHERE u.id = ANY($1::uuid[])
+        AND COALESCE(u.shop_id, '') = ''
+        AND u.is_verified = false
+        AND u.status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id);`,
+    [ids]
+  );
+  return result.rows.map((row) => row.id);
 }
 
 module.exports = {
@@ -346,4 +438,7 @@ module.exports = {
   setStatus,
   setAdminScope,
   listSellers,
+  findDisplayByIds,
+  searchDirectory,
+  findArchivableAccounts,
 };

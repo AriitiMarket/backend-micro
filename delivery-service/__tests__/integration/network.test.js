@@ -1,7 +1,7 @@
 'use strict';
 /**
  * Delivery-network integration tests (§24/§25/§26): the geographic hierarchy,
- * zones, hubs, routes and the provider operating area.
+ * zones, ports, routes and the provider operating area.
  *
  * The service layer is exercised through the real app against a real MongoDB —
  * the pre-existing `locations-expansion` unit test only asserts on mocks declared
@@ -47,7 +47,7 @@ function seededProvider(overrides = {}) {
     name: 'Network Rider',
     zoneId: geo.zone._id,
     zoneIds: [geo.zone._id],
-    sectorId: geo.sector._id,
+    portId: geo.port._id,
     serviceId: geo.service._id,
     ...overrides,
   });
@@ -62,20 +62,16 @@ it('a location tree can be created and read back with its hierarchy', async () =
   assert.ok(region, 'the region hangs off the country');
   const city = region.children.find((node) => String(node._id) === String(geo.city._id));
   assert.ok(city, 'the city hangs off the region');
-  const sector = city.children.find((node) => String(node._id) === String(geo.sector._id));
-  assert.ok(sector, 'the sector hangs off the city');
-  assert.equal(sector.type, 'sector');
-
-  const ancestors = await request(`/delivery/location/${geo.sector._id}/ancestors`, { as: actors.admin });
+  const ancestors = await request(`/delivery/location/${geo.city._id}/ancestors`, { as: actors.admin });
   assert.equal(ancestors.status, 200);
   const types = ancestors.body.ancestors.map((node) => node.type);
-  assert.deepEqual(types, ['country', 'region', 'city', 'area'].slice(0, types.length).concat(types.slice(types.length)), 'ancestors are ordered root first');
+  assert.deepEqual(types, ['country', 'region', 'city'].slice(0, types.length).concat(types.slice(types.length)), 'ancestors are ordered root first');
 });
 
 it('an illegal parent/child relationship is refused', async () => {
   const res = await request('/delivery/location', {
     method: 'POST', as: actors.admin,
-    body: { name: 'Sector without a city', type: 'sector', parentId: String(geo.sector._id) },
+    body: { name: 'Region under a city', type: 'region', parentId: String(geo.city._id) },
   });
   assert.equal(res.status, 400, JSON.stringify(res.body));
   assert.match(String(res.body.message), /cannot be placed under/i);
@@ -89,38 +85,7 @@ it('an illegal parent/child relationship is refused', async () => {
 
 it('deactivating a location hides it from the ready surfaces and activating brings it back', async () => {
   const city = await models.Location.create({ name: 'Diredawa City Test', type: 'city', parentId: geo.region._id });
-  const child = await models.Location.create({ name: 'Test Sector', type: 'sector', parentId: city._id });
-
-it('the connection search the admin console uses is served (not read as an id)', async () => {
-  // The console calls `GET /delivery/route/search?originId&destinationId`
-  // before creating a connection so it can offer "reactivate" instead of a
-  // duplicate. Without this route the request fell through to `/:id` and every
-  // call answered `INVALID_ID`, so the check could never pass.
-  const none = await request(
-    `/delivery/route/search?originId=${geo.sector._id}&destinationId=${geo.otherSector._id}`,
-    { as: actors.admin },
-  );
-  assert.equal(none.status, 200, JSON.stringify(none.body));
-  assert.equal(none.body.route, null, 'the console reads `route | null`');
-
-  const route = await request('/delivery/route', {
-    method: 'POST', as: actors.admin,
-    body: { name: 'Searched connection', originLocationId: String(geo.sector._id), destinationLocationId: String(geo.otherSector._id) },
-  });
-  assert.equal(route.status, 201, JSON.stringify(route.body));
-
-  const found = await request(
-    `/delivery/route/search?originId=${geo.sector._id}&destinationId=${geo.otherSector._id}`,
-    { as: actors.admin },
-  );
-  assert.equal(found.status, 200);
-  assert.equal(String(found.body.route._id), String(route.body.route._id));
-
-  assert.equal((await request('/delivery/route/search', { as: actors.admin })).status, 400, 'both parameters are required');
-  assert.equal((await request('/delivery/route/search?originId=x&destinationId=y', { as: actors.admin })).status, 400, 'and they must be identifiers');
-  assert.equal((await request(`/delivery/route/search?originId=${geo.sector._id}&destinationId=${geo.otherSector._id}`, { as: actors.buyer })).status, 403, 'the search is admin-only');
-});
-
+  const child = await models.Location.create({ name: 'Test Point', type: 'other', parentId: city._id });
 
   const off = await request(`/delivery/location/${child._id}/deactivate`, { method: 'PUT', as: actors.admin });
   assert.equal(off.status, 200, JSON.stringify(off.body));
@@ -143,11 +108,12 @@ it('the connection search the admin console uses is served (not read as an id)',
   assert.ok(relisted.some((node) => String(node._id) === String(child._id)), 'and comes back on activation');
 });
 
+
 it('a zone has a unique code, covers real locations and can be checked for coverage', async () => {
   const code = `NZ-${seq + 1}`;
   const zone = await request('/delivery/zone', {
     method: 'POST', as: actors.admin,
-    body: { name: 'New Zone', code, locationIds: [String(geo.sector._id)] },
+    body: { name: 'New Zone', code, locationIds: [String(geo.otherCity._id)] },
   });
   assert.equal(zone.status, 201, JSON.stringify(zone.body));
 
@@ -156,36 +122,36 @@ it('a zone has a unique code, covers real locations and can be checked for cover
   });
   assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
 
-  const coverage = await request(`/delivery/zone/coverage/${geo.sector._id}`, { as: actors.buyer });
+  const coverage = await request(`/delivery/zone/coverage/${geo.otherCity._id}`, { as: actors.buyer });
   assert.equal(coverage.status, 200);
   assert.equal(coverage.body.covered, true);
-  assert.ok(coverage.body.zones.some((z) => z.code === code), 'the new zone covers the sector');
+  assert.ok(coverage.body.zones.some((z) => z.code === code), 'the new zone covers the city');
 
   // An inactive location may not be added to a zone.
-  const inactive = await models.Location.create({ name: 'Closed Area', type: 'sector', parentId: geo.city._id, isActive: false });
+  const inactive = await models.Location.create({ name: 'Closed Point', type: 'other', parentId: geo.city._id, isActive: false });
   const rejected = await request(`/delivery/zone/${zone.body.zone._id}/locations`, {
     method: 'POST', as: actors.admin, body: { locationId: String(inactive._id) },
   });
   assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
 });
 
-it('hubs are tied to a real location and can be read back', async () => {
-  const created = await request('/delivery/hub', {
+it('ports are tied to a real location and can be read back', async () => {
+  const created = await request('/delivery/port', {
     method: 'POST', as: actors.admin,
-    body: { name: 'Harar Hub Test', locationId: String(geo.city._id), capacity: 50 },
+    body: { name: 'Harar Port Test', locationId: String(geo.city._id), capacity: 50 },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
-  const hubId = created.body.hub._id;
+  const portId = created.body.port._id;
 
-  const listed = await request('/delivery/hub', { as: actors.admin });
+  const listed = await request('/delivery/port', { as: actors.admin });
   assert.equal(listed.status, 200);
-  assert.ok(listed.body.hubs.some((hub) => String(hub._id) === String(hubId)));
+  assert.ok(listed.body.ports.some((port) => String(port._id) === String(portId)));
 
-  const orphan = await request('/delivery/hub', {
+  const orphan = await request('/delivery/port', {
     method: 'POST', as: actors.admin,
-    body: { name: 'Floating Hub', locationId: '507f1f77bcf86cd799439011' },
+    body: { name: 'Floating Port', locationId: '507f1f77bcf86cd799439011' },
   });
-  assert.equal(orphan.status, 404, 'a hub cannot be placed at a location that does not exist');
+  assert.equal(orphan.status, 404, 'a port cannot be placed at a location that does not exist');
 });
 
 it('a route needs two real, active locations and cannot be duplicated', async () => {
@@ -193,8 +159,8 @@ it('a route needs two real, active locations and cannot be duplicated', async ()
   const route = await request('/delivery/route', {
     method: 'POST', as: actors.admin,
     body: {
-      name: 'Other city → Other sector', code,
-      originLocationId: String(geo.otherCity._id), destinationLocationId: String(geo.otherSector._id),
+      name: 'Other city coverage', code,
+      originLocationId: String(geo.otherCity._id), destinationLocationId: String(geo.city._id),
     },
   });
   assert.equal(route.status, 201, JSON.stringify(route.body));
@@ -203,14 +169,14 @@ it('a route needs two real, active locations and cannot be duplicated', async ()
     method: 'POST', as: actors.admin,
     body: {
       name: 'Same connection',
-      originLocationId: String(geo.otherCity._id), destinationLocationId: String(geo.otherSector._id),
+      originLocationId: String(geo.otherCity._id), destinationLocationId: String(geo.city._id),
     },
   });
   assert.equal(duplicate.status, 409, 'a second connection between the same pair is refused');
 
   const inactiveRoute = await request('/delivery/route', {
     method: 'POST', as: actors.admin,
-    body: { name: 'From a closed place', originLocationId: String(geo.inactiveSector._id), destinationLocationId: String(geo.city._id) },
+    body: { name: 'From a closed place', originLocationId: String(geo.inactiveCity._id), destinationLocationId: String(geo.city._id) },
   });
   assert.equal(inactiveRoute.status, 400, 'an inactive endpoint is refused');
 
@@ -233,10 +199,9 @@ it('a provider only serves the zones it is given (operating area)', async () => 
 
   // A Dire Dawa delivery is not: the provider does not cover that zone.
   const remote = await newOrder('AREA-REMOTE', {
-    destinationLocationId: String(geo.otherSector._id),
+    destinationLocationId: String(geo.otherCity._id),
     deliveryAddress: {
       ...geo.deliveryAddress,
-      sectorId: String(geo.otherSector._id), sectorName: geo.otherSector.name,
       cityId: String(geo.otherCity._id), cityName: geo.otherCity.name,
     },
   });
@@ -246,26 +211,25 @@ it('a provider only serves the zones it is given (operating area)', async () => 
   assert.ok([400, 404].includes(refused.status), `cross-city assignment must be refused (got ${refused.status})`);
   assert.equal((await models.Delivery.findById(remote._id)).status, 'pending', 'the order stays ready for a local provider');
 
-  // Widening the operating area makes the same delivery assignable: the
-  // provider must serve the destination's zone AND sector.
-  await models.Zone.updateOne({ _id: otherZone._id }, { $set: { locationIds: [geo.otherSector._id] } });
+  // Covering that city with a zone and widening the provider's operating area
+  // makes the same delivery assignable.
+  await models.Zone.updateOne({ _id: otherZone._id }, { $set: { locationIds: [geo.otherCity._id] } });
+  await models.Delivery.updateOne({ _id: remote._id }, { $set: { 'destination.zoneId': otherZone._id } });
   const widened = await request(`/delivery/provider/${provider._id}/zones`, {
     method: 'PUT', as: actors.admin, body: { zoneIds: [String(geo.zone._id), String(otherZone._id)] },
   });
   assert.equal(widened.status, 200, JSON.stringify(widened.body));
 
-  const sectorOnly = await request('/delivery/assignment', {
-    method: 'POST', as: actors.admin, body: { deliveryId: String(remote._id), providerId: String(provider._id) },
-  });
-  assert.equal(sectorOnly.status, 400, 'the sector is still outside the provider\'s coverage');
-
-  await request(`/delivery/provider/${provider._id}`, {
-    method: 'PUT', as: actors.admin, body: { sectorId: String(geo.otherSector._id) },
-  });
   const assignRemote = await request('/delivery/assignment', {
     method: 'POST', as: actors.admin, body: { deliveryId: String(remote._id), providerId: String(provider._id) },
   });
   assert.equal(assignRemote.status, 201, JSON.stringify(assignRemote.body));
+
+  // The Port is the operating reference of the delivery, taken from the
+  // assigned provider — the Zone stays the coverage boundary.
+  const assigned = await models.Delivery.findById(remote._id);
+  assert.equal(String(assigned.destination.zoneId), String(otherZone._id));
+  assert.equal(String(assigned.destination.portId), String(geo.port._id));
 
   // An inactive zone is never assignable to a provider.
   await models.Zone.updateOne({ _id: otherZone._id }, { $set: { status: 'inactive' } });

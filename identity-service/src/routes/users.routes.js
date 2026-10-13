@@ -10,6 +10,12 @@ const validateUuidParam = require('../middleware/validateUuidParam');
 
 // Service-to-service aggregate (cluster credential only — never a browser call).
 router.get('/internal/users/count', internalOnly, usersController.countUsers);
+// Service-to-service batch display lookup — one query for a whole page of ids
+// so Commerce can name every owner/seller/buyer on an admin list without N calls.
+router.post('/internal/users/by-ids', internalOnly, usersController.findUsersByIds);
+// Service-to-service directory search (name / email / phone) — resolves an
+// admin's search box on a Commerce list into the accounts that match it.
+router.post('/internal/users/search', internalOnly, usersController.searchUsers);
 // Service-to-service email lookup (cluster credential only). Two segments after
 // `/internal/users/` so it can never be read as the `:id` route below.
 router.get('/internal/users/by-email/:email', internalOnly, usersController.findUserByEmail);

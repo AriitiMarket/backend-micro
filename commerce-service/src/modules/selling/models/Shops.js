@@ -72,7 +72,19 @@ const shopSchema = new mongoose.Schema({
     index: true,
     description: 'Reference to SellerApplication that initiated this shop'
   },
-  
+
+  // The BUSINESS this shop belongs to (User -> Seller Actor -> Business -> Shop).
+  // Always a SellerApplication _id. Kept separate from `applicationId` because
+  // `applicationId` records which application *initiated* the shop (and may be
+  // absent for shops opened directly from the seller console), while
+  // `businessId` records which business *owns* it — and must exist for every
+  // shop. `createShop` backfills both; the hierarchy migration backfills the rest.
+  businessId: {
+    type: String,
+    index: true,
+    description: 'Reference to the SellerApplication (business) that owns this shop'
+  },
+
   withdrawMethod: { type: Object },
   availableBalance: { type: Number, default: 0 },
   transections: [

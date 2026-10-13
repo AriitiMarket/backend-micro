@@ -197,29 +197,46 @@ async function resolveHierarchyScope(filters = {}) {
   let ownerIds = null;
   let applicationIds = null;
   if (businessId) {
-    const application = await sellerAppRepo.findById(businessId);
-    applicationIds = [String(businessId)];
-    ownerIds = application && application.ownerId ? [String(application.ownerId)] : [];
+    // A business id is a SellerApplication _id. Before the hierarchy fix,
+    // orders and seeds stored the owner's Identity *user id* here instead, so
+    // a value that is not an ObjectId is still accepted as an owner id —
+    // otherwise every legacy link would silently scope to nothing.
+    if (isValidObjectId(businessId)) {
+      const application = await sellerAppRepo.findById(businessId);
+      applicationIds = [String(businessId)];
+      ownerIds = application && application.ownerId ? [String(application.ownerId)] : [];
+    } else {
+      applicationIds = [];
+      ownerIds = [String(businessId)];
+    }
     // Constrain the shop query itself: without this, shops belonging to other
     // sellers would re-introduce owners outside the selected business.
     const businessOr = [
-      { applicationId: { $in: applicationIds } },
+      ...(applicationIds.length ? [{ businessId: { $in: applicationIds } }] : []),
+      ...(applicationIds.length ? [{ applicationId: { $in: applicationIds } }] : []),
       ...(ownerIds.length ? [{ ownerId: { $in: ownerIds } }] : []),
     ];
+    if (!businessOr.length) return matchesNothing();
     shopFilter.$or = businessOr;
   }
 
-  const shopOwnerIds = (await shopRepo.distinct('ownerId', shopFilter)).map(String);
-  const shopApplicationIds = (await shopRepo.distinct('applicationId', shopFilter)).map(String);
+  const distinctIds = (field) =>
+    shopRepo.distinct(field, shopFilter).then((rows) => rows.filter(Boolean).map(String));
+
+  const shopOwnerIds = await distinctIds('ownerId');
+  const shopApplicationIds = new Set(await distinctIds('applicationId'));
+  const shopBusinessIds = new Set(await distinctIds('businessId'));
 
   if (businessId) {
     // Intersection, not union: keep only what the business itself owns.
     ownerIds = ownerIds.filter((id) => shopOwnerIds.includes(id));
-    applicationIds = applicationIds.filter((id) => shopApplicationIds.includes(id));
+    applicationIds = applicationIds.filter(
+      (id) => shopApplicationIds.has(id) || shopBusinessIds.has(id)
+    );
     if (!ownerIds.length && !applicationIds.length) return matchesNothing();
   } else {
     ownerIds = shopOwnerIds;
-    applicationIds = shopApplicationIds;
+    applicationIds = [...new Set([...shopApplicationIds, ...shopBusinessIds])];
   }
 
   if (ownerIds.length) {

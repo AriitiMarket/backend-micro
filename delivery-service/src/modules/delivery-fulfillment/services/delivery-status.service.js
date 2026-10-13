@@ -15,8 +15,14 @@ function normalizeNextAction(value) {
 
 async function _releaseProvider(providerId, assignmentId) {
   if (!providerId) return;
-  if (assignmentId) await providersService.decrementWorkload(providerId, assignmentId);
-  // Status transition is now handled automatically by decrementWorkload!
+  if (assignmentId) {
+    await providersService.decrementWorkload(providerId, assignmentId);
+    return;
+  }
+  // No assignment reference, so nothing can be decremented safely — but the
+  // delivery is over, so the provider must not be left BUSY (and therefore
+  // ineligible). Re-derive their availability from their current load.
+  await providersService.reconcileAvailability(providerId);
 }
 
 /** Is this transition being driven by the delivery provider doing the work? */
@@ -116,7 +122,16 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
   // Workload and side-effects
   if (newStatus === 'delivered') {
     if (delivery.providerId) {
-      if (delivery.assignmentId && !options.deferProviderCompletion) await providersService.completeDelivery(delivery.providerId, delivery.assignmentId);
+      if (delivery.assignmentId && !options.deferProviderCompletion) {
+        await providersService.completeDelivery(delivery.providerId, delivery.assignmentId);
+      } else if (!options.deferProviderCompletion) {
+        // Success with no assignment reference to decrement: nothing else will
+        // free this provider, so still re-derive their availability — a
+        // completed delivery must never leave someone stuck BUSY. (When
+        // `deferProviderCompletion` is set, the batch flow owns the release and
+        // frees the whole batch once it completes.)
+        await providersService.reconcileAvailability(delivery.providerId);
+      }
       await assignmentsRepo.cancelActiveByDelivery(id);
     }
   } else if (newStatus === 'failed' || newStatus === 'cancelled') {

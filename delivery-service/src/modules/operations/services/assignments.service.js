@@ -7,13 +7,15 @@ const routesService = require('../../locations-expansion/services/routes.service
 const deliveriesService = require('../../delivery-fulfillment/services/delivery-fulfillment.service');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const { transitionDeliveryStatus } = require('../../delivery-fulfillment/services/delivery-status.service');
-
-const ACTIVE_DELIVERY_STATUSES = ['pending', 'assigned', 'pickup', 'in_transit'];
-const TERMINAL_DELIVERY_STATUSES = ['delivered', 'failed', 'cancelled'];
+const { BLOCKED_DELIVERY_STATUSES } = require('../../../shared/constants');
 
 function assertAssignable(delivery) {
   if (!delivery) throw Object.assign(new Error('Delivery not found'), { status: 404 });
-  if (TERMINAL_DELIVERY_STATUSES.includes(delivery.status)) {
+  // BLOCKED (not TERMINAL) is the right test here: a completed, failed or
+  // cancelled delivery must never take a new rider. `failed` can still be
+  // retried, but retrying means requeueing to the ready pool first, not
+  // reassigning the corpse.
+  if (BLOCKED_DELIVERY_STATUSES.includes(delivery.status)) {
     throw Object.assign(
       new Error(`Delivery is ${delivery.status} and cannot receive a new assignment`),
       { status: 400 },
@@ -21,11 +23,44 @@ function assertAssignable(delivery) {
   }
 }
 
-
+/**
+ * Force assignment is an EXCEPTION to the Zone/Port coverage rules, so it may
+ * never be implicit:
+ *
+ *   - an explicit `forceAssignment: true` flag,
+ *   - a non-empty `reason` (recorded on the assignment and in the audit trail),
+ *   - the admin's authenticated identity (`actorId` — set by the controller
+ *     from the request's user, never trusted from the request body).
+ *
+ * The FRONTEND hiding ineligible providers is not enforcement; this check is.
+ * Returns the normalized force payload used by the rest of the flow.
+ */
+function assertForceAssignment(data) {
+  const forced = data.forceAssignment === true || data.forceAssignment === 'true';
+  if (!forced) return null;
+  const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
+  if (!reason) {
+    throw Object.assign(
+      new Error('Force assignment requires a reason'),
+      { status: 400, code: 'FORCE_REASON_REQUIRED' },
+    );
+  }
+  if (!data.actorId) {
+    throw Object.assign(
+      new Error('Force assignment requires an admin identity'),
+      { status: 403, code: 'FORCE_ADMIN_REQUIRED' },
+    );
+  }
+  return { reason, adminId: String(data.actorId), at: new Date() };
+}
 
 async function createAssignment(data) {
   const delivery = await deliveriesService.getDelivery(data.deliveryId);
   assertAssignable(delivery);
+
+  // Validate the exception BEFORE touching any state: a force request without
+  // a reason or an admin identity must not create (or release) anything.
+  const force = assertForceAssignment(data);
 
   const existingActive = await assignmentsRepo.findActiveByDeliveryId(data.deliveryId);
   if (existingActive.length > 0) {
@@ -38,21 +73,25 @@ async function createAssignment(data) {
   }
 
   const provider = await providersService.getProvider(data.providerId);
-  const destSector = delivery.destination && delivery.destination.sectorId ? String(delivery.destination.sectorId) : null;
   const destZone = delivery.destination && delivery.destination.zoneId ? String(delivery.destination.zoneId) : null;
+  // A delivery carries its port in `destination.portId`; older records also have
+  // a top-level `portId`. Both are read so the Port rule can never be silently
+  // skipped by a record that only has the legacy field.
+  const destPortRaw = (delivery.destination && delivery.destination.portId) || delivery.portId || null;
+  const destPort = destPortRaw ? String(destPortRaw) : null;
 
-  const eligibility = providersService.isProviderEligible(provider, { 
+  // Normal assignment enforces Zone AND Port; a forced one skips coverage only —
+  // account status, availability and capacity are still verified below.
+  const eligibility = providersService.isProviderEligible(provider, {
     zoneId: destZone,
-    serviceId: data.serviceId || delivery.serviceId
+    portId: destPort,
+    serviceId: data.serviceId || delivery.serviceId,
+    ignoreCoverage: Boolean(force),
   });
   if (!eligibility.eligible) {
     throw Object.assign(new Error(`Provider not eligible: ${eligibility.reason}`), { status: 400 });
   }
   
-  if (destSector && provider.sectorId && String(provider.sectorId) !== destSector) {
-    throw Object.assign(new Error('Delivery actor does not serve this sector'), { status: 400 });
-  }
-
   const service = data.serviceId ? await deliveryServicesService.getService(data.serviceId) : null;
   let zoneId = data.zoneId || (delivery.destination && delivery.destination.zoneId) || null;
   if (zoneId) {
@@ -65,15 +104,31 @@ async function createAssignment(data) {
 
   const route = await routesService.findRouteByEndpoints(delivery.origin.locationId, delivery.destination.locationId);
 
+  // The delivery's OWN geography is the operational record (MVP §12): an
+  // assignment never rewrites it. The destination port is never touched — a
+  // force-assigned provider from another port does not move the delivery's port
+  // to theirs — and the zone below is only backfilled when missing.
+  const originalZoneId = delivery.destination?.zoneId ?? null;
+  const originalPortId = delivery.destination?.portId ?? null;
+
   let assignment;
   try {
     assignment = await assignmentsRepo.create({
       deliveryId: data.deliveryId, providerId: data.providerId,
       serviceId: data.serviceId || (service && service._id) || null, zoneId,
-      hubId: data.hubId || null, routeId: route ? route._id : null,
+      portId: data.portId || null, routeId: route ? route._id : null,
       status: 'pending', assignedAt: new Date(),
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       notes: data.notes || '',
+      // Exception trail (false / empty for a normal in-area assignment).
+      forcedAssignment: Boolean(force),
+      forceReason: force ? force.reason : '',
+      forcedBy: force ? force.adminId : null,
+      forcedAt: force ? force.at : null,
+      originalZoneId: originalZoneId || null,
+      originalPortId: originalPortId || null,
+      providerZoneId: provider.zoneId || null,
+      providerPortId: provider.portId || null,
     });
   } catch (err) {
     // Partial unique index on (deliveryId, active status) — the other admin won.
@@ -101,14 +156,21 @@ async function createAssignment(data) {
     // Ownership first, so the state-machine side effects (milestone, tracking,
     // Commerce notification) carry the provider and the assignment reference.
     const ownership = { providerId: data.providerId, assignmentId: assignment._id };
-    if (zoneId) ownership['destination.zoneId'] = zoneId;
+    // Backfill ONLY a missing zone from the resolved one. An existing zone/port
+    // is the delivery's real area and is never overwritten — not even by the
+    // assigned provider's own zone/port (MVP §12), forced or not.
+    if (zoneId && !originalZoneId) ownership['destination.zoneId'] = zoneId;
     await deliveriesRepo.updateFields(data.deliveryId, ownership);
     // One state machine for every assignment path: the status change, its
     // milestone (`assignedAt`) and the downstream notifications are identical
     // whether a provider was assigned one delivery or a whole batch.
     await transitionDeliveryStatus(data.deliveryId, 'assigned', {
       id: data.actorId || null, name: data.actorName || null, role: data.actorRole || 'ADMIN',
-    }, { note: data.notes || 'Assigned to delivery provider' });
+    }, {
+      note: force
+        ? `Force assigned outside the delivery zone/port: ${force.reason}`
+        : (data.notes || 'Assigned to delivery provider'),
+    });
   } catch (err) {
     // Never leave a delivery `assigned` to a provider that holds no work: it
     // would be invisible in the ready pool and impossible to dispatch again.
@@ -117,7 +179,11 @@ async function createAssignment(data) {
     await deliveriesRepo.updateFields(data.deliveryId, {
       status: previousStatus, providerId: previousProviderId, assignmentId: previousAssignmentId,
     }).catch(() => null);
-    if (zoneId) await deliveriesRepo.updateFields(data.deliveryId, { 'destination.zoneId': null }).catch(() => null);
+    // Restore the delivery's OWN zone/port (never `null`): a failed assignment
+    // must leave the geographic record exactly as it found it.
+    await deliveriesRepo.updateFields(data.deliveryId, {
+      'destination.zoneId': originalZoneId, 'destination.portId': originalPortId,
+    }).catch(() => null);
     throw err;
   }
 
@@ -144,6 +210,28 @@ async function getAssignment(id) {
   const a = await assignmentsRepo.findById(id);
   if (!a) throw Object.assign(new Error('Assignment not found'), { status: 404 });
   return a;
+}
+
+/** Expire stale offers and release their deliveries so an expired offer can
+ * never leave a delivery stuck `assigned` to a provider who never accepted. */
+async function expireStaleOffers() {
+  const stale = await assignmentsRepo.findPendingExpired();
+  let expired = 0;
+  for (const a of stale) {
+    try {
+      await assignmentsRepo.updateFields(a._id, { status: 'expired', respondedAt: new Date() });
+      await providersService.decrementWorkload(a.providerId, a._id, null).catch(() => null);
+      const delivery = await deliveriesService.getDelivery(a.deliveryId).catch(() => null);
+      if (delivery && delivery.status === 'assigned' && String(delivery.assignmentId) === String(a._id)) {
+        await transitionDeliveryStatus(a.deliveryId, 'pending', { role: 'SYSTEM' }, { note: 'Assignment offer expired' });
+        await deliveriesRepo.updateFields(a.deliveryId, { providerId: null, assignmentId: null });
+      }
+      expired += 1;
+    } catch (err) {
+      console.warn('[assignments] expireStaleOffers skip', a._id, err.message);
+    }
+  }
+  return expired;
 }
 
 async function respondToAssignment(id, accepted, providerId) {
@@ -176,9 +264,15 @@ async function respondToAssignment(id, accepted, providerId) {
   return assignmentsRepo.findById(id);
 }
 
-async function reassign(deliveryId, newProviderId, actor = null) {
+async function reassign(deliveryId, newProviderId, actor = null, extra = {}) {
   const delivery = await deliveriesService.getDelivery(deliveryId);
   assertAssignable(delivery);
+  // A forced reassignment goes through the same reason/admin validation as a
+  // first assignment — validate BEFORE releasing the outgoing provider.
+  const force = assertForceAssignment({
+    forceAssignment: extra.forceAssignment, reason: extra.reason,
+    actorId: actor && actor.id,
+  });
   // Batch-held orders must be reassigned from the batch, not here.
   const activeBatches = await batchesRepo.findActiveByDeliveryIds([String(deliveryId)]);
   if (activeBatches.length > 0) {
@@ -198,7 +292,15 @@ async function reassign(deliveryId, newProviderId, actor = null) {
 
   // Step 2 — hand it to the new provider through the same path every assignment
   // uses (eligibility, capacity reservation, `assigned` transition).
-  const assignment = await createAssignment({ deliveryId, providerId: newProviderId });
+  const assignment = await createAssignment({
+    deliveryId,
+    providerId: newProviderId,
+    forceAssignment: force ? true : undefined,
+    reason: force ? force.reason : undefined,
+    actorId: force ? force.adminId : (actor && actor.id) || undefined,
+    actorName: actor && actor.name,
+    actorRole: actor && actor.role,
+  });
   return assignment;
 }
 
@@ -217,4 +319,4 @@ async function getAssignments(filter = {}, options = {}) {
   };
 }
 
-module.exports = { createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign, getAssignments };
+module.exports = { createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign, getAssignments, expireStaleOffers };

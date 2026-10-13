@@ -22,6 +22,7 @@ const {
   computeShopRatings,
 } = require('../../selling/repositories/shops.public.repository');
 const sellerAppRepo = require('../../selling/repositories/sellerApplications.repository');
+const sellerApplicationsService = require('../../selling/services/sellerApplications.service');
 const orderRepo = require('../../fulfillment/repositories/orders.repository');
 const productRepo = require('../../catalog/repositories/products.repository');
 const sectorRepo = require('../../selling/repositories/sectors.repository');
@@ -30,7 +31,13 @@ const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { identityClient } = require('../../../app/clients/identity.client');
 const { sendAudit } = require('../../../shared/utils/audit-client');
 const hierarchyScope = require('../../../shared/utils/hierarchyScope');
+const { isValidObjectId } = require('../../../shared/utils/mongoId');
 const lifecycle = require('../lifecycle/orderLifecycle');
+const {
+  ORDER_STATUS_VALUES,
+  PAYMENT_STATUS_VALUES,
+  normalizeStatus,
+} = require('../../fulfillment/constants/orderStatuses');
 
 // --- Shared helpers --------------------------------------------------------
 
@@ -46,6 +53,21 @@ const TERMINAL_ORDER_STATUSES = ['Delivered', 'Cancelled', 'Refund Success', 'Re
  */
 const STAGE_SCAN_LIMIT = 5000;
 const STAGE_SCAN_BATCH = 500;
+
+/**
+ * Sum per-status counters, treating a missing counter as "not reported" rather
+ * than as zero: a stage whose backing statuses are absent must surface as null
+ * (unknown) instead of an authoritative 0.
+ */
+function sumStatuses(countFor, statuses) {
+  let total = 0;
+  for (const status of statuses) {
+    const value = countFor(status);
+    if (value === null) return null;
+    total += value;
+  }
+  return total;
+}
 
 function toCountMap(rows) {
   const out = {};
@@ -597,6 +619,7 @@ class AdminPlatformService {
     const shops = await shopRepo.findAll(
       {
         $or: [
+          { businessId: String(applicationId) },
           { applicationId: String(applicationId) },
           ...(application.ownerId ? [{ ownerId: String(application.ownerId) }] : []),
         ],
@@ -691,6 +714,81 @@ class AdminPlatformService {
     }
   }
 
+  /**
+   * Expand an admin's free-text term into the PEOPLE and BUSINESSES it names.
+   *
+   * A shop is searched by what a human actually remembers — the owner's name,
+   * phone or email, or the business name — and none of those live on the shop
+   * document. They are resolved first and folded back into the query as ids, so
+   * the search still ends in ONE shop query. A degraded Identity or business
+   * lookup contributes nothing rather than failing the list: the shop's own
+   * name / email / address / phone keep matching on their own.
+   *
+   * @returns {Promise<{ ownerIds: string[], applicationIds: string[] }>}
+   */
+  async expandOwnerSearch(search) {
+    const term = String(search || '').trim();
+    if (!term) return { ownerIds: [], applicationIds: [] };
+    const rx = { $regex: escapeRegex(term), $options: 'i' };
+    const [identityResult, applications] = await Promise.all([
+      identityClient.searchUsers(term, 50),
+      sellerAppRepo
+        .findAll(
+          { $or: [{ 'businessInformation.businessName': rx }, { 'shopInformation.shopName': rx }] },
+          { limit: 100 }
+        )
+        .catch(() => []),
+    ]);
+    const ownerIds = identityClient
+      .displayUsers(identityResult)
+      .map((user) => String(user.id || user._id || ''))
+      .filter(Boolean);
+    const applicationIds = (applications || [])
+      .map((app) => String(app._id || app.id || ''))
+      .filter(Boolean);
+    return { ownerIds, applicationIds };
+  }
+
+  /**
+   * One batch pass that turns a page of foreign keys into display fields.
+   *
+   * Every admin row must show the human and the business behind it, never a
+   * uuid. Identity and the seller-application store are each asked ONCE for the
+   * whole page, and any outage degrades to blank names instead of a failed list.
+   *
+   * @returns {Promise<{ owners: Map<string, object>, businesses: Map<string, object> }>}
+   */
+  async hydrateOwnership(ownerIds = [], applicationIds = []) {
+    const owners = new Map();
+    const businesses = new Map();
+    const uniqueOwners = [...new Set(ownerIds.filter(Boolean).map(String))];
+    const uniqueApplications = [...new Set(applicationIds.filter(Boolean).map(String))];
+
+    const [identityResult, applications] = await Promise.all([
+      uniqueOwners.length ? identityClient.findUsersByIds(uniqueOwners) : Promise.resolve(null),
+      uniqueApplications.length
+        ? sellerAppRepo
+            .findAll({ _id: { $in: uniqueApplications } }, { limit: uniqueApplications.length })
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    for (const user of identityClient.displayUsers(identityResult)) {
+      const id = String(user.id || user._id || '');
+      if (id) owners.set(id, user);
+    }
+    for (const app of applications || []) {
+      const id = String(app._id || app.id || '');
+      if (!id) continue;
+      businesses.set(id, {
+        id,
+        name: (app.businessInformation && app.businessInformation.businessName) || app.name || null,
+        status: app.status || null,
+      });
+    }
+    return { owners, businesses };
+  }
+
   async getShops(filters = {}) {
     const { status, search, page, limit } = filters;
     const { page: safePage, limit: safeLimit, skip } = paginate(page, limit);
@@ -713,11 +811,25 @@ class AdminPlatformService {
     const conditions = [];
     if (Object.keys(scope.shopFilter).length) conditions.push(scope.shopFilter);
 
+    // Several sellers at once (the Sellers tab asks for exactly its page's
+    // owners). One `ownerId` filter is the single-seller spelling of the same
+    // thing and stays handled by the hierarchy scope above.
+    const ownerIds = filters.ownerIds
+      ? String(filters.ownerIds)
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+    // An explicitly empty batch is "the seller nobody", not "every seller".
+    if (filters.ownerIds !== undefined && !ownerIds.length) return this.emptyShopPage(safePage, safeLimit);
+    if (ownerIds.length) conditions.push({ ownerId: { $in: ownerIds } });
+
     // A businessId scopes shops through the seller's application link or owner.
     if (filters.businessId) {
       const applicationIds = scope.applicationIds || [];
       const ownerIds = scope.ownerIds || [];
       const businessOr = [
+        ...(applicationIds.length ? [{ businessId: { $in: applicationIds } }] : []),
         ...(applicationIds.length ? [{ applicationId: { $in: applicationIds } }] : []),
         ...(ownerIds.length ? [{ ownerId: { $in: ownerIds } }] : []),
       ];
@@ -728,7 +840,19 @@ class AdminPlatformService {
     if (status) conditions.push({ status: String(status).toUpperCase() });
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
-      conditions.push({ $or: [{ name: rx }, { email: rx }, { address: rx }] });
+      // The shop's own fields, plus the owner and the business the term names —
+      // resolved to ids first so the search still costs ONE shop query.
+      const { ownerIds, applicationIds } = await this.expandOwnerSearch(search);
+      const ownerOr = [
+        { name: rx },
+        { email: rx },
+        { address: rx },
+        { phoneNumber: rx },
+        ...(ownerIds.length ? [{ ownerId: { $in: ownerIds } }] : []),
+        ...(applicationIds.length ? [{ businessId: { $in: applicationIds } }] : []),
+        ...(applicationIds.length ? [{ applicationId: { $in: applicationIds } }] : []),
+      ];
+      conditions.push({ $or: ownerOr });
     }
 
     const query = conditions.length > 1 ? { $and: conditions } : conditions[0] || {};
@@ -743,20 +867,39 @@ class AdminPlatformService {
 
     // Computed catalog stats (ratings/productCount) — same helpers the public
     // list uses, so the admin Rating column is never permanently empty.
-    const [productCounts, shopRatings] = await Promise.all([
+    //
+    // Ownership hydration runs in the SAME round: the console must show the
+    // owner's name and the business behind every shop, never a raw `ownerId`,
+    // and it must do it in one batch — not one Identity call per row.
+    const plains = rawShops.map((doc) => (doc.toObject ? doc.toObject() : doc));
+    const [productCounts, shopRatings, { owners, businesses }] = await Promise.all([
       computeProductCountsByShop().catch(() => new Map()),
       computeShopRatings().catch(() => new Map()),
+      this.hydrateOwnership(
+        plains.map((plain) => plain.ownerId),
+        plains.map((plain) => plain.businessId || plain.applicationId)
+      ),
     ]);
 
-    const shops = rawShops.map((doc) => {
-      const plain = doc.toObject ? doc.toObject() : doc;
+    const shops = plains.map((plain) => {
       const sid = String(plain._id);
-      return toAdminRow({
-        ...plain,
-        productCount: productCounts.get(sid) || plain.productCount,
-        ratings: shopRatings.get(sid)?.ratings ?? plain.ratings,
-        ratingCount: shopRatings.get(sid)?.ratingCount ?? plain.ratingCount,
-      });
+      const owner = owners.get(String(plain.ownerId || '')) || null;
+      const businessKey = plain.businessId || plain.applicationId;
+      const business = businessKey ? businesses.get(String(businessKey)) || null : null;
+      return {
+        ...toAdminRow({
+          ...plain,
+          productCount: productCounts.get(sid) || plain.productCount,
+          ratings: shopRatings.get(sid)?.ratings ?? plain.ratings,
+          ratingCount: shopRatings.get(sid)?.ratingCount ?? plain.ratingCount,
+        }),
+        // Display-only: the ids stay authoritative, these are what a human reads.
+        ownerName: owner ? owner.name || null : null,
+        ownerEmail: owner ? owner.email || null : null,
+        ownerPhoneNumber: owner ? owner.phoneNumber || null : null,
+        businessName: business ? business.name : null,
+        businessStatus: business ? business.status : null,
+      };
     });
 
     return {
@@ -783,6 +926,11 @@ class AdminPlatformService {
       id: String(order._id),
       buyerId: order.buyerId || null,
       customerRef: order.buyerId ? `#${String(order.buyerId).slice(-6)}` : null,
+      // Buyer snapshot the checkout recorded. Display-only projection: the name
+      // and email a human reads, never the whole embedded object.
+      user: order.user
+        ? { name: order.user.name || null, email: order.user.email || null }
+        : null,
       sellerId: order.sellerId || null,
       totalPrice: order.totalPrice,
       items: Array.isArray(order.cart) ? order.cart.length : 0,
@@ -798,10 +946,13 @@ class AdminPlatformService {
       destinationLocationId: delivery ? delivery.destinationLocationId : null,
       // Full destination snapshot (historical, immutable)
       destination: order.destination || null,
-      // Seller shipments with pickup locations
+      // Seller shipments with pickup locations. `businessId` MUST survive this
+      // mapping — `hydrateOrderRows` resolves the business from it, and the
+      // detail page prints the shop's business beside the shipment.
       sellerShipments: (order.sellerShipments || []).map(s => ({
         sellerId: s.sellerId,
         shopId: s.shopId,
+        businessId: s.businessId || null,
         origin: s.origin || null,
         subtotal: s.subtotal || 0,
         itemCount: Array.isArray(s.items) ? s.items.length : 0,
@@ -835,8 +986,122 @@ class AdminPlatformService {
   }
 
   /**
+   * Resolve an admin's orders search term into a Mongo clause.
+   *
+   * An order is found by what is on screen or in someone's head: its id, the
+   * buyer's name / email / phone, or the shop it came from. The buyer and shop
+   * names do not live on the order document (only `buyerId` / `sellerId` and the
+   * shipment ids do), so the term is resolved against Identity and the shop
+   * store first and folded in as ids — the order query itself stays ONE query.
+   *
+   * @returns {Promise<object | null>} `null` when there is nothing to search for.
+   */
+  async buildOrderSearch(search) {
+    const term = String(search || '').trim();
+    if (!term) return null;
+    const rx = new RegExp(escapeRegex(term), 'i');
+
+    const clauses = [{ 'user.name': rx }, { 'user.email': rx }];
+    // An admin pasting a full order id must land on exactly that order. Partial
+    // ids cannot be matched against an ObjectId column, so only a complete id is
+    // added here rather than a prefix scan over every order.
+    if (isValidObjectId(term)) clauses.push({ _id: term });
+
+    const [identityResult, shops] = await Promise.all([
+      identityClient.searchUsers(term, 50),
+      shopRepo
+        .findAll({ $or: [{ name: rx }, { email: rx }, { phoneNumber: rx }] }, { limit: 50 })
+        .catch(() => []),
+    ]);
+
+    const people = identityClient
+      .displayUsers(identityResult)
+      .map((user) => String(user.id || user._id || ''))
+      .filter(Boolean);
+    if (people.length) {
+      clauses.push({ buyerId: { $in: people } });
+      clauses.push({ sellerId: { $in: people } });
+    }
+
+    const shopRows = shops || [];
+    const shopIds = shopRows.map((shop) => String(shop._id || shop.id || '')).filter(Boolean);
+    const shopOwners = shopRows.map((shop) => String(shop.ownerId || '')).filter(Boolean);
+    if (shopIds.length) clauses.push({ 'sellerShipments.shopId': { $in: shopIds } });
+    if (shopOwners.length) clauses.push({ sellerId: { $in: shopOwners } });
+
+    return { $or: clauses };
+  }
+
+  /**
+   * Give a page of order rows the shop, business and people behind them.
+   *
+   * The console must never show a bare `sellerId` / `shopId`, and it must not
+   * fire one lookup per row either: the shop and business maps are built in one
+   * batch pass, the buyer comes from the snapshot already on the order, and any
+   * missing lookup simply leaves the display field blank instead of failing.
+   */
+  async hydrateOrderRows(rows = []) {
+    const shopIds = [];
+    const businessIds = [];
+    const ownerIds = [];
+    for (const row of rows) {
+      for (const shipment of row.sellerShipments || []) {
+        if (shipment.shopId) shopIds.push(shipment.shopId);
+        if (shipment.businessId) businessIds.push(shipment.businessId);
+      }
+      if (row.sellerId) ownerIds.push(row.sellerId);
+    }
+
+    const uniqueShops = [...new Set(shopIds.map(String))];
+    const [shopRows, { owners, businesses }] = await Promise.all([
+      uniqueShops.length
+        ? shopRepo.findAll({ _id: { $in: uniqueShops } }, { limit: uniqueShops.length }).catch(() => [])
+        : Promise.resolve([]),
+      this.hydrateOwnership(ownerIds, businessIds),
+    ]);
+
+    const shopsById = new Map();
+    for (const shop of shopRows || []) {
+      const id = String(shop._id || shop.id || '');
+      if (id) shopsById.set(id, shop);
+    }
+
+    return rows.map((row) => {
+      const shipment = (row.sellerShipments || [])[0] || null;
+      const shop = shipment && shipment.shopId ? shopsById.get(String(shipment.shopId)) || null : null;
+      const businessId = (shipment && shipment.businessId) || (shop && shop.businessId) || null;
+      const business = businessId ? businesses.get(String(businessId)) || null : null;
+      const owner = row.sellerId ? owners.get(String(row.sellerId)) || null : null;
+      // Per-shipment display fields: a route with several shops lists every one.
+      const sellerShipments = (row.sellerShipments || []).map((s) => {
+        const sShop = s && s.shopId ? shopsById.get(String(s.shopId)) || null : null;
+        const sBizId = (s && s.businessId) || (sShop && sShop.businessId) || null;
+        const sBiz = sBizId ? businesses.get(String(sBizId)) || null : null;
+        return {
+          ...s,
+          shopName: sShop ? sShop.name : null,
+          businessId: sBizId,
+          businessName: sBiz ? sBiz.name || null : null,
+        };
+      });
+      return {
+        ...row,
+        sellerShipments,
+        shopId: (shipment && shipment.shopId) || (shop ? String(shop._id) : null),
+        shopName: shop ? shop.name : null,
+        businessId,
+        businessName: business ? business.name : null,
+        sellerName: owner ? owner.name || null : null,
+        sellerEmail: owner ? owner.email || null : null,
+        buyerName: (row.user && row.user.name) || null,
+        buyerEmail: (row.user && row.user.email) || null,
+      };
+    });
+  }
+
+  /**
    * Paginated orders with combinable filters: hierarchy / seller / status /
-   * paymentStatus / stage / date range.
+   * paymentStatus / stage / date range / free-text search.
    *
    * The stage cannot be a database filter, so the response always states which
    * mode produced its numbers:
@@ -850,18 +1115,50 @@ class AdminPlatformService {
    *     its cap, so the numbers may be incomplete — stated, never silent.
    */
   async getOrders(filters = {}) {
-    const { sellerId, status, paymentStatus, stage, from, to, page, limit } = filters;
+    const { sellerId, status, paymentStatus, stage, from, to, search, page, limit } = filters;
     const { page: safePage, limit: safeLimit, skip } = paginate(page, limit);
 
     const query = {};
-    if (status) query.status = status;
-    if (paymentStatus) query.paymentStatus = String(paymentStatus).toUpperCase();
+    // Normalize before filtering, exactly like the analytics endpoint does.
+    // A raw pass-through meant `?status=Delivered` missed every legacy
+    // `DELIVERED` row, so the console's own order list and its status chart
+    // could disagree about how many delivered orders exist.
+    if (status) {
+      const requested = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+      const normalized = requested.map((s) => normalizeStatus(s));
+      const unknown = normalized.filter((s) => !ORDER_STATUS_VALUES.includes(s));
+      if (unknown.length > 0) {
+        throw Object.assign(
+          new Error(`Unknown order status: ${unknown.join(', ')}`),
+          { status: 400, code: 'UNKNOWN_STATUS', allowed: ORDER_STATUS_VALUES }
+        );
+      }
+      query.status = normalized.length === 1 ? normalized[0] : { $in: normalized };
+    }
+    if (paymentStatus) {
+      const requestedPayment = String(paymentStatus).toUpperCase();
+      if (!PAYMENT_STATUS_VALUES.includes(requestedPayment)) {
+        throw Object.assign(
+          new Error(`Unknown payment status: ${requestedPayment}`),
+          { status: 400, code: 'UNKNOWN_PAYMENT_STATUS', allowed: PAYMENT_STATUS_VALUES }
+        );
+      }
+      query.paymentStatus = requestedPayment;
+    }
     if (sellerId) query.sellerId = String(sellerId);
     if (from || to) {
       query.createdAt = {};
       if (from) query.createdAt.$gte = new Date(from);
       if (to) query.createdAt.$lte = new Date(to);
     }
+
+    // A shop / business selection narrows the shipment itself. Resolving it
+    // through the owning SELLER (which is what the hierarchy scope does) would
+    // return every order that seller ever placed, not just this shop's — so the
+    // precise predicate is applied on top of the owner scope, never instead of it.
+    if (filters.shopId) query['sellerShipments.shopId'] = String(filters.shopId);
+    if (filters.businessId) query['sellerShipments.businessId'] = String(filters.businessId);
+
 
     // Resolve every hierarchy filter spelling through the shops that own the
     // sellers. Region/city/area selections are expanded to their descendant
@@ -878,6 +1175,12 @@ class AdminPlatformService {
       scopeApplied: scope.scoped,
       stageDefinitions: this.stageDefinitions(),
     };
+
+    // Free-text search: the term is resolved against the order's own snapshots
+    // AND against the people and shops it names, then ANDed with every other
+    // filter — so a search can never widen a scoped list.
+    const searchFilter = await this.buildOrderSearch(search);
+    if (searchFilter) Object.assign(query, searchFilter);
 
     if (scope.scoped) {
       if (!scope.ownerIds.length) return emptyResult;
@@ -907,7 +1210,7 @@ class AdminPlatformService {
       const total = matched.length;
 
       return {
-        orders: matched.slice(skip, skip + safeLimit),
+        orders: await this.hydrateOrderRows(matched.slice(skip, skip + safeLimit)),
         total,
         page: safePage,
         limit: safeLimit,
@@ -927,7 +1230,9 @@ class AdminPlatformService {
     ]);
 
     const deliveries = await this.resolveDeliveries(orders.map((order) => String(order._id)));
-    const rows = orders.map((order) => this.toOrderRow(order, deliveries[String(order._id)] || null));
+    const rows = await this.hydrateOrderRows(
+      orders.map((order) => this.toOrderRow(order, deliveries[String(order._id)] || null))
+    );
 
     // One aggregation covers every matching order, so the counters are not
     // limited to the current page. They are status-derived, which the scope
@@ -1015,6 +1320,38 @@ class AdminPlatformService {
       },
     ].filter((entry) => entry.timestamp);
 
+    // Ownership context for the detail page: which shop / business / seller this
+    // order belongs to, and who the buyer is — as NAMES, in one batch pass, so
+    // the console never has to print a raw id to identify an order.
+    const shipments = Array.isArray(order.sellerShipments) ? order.sellerShipments : [];
+    const shipmentShopIds = [...new Set(shipments.map((s) => s && s.shopId).filter(Boolean).map(String))];
+    const shipmentBusinessIds = [...new Set(shipments.map((s) => s && s.businessId).filter(Boolean).map(String))];
+    const [shopRows, { owners, businesses }] = await Promise.all([
+      shipmentShopIds.length
+        ? shopRepo.findAll({ _id: { $in: shipmentShopIds } }, { limit: shipmentShopIds.length }).catch(() => [])
+        : Promise.resolve([]),
+      this.hydrateOwnership([order.sellerId], shipmentBusinessIds),
+    ]);
+    const shopsById = new Map();
+    for (const shop of shopRows || []) {
+      const id = String(shop._id || shop.id || '');
+      if (id) shopsById.set(id, shop);
+    }
+    const lookupShopName = (id) => (id && shopsById.get(String(id)) ? shopsById.get(String(id)).name : null);
+    const lookupBusinessName = (id) => (id && businesses.get(String(id)) ? businesses.get(String(id)).name : null);
+
+    const primaryShopId = shipments[0] && shipments[0].shopId ? String(shipments[0].shopId) : null;
+    const primaryBusinessId =
+      (shipments[0] && shipments[0].businessId) ||
+      (primaryShopId && shopsById.get(primaryShopId) ? shopsById.get(primaryShopId).businessId : null) ||
+      null;
+    const seller = order.sellerId ? owners.get(String(order.sellerId)) || null : null;
+    const enrichedShipments = shipments.map((shipment) => ({
+      ...shipment,
+      shopName: lookupShopName(shipment && shipment.shopId),
+      businessName: lookupBusinessName(shipment && shipment.businessId),
+    }));
+
     return {
       order: {
         id: String(order._id),
@@ -1024,10 +1361,19 @@ class AdminPlatformService {
         items: Array.isArray(order.cart) ? order.cart : [],
         buyerId: order.buyerId || null,
         sellerId: order.sellerId || null,
+        // Names for the console: never identify an order by a bare uuid.
+        buyerName: (order.user && order.user.name) || null,
+        buyerEmail: (order.user && order.user.email) || null,
+        sellerName: seller ? seller.name || null : null,
+        sellerEmail: seller ? seller.email || null : null,
+        shopId: primaryShopId,
+        shopName: lookupShopName(primaryShopId),
+        businessId: primaryBusinessId,
+        businessName: lookupBusinessName(primaryBusinessId),
         // Full destination snapshot (historical)
         destination: order.destination || null,
         // Seller shipments with pickup origins
-        sellerShipments: order.sellerShipments || [],
+        sellerShipments: enrichedShipments,
         createdAt: order.createdAt,
       },
       stage: mapped.stage,
@@ -1064,65 +1410,35 @@ class AdminPlatformService {
   // Business approvals (backend authority + audit; never frontend-only)
   // -------------------------------------------------------------------------
 
-  /** Approve a seller application. Only PENDING_REVIEW is approvable. */
+  /**
+   * Approve a seller application. Only PENDING_REVIEW is approvable.
+   *
+   * DELEGATED to the canonical `sellerApplications.service.approve` so both
+   * admin surfaces (`/admin/businesses/:id/approve` and
+   * `/seller-application/:id/approve`) run the SAME code: Shop creation,
+   * shopId linking, status timeline, audit, and the Identity role grant. The
+   * historical duplicate implementation here approved the application WITHOUT
+   * creating a shop, which left two accounts approved differently depending on
+   * which endpoint an admin client called.
+   */
   async approveBusiness(applicationId, adminId, adminNotes, adminName = 'Admin') {
     const application = await sellerAppRepo.findById(applicationId);
     if (!application) throw Object.assign(new Error('Business not found'), { status: 404 });
-    if (application.status !== 'PENDING_REVIEW') {
-      throw Object.assign(
-        new Error(`Only applications in PENDING_REVIEW can be approved (current: ${application.status})`),
-        { status: 400 }
-      );
-    }
 
-    const approved = await sellerAppRepo.updateById(applicationId, {
-      status: 'APPROVED',
-      review: {
-        reviewedBy: adminId || null,
-        reviewedAt: new Date(),
-        rejectionReason: null,
-      },
-    });
-
-    // Seller eligibility lives in Identity — keep it in step (best effort: the
-    // Commerce decision is already committed and must not be rolled back by a
-    // transient identity outage). TWO things have to land there: the status
-    // (seller_status + membership) and the SELLER ROLE GRANT itself. Approving
-    // only the status left the account a plain buyer with an "approved" flag —
-    // the sibling path in sellerApplications.service does both, and this one
-    // must match it, otherwise the admin console's approval produces an account
-    // that cannot sell.
-    const identityRole = await safe(
-      'identity seller role grant',
-      identityClient.grantSellerRole(application.ownerId)
+    const { application: approved } = await sellerApplicationsService.approve(
+      String(applicationId),
+      adminId || adminName
     );
-    const identitySync = await safe(
-      'identity seller status',
-      identityClient.setSellerStatus(application.ownerId, 'APPROVED')
-    );
-
-    await this.logAuditAction({
-      action: 'SELLER_APPLICATION_APPROVED',
-      level: 'INFO',
-      adminId,
-      adminName,
-      targetEntity: 'seller_application',
-      targetId: String(applicationId),
-      previousValue: { status: application.status },
-      newValue: { status: 'APPROVED' },
-      reason: adminNotes || 'Approved by admin',
-      details: {
-        businessName: application.businessInformation ? application.businessInformation.businessName : null,
-        ownerId: application.ownerId,
-        identitySynced: identitySync.ok,
-        identityRoleGranted: identityRole.ok,
-      },
-    });
 
     return this.toBusinessDto(approved);
   }
 
-  /** Reject a seller application. A reason is mandatory. */
+  /**
+   * Reject a seller application. A reason is mandatory.
+   *
+   * DELEGATED to `sellerApplications.service.reject` for the same reason as
+   * `approveBusiness` — one implementation of the review decision.
+   */
   async rejectBusiness(applicationId, adminId, rejectionReason, adminName = 'Admin') {
     if (!rejectionReason) {
       throw Object.assign(new Error('A rejection reason is required'), { status: 400 });
@@ -1130,43 +1446,12 @@ class AdminPlatformService {
 
     const application = await sellerAppRepo.findById(applicationId);
     if (!application) throw Object.assign(new Error('Business not found'), { status: 404 });
-    if (application.status !== 'PENDING_REVIEW') {
-      throw Object.assign(
-        new Error(`Only applications in PENDING_REVIEW can be rejected (current: ${application.status})`),
-        { status: 400 }
-      );
-    }
 
-    const rejected = await sellerAppRepo.updateById(applicationId, {
-      status: 'REJECTED',
-      review: {
-        reviewedBy: adminId || null,
-        reviewedAt: new Date(),
-        rejectionReason,
-      },
-    });
-
-    const identitySync = await safe(
-      'identity seller status',
-      identityClient.setSellerStatus(application.ownerId, 'REJECTED')
+    const rejected = await sellerApplicationsService.reject(
+      String(applicationId),
+      adminId || adminName,
+      rejectionReason
     );
-
-    await this.logAuditAction({
-      action: 'SELLER_APPLICATION_REJECTED',
-      level: 'WARNING',
-      adminId,
-      adminName,
-      targetEntity: 'seller_application',
-      targetId: String(applicationId),
-      previousValue: { status: application.status },
-      newValue: { status: 'REJECTED' },
-      reason: rejectionReason,
-      details: {
-        businessName: application.businessInformation ? application.businessInformation.businessName : null,
-        ownerId: application.ownerId,
-        identitySynced: identitySync.ok,
-      },
-    });
 
     return this.toBusinessDto(rejected);
   }
@@ -1404,12 +1689,37 @@ const bucketDateOf = (key) => new Date(key.length === 7 ? `${key}-01` : key);
     // Physical movement is owned by Delivery: when its counters are available
     // they replace the order-level approximation for those stages.
     if (delivery) {
-      counts.ready_for_pickup = delivery.byStatus.pending || 0;
-      counts.pickup_assigned = (delivery.byStatus.assigned || 0) + (delivery.byStatus.reassigned || 0);
-      counts.picked_up = delivery.byStatus.pickup || 0;
-      counts.in_transit = delivery.byStatus.in_transit || 0;
-      counts.exception = (counts.exception || 0) + (delivery.byStatus.failed || 0);
-      counts.cancelled = (counts.cancelled || 0) + (delivery.byStatus.cancelled || 0);
+      // Physical movement is owned by Delivery: when its counters are available
+      // they replace the order-level approximation for those stages.
+      //
+      // Read defensively, not blindly. `byStatus` is keyed by the delivery
+      // service's canonical lifecycle, and a key read as `|| 0` is
+      // indistinguishable from a genuinely empty bucket — which is how a stage
+      // backed by a status this service had forgotten about silently reported 0.
+      const byStatus = delivery.byStatus || {};
+      const deliveryCount = (status) => {
+        const value = byStatus[status];
+        return Number.isFinite(value) ? value : null;
+      };
+      // `ready_for_pickup` is the delivery's READY POOL, which may be widened
+      // beyond a single status (the ready pool and the in-progress group are the
+      // delivery service's canonical groupings).
+      const readyPool = delivery.activeReadyPool ?? null;
+      const stageCountsFromDelivery = {
+        ready_for_pickup: readyPool ?? deliveryCount('pending'),
+        pickup_assigned: sumStatuses(deliveryCount, ['assigned', 'reassigned']),
+        picked_up: deliveryCount('pickup'),
+        in_transit: deliveryCount('in_transit'),
+        exception: deliveryCount('failed'),
+        cancelled: deliveryCount('cancelled'),
+      };
+      for (const [stage, count] of Object.entries(stageCountsFromDelivery)) {
+        // A stage the delivery service cannot evidence stays null, never 0.
+        if (count === null) continue;
+        counts[stage] = stage === 'exception' || stage === 'cancelled'
+          ? (counts[stage] || 0) + count
+          : count;
+      }
     }
 
     const stages = lifecycle.OPERATIONAL_STAGES.map((stage) => ({
@@ -1426,7 +1736,15 @@ const bucketDateOf = (key) => new Date(key.length === 7 ? `${key}-01` : key);
       total: known,
       deliveryAvailable: Boolean(delivery),
       delivery: delivery
-        ? { byStatus: delivery.byStatus, active: delivery.active, failed: delivery.failed, actors: delivery.actors }
+        ? {
+          byStatus: delivery.byStatus || {},
+          active: delivery.active,
+          failed: delivery.failed,
+          // The delivery service reports `providers`, not `actors`: reading a
+          // key it never returns produced an always-undefined field that looked
+          // like a real (and permanently zero) statistic.
+          providers: delivery.providers,
+        }
         : null,
       unsupportedStages: lifecycle.UNSUPPORTED_STAGES,
       generatedAt: new Date().toISOString(),

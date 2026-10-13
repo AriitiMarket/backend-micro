@@ -21,36 +21,24 @@ const moduleConstants = require('../constants');
 // Timestamp stamped on the delivery for each target status (single source for
 // milestone history — the timeline is built from these, never guessed).
 const STATUS_TIMESTAMP_FIELDS = {
-  validated: 'validatedAt',
-  ready_for_pickup: 'readyForPickupAt',
   assigned: 'assignedAt',
   reassigned: 'reassignedAt',
   pickup: 'pickedUpAt',
   in_transit: 'inTransitAt',
-  arrived_at_hub: 'arrivedAtHubAt',
-  out_for_delivery: 'outForDeliveryAt',
   delivered: 'deliveredAt',
   failed: 'failedAt',
   cancelled: 'cancelledAt',
-  return_requested: 'returnRequestedAt',
-  returned: 'returnedAt',
 };
 
 const STATUS_LABELS = {
   pending: 'Requested',
-  validated: 'Validated',
-  ready_for_pickup: 'Ready for Pickup',
   assigned: 'Assigned',
   reassigned: 'Reassigned',
   pickup: 'Picked Up',
   in_transit: 'In Transit',
-  arrived_at_hub: 'Arrived at Hub',
-  out_for_delivery: 'Out for Delivery',
   delivered: 'Delivered',
   failed: 'Failed',
   cancelled: 'Cancelled',
-  return_requested: 'Return Requested',
-  returned: 'Returned',
 };
 
 /** Normalize a status coming from the API; throws on unknown values. */
@@ -92,14 +80,15 @@ function isBlocked(status) { return BLOCKED_DELIVERY_STATUSES.includes(status); 
 function isTerminal(status) { return TERMINAL_DELIVERY_STATUSES.includes(status); }
 
 /**
- * Cancellation boundary. Refuses to cancel once the delivery is dispatched to
- * the last mile unless an explicit administrative override is presented, and
- * never allows cancelling something already delivered (returns exist for that).
+ * Cancellation boundary. Refuses to cancel a delivery that already completed —
+ * once it reached the customer the only honest outcomes are `delivered` or
+ * `failed`, and reopening a finished delivery would let an operator erase the
+ * proof-of-delivery trail.
  */
 function assertCancellable(status, override = false) {
-  if (status === 'delivered' || status === 'returned' || status === 'return_requested') {
+  if (status === 'delivered') {
     throw conflict(
-      `A ${STATUS_LABELS[status] || status} delivery cannot be cancelled — use the return flow instead`,
+      'A delivered delivery cannot be cancelled',
       'CANCEL_NOT_ALLOWED',
     );
   }
@@ -200,7 +189,7 @@ function assertRetryable(status, retryCount = 0) {
 
 /** A delivery can only complete from an in-flight state, never from a dead one. */
 function assertDeliverable(status) {
-  if (['cancelled', 'returned', 'return_requested', 'failed'].includes(status)) {
+  if (['cancelled', 'failed'].includes(status)) {
     throw conflict(
       `Delivery is ${STATUS_LABELS[status] || status} and cannot be completed`,
       'ALREADY_COMPLETED',
@@ -210,6 +199,13 @@ function assertDeliverable(status) {
 }
 
 /** Lifecycle event name for a transition (overridable by the caller). */
+/** Operational flag only — "late" is NEVER a delivery status. */
+function isLate(delivery, now = new Date()) {
+  if (!delivery || !delivery.estimatedDeliveryAt) return false;
+  if (isBlocked(delivery.status) || isTerminal(delivery.status)) return false;
+  return new Date(now) > new Date(delivery.estimatedDeliveryAt);
+}
+
 function eventFor(toStatus, ctx) {
   if (ctx && ctx.event) return ctx.event;
   return DELIVERY_EVENTS[toStatus] || 'delivery.status_changed';
@@ -250,6 +246,7 @@ module.exports = {
   assertProofSatisfied,
   assertRetryable,
   assertDeliverable,
+  isLate,
   eventFor,
   timestampFieldFor,
   labelFor,

@@ -21,9 +21,21 @@ const DELIVERY_TO_ORDER_STATUS = {
   delivered: ORDER_STATUSES.DELIVERED,
 };
 
-/** The delivery state machine's own vocabulary (delivery-service constants). */
+/**
+ * The delivery state machine's own vocabulary, accepted from the delivery
+ * service's webhook.
+ *
+ * This is the CONTRACT list, not the delivery service's full enum: it is
+ * duplicated here because the two are separate services, and it is what decides
+ * whether an inbound event is understood or rejected with a 400. It is written
+ * out in full (rather than delegating to DELIVERY_TO_ORDER_STATUS keys) because a
+ * delivery status that advances no order is still a status the webhook must
+ * accept rather than 400 on.
+ *
+ * Kept byte-identical to `delivery-service/src/shared/constants` `DELIVERY_STATUSES`.
+ */
 const DELIVERY_STATUSES = [
-  'pending', 'assigned', 'pickup', 'in_transit', 'delivered', 'failed', 'cancelled', 'reassigned',
+  'pending', 'assigned', 'reassigned', 'pickup', 'in_transit', 'delivered', 'failed', 'cancelled',
 ];
 
 /**

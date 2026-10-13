@@ -1,4 +1,9 @@
 const mongoose = require('mongoose');
+const {
+  ORDER_STATUSES,
+  ORDER_STATUS_VALUES,
+  PAYMENT_STATUS_VALUES,
+} = require('../constants/orderStatuses');
 
 // Sub-schema for a single seller's shipment within an order.
 // Every seller/shop represented in the order gets its own snapshot.
@@ -52,8 +57,13 @@ const orderSchema = new mongoose.Schema({
   shippingFee: { type: Number, default: 0 },
   currency: { type: String, default: 'ETB' },
   totalPrice: { type: Number, required: true },
-  status: { type: String, default: 'Processing' },
-  paymentStatus: { type: String, enum: ['PENDING', 'SETTLING', 'CONFIRMED', 'FAILED', 'REFUNDED'], default: 'PENDING' },
+  // The canonical order lifecycle (modules/fulfillment/constants/orderStatuses).
+  // This was a bare String, so any `.save()` could persist a status the state
+  // machine knows nothing about — and every read then had to guess. Legacy
+  // uppercase spellings are rewritten onto the canonical values by the boot
+  // migration in src/app/config/database.js, so the enum can be strict.
+  status: { type: String, enum: ORDER_STATUS_VALUES, default: ORDER_STATUSES.PROCESSING },
+  paymentStatus: { type: String, enum: PAYMENT_STATUS_VALUES, default: 'PENDING' },
   paymentSettlementStartedAt: { type: Date, default: null },
   paymentInfo: { id: { type: String }, status: { type: String }, type: { type: String }, method: { type: String, default: 'COD' } },
   reservation: { type: Object, default: {} },

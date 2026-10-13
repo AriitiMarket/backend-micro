@@ -41,6 +41,15 @@ async function connectWithRetry() {
       dbReady = true;
       loadApp();
       console.log('[identity] database connected after ' + attempts + ' attempt(s)');
+      // Start the abandoned-onboarding sweep only once the schema is known to be
+      // up. Loaded lazily so a transient require error can never abort startup —
+      // the job is an optimization, not something the API depends on.
+      try {
+        const { startOnboardingCleanup } = require('./jobs/onboardingCleanup');
+        startOnboardingCleanup();
+      } catch (err) {
+        console.error('[identity] failed to start onboarding cleanup job:', err.message);
+      }
       return;
     } catch (err) {
       sinceNotice += 1;

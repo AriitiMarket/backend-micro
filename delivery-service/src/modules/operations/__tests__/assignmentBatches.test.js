@@ -140,7 +140,7 @@ function reset() {
 function seedDelivery(orderId, sellerId, status = 'pending', zoneId = 'zone1') {
   const d = {
     _id: oid(), orderId, sellerId, status,
-    destination: { zoneId, sectorId: 'sector1' },
+    destination: { zoneId },
     origin: { shopName: `Shop ${sellerId}` },
   };
   store.deliveries.set(String(d._id), d);

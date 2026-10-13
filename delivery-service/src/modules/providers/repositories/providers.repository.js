@@ -62,7 +62,7 @@ async function incrementCompletedDeliveries(id) {
 }
 
 async function findByZone(zoneId) { return Provider.find({ $or: [{ zoneId }, { zoneIds: zoneId }] }).sort({ name: 1 }); }
-async function findByHub(hubId) { return Provider.find({ hubId }).sort({ name: 1 }); }
+async function findByPort(portId) { return Provider.find({ portId }).sort({ name: 1 }); }
 // Used only to withdraw an application that is still `pending` (an applicant
 // discarding their own un-reviewed record). Live providers are never deleted.
 async function remove(id) { return Provider.findByIdAndDelete(id); }
@@ -70,5 +70,5 @@ async function remove(id) { return Provider.findByIdAndDelete(id); }
 module.exports = {
   findById, findByIdentityUserId, create, updateFields, findAll, count,
   findAvailable, findAvailableForAssignment, incrementWorkload,
-  decrementWorkload, incrementCompletedDeliveries, findByZone, findByHub, remove,
+  decrementWorkload, incrementCompletedDeliveries, findByZone, findByPort, remove,
 };

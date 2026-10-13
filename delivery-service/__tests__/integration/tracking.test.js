@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 
 const { createHarness } = require('./helpers');
 const { seedGeography, createProvider, createDelivery } = require('./fixtures');
+const { DELIVERY_STATUSES } = require('../../src/shared/constants');
 
 const harness = createHarness('tracking');
 const { request, actors, models } = harness;
@@ -48,7 +49,7 @@ async function seededProvider(overrides = {}) {
     identityUserId: `user-track-${providerSeq}`,
     zoneId: geo.zone._id,
     zoneIds: [geo.zone._id],
-    sectorId: geo.sector._id,
+    portId: geo.port._id,
     serviceId: geo.service._id,
     ...overrides,
   });
@@ -174,9 +175,10 @@ it('every lifecycle status can be stored in tracking history', async () => {
   const order = await assignedOrder(provider, 'TRACK-STATUS');
   const rider = providerActor(provider);
 
-  // These are the statuses the history enum used to reject, which silently
-  // dropped the event from the delivery timeline.
-  for (const status of ['ready_for_pickup', 'arrived_at_hub', 'out_for_delivery']) {
+  // Derived from the canonical lifecycle: the history enum used to be a
+  // hand-copied subset, so any status outside it was rejected by mongoose and
+  // the event was silently dropped from the delivery timeline.
+  for (const status of DELIVERY_STATUSES) {
     const res = await request('/delivery/tracking', {
       method: 'POST', as: rider, body: { deliveryId: String(order._id), status },
     });

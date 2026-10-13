@@ -60,6 +60,14 @@ async function start() {
   };
   setTimeout(drainDeliveryOutbox, 2000);
   setInterval(drainDeliveryOutbox, 2000).unref();
+  // Sweep expired provider offers so they no longer hold a delivery hostage.
+  if (process.env.NODE_ENV !== 'test') {
+    const assignmentsService = require('./modules/operations/services/assignments.service');
+    setInterval(() => {
+      assignmentsService.expireStaleOffers().catch((e) => console.warn('[assignments] expiry sweep:', e.message));
+    }, 60 * 1000).unref();
+  }
+
   const server = app.listen(env.port, () => {
     console.log(`[delivery] Listening on http://localhost:${env.port}`);
   });

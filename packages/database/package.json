@@ -1,0 +1,26 @@
+{
+  "name": "@aritii/database",
+  "version": "1.0.0",
+  "description": "Database configuration and utilities for Aritii microservices",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./mongodb": "./src/mongodb.js",
+    "./transactions": "./src/transactions.js",
+    "./pool": "./src/pool.js"
+  },
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": [
+    "aritii",
+    "database",
+    "mongodb",
+    "pooling"
+  ],
+  "author": "Aritii",
+  "license": "MIT"
+}

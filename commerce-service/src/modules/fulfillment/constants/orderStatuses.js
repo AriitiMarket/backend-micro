@@ -88,8 +88,29 @@ function normalizeStatus(status) {
   return CANONICAL_VALUES.includes(titleCased) ? titleCased : raw;
 }
 
+// Payment settlement is a SEPARATE lifecycle from the order lifecycle, and it
+// has one state the order vocabulary has no room for: `SETTLING`, written while
+// a COD collection is being confirmed. It is listed here (rather than inline in
+// the model and again in the admin console) because a filter that omits it
+// makes those orders unfindable, and an unstyled badge makes them invisible.
+const PAYMENT_STATUSES = {
+  PENDING: 'PENDING',
+  SETTLING: 'SETTLING',
+  CONFIRMED: 'CONFIRMED',
+  FAILED: 'FAILED',
+  REFUNDED: 'REFUNDED',
+};
+
+const PAYMENT_STATUS_VALUES = Object.values(PAYMENT_STATUSES);
+
 module.exports = {
   ORDER_STATUSES,
+  // The canonical values as a plain array — for the Mongoose enum, for
+  // validation messages, and for any consumer that has to enumerate the
+  // lifecycle without re-deriving it from the keyed object.
+  ORDER_STATUS_VALUES: CANONICAL_VALUES,
+  PAYMENT_STATUSES,
+  PAYMENT_STATUS_VALUES,
   ALLOWED_TRANSITIONS,
   STATUS_ALIASES,
   normalizeStatus,
