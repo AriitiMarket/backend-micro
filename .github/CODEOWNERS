@@ -2,28 +2,28 @@
 # GitHub automatically requests reviews from these owners when files change.
 
 # Global owner — reviews all changes, especially shared config
-*                                           @backend-lead
+*                                           @yihune1234
 
 # Identity Service — auth, users, roles, sellers/providers (internal)
-identity-service/                           @identity-lead @backend-lead
+identity-service/                           @yihune1234
 
 # Commerce Service — shops, catalog, carts, orders, payments
-commerce-service/                           @commerce-lead @backend-lead
+commerce-service/                           @yihune1234
 
 # Delivery Service — geography, providers, deliveries, assignments, tracking
-delivery-service/                           @delivery-lead @backend-lead
+delivery-service/                           @yihune1234
 
 # API Gateway — routing, auth edge, shared packages, docker-compose
-api-gateway/                                @gateway-owner @backend-lead
-packages/                                   @backend-lead
+api-gateway/                                @yihune1234
+packages/                                   @yihune1234
 
 # Shared repository configuration
-docker-compose.yml                          @backend-lead
-.env.example                                @backend-lead
-Makefile                                    @backend-lead
+docker-compose.yml                          @yihune1234
+.env.example                                @yihune1234
+Makefile                                    @yihune1234
 
 # Architecture guard — prevents regressions in service boundaries
-tests/architecture.test.js                  @backend-lead
+tests/architecture.test.js                  @yihune1234
 
 # Documentation
-docs/                                       @backend-lead
+docs/                                       @yihune1234
