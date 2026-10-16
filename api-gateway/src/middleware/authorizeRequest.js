@@ -38,7 +38,7 @@ const { checkJurisdiction } = require('./jurisdiction');
  * session is not broken mid-deploy, but a token that HAS the claim is always
  * enforced. Flip to false once one access-token lifetime has passed.
  */
-const ALLOW_LEGACY_ADMIN_TOKENS = true;
+const ALLOW_LEGACY_ADMIN_TOKENS = false;
 
 /**
  * Route prefix -> required permission keys.
@@ -180,9 +180,30 @@ function isAdminToken(payload) {
 const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
 /**
+ * Read-only reference data that the marketplace selector needs from anonymous
+ * guests too: the location tree and the zones covering a location. These are
+ * public facts (no operational configuration), so guests may read them without
+ * a token — matching how public product/shop reads already work. Writes stay
+ * fully gated.
+ */
+const PUBLIC_READ_PREFIXES = [
+  '/delivery/zone/public',
+  '/delivery/zone/location/',
+  '/delivery/location/',
+];
+
+/** Is this a public read of reference data (no auth required)? */
+function isPublicRead(method, path) {
+  return READ_METHODS.includes(String(method || '').toUpperCase())
+    && PUBLIC_READ_PREFIXES.some((prefix) => path === prefix || path.indexOf(prefix) === 0);
+}
+
+/**
  * The permission a request needs, or null when the path is not privilege-gated.
  */
 function requiredPermission(method, path) {
+  // Public reference data: readable by anyone (guests included).
+  if (isPublicRead(method, path)) return null;
   const verb = String(method || '').toUpperCase();
   const rule = ROUTE_PERMISSIONS.find((entry) => matches(path, entry.prefix)
     && (!entry.methods || entry.methods.includes(verb)));

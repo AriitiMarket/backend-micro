@@ -22,6 +22,7 @@ const subscriptionsRoutes = require('../modules/selling/routes/subscriptions.rou
 const sectorsRoutes = require('../modules/selling/routes/sectors.routes');
 const sellerApplicationsRoutes = require('../modules/selling/routes/sellerApplications.routes');
 const deliveryWebhookRoutes = require('../modules/fulfillment/routes/deliveryWebhook.routes');
+const paymentWebhookRoutes = require('../modules/fulfillment/routes/paymentWebhook.routes');
 const analyticsRoutes = require('../modules/platform/routes/analytics.routes');
 const settingsRoutes = require('../modules/platform/routes/settings.routes');
 const disputesRoutes = require('../modules/fulfillment/routes/disputes.routes');
@@ -128,6 +129,7 @@ app.use('/seller-application', sellerApplicationsRoutes);
 // credential (`/internal/*`), which the gateway enforces at the edge and this
 // service re-checks in gatewayOnly.
 app.use('/internal/commerce/delivery-webhook', deliveryWebhookRoutes);
+app.use('/internal/commerce/payment-webhook', paymentWebhookRoutes);
 
 app.use('/disputes', disputesRoutes);
 app.use('/review', reviewsRoutes);
