@@ -2,6 +2,7 @@ const ordersRepository = require('../repositories/orders.repository');
 const orderDeliveryService = require('./orderDelivery.service');
 const paymentRepository = require('../repositories/payments.repository');
 const orderService = require('./orders.service');
+const allocationService = require('./allocation.service');
 const { ORDER_STATUSES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 
 /**
@@ -104,6 +105,17 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note,
           paidAt: order.paidAt || new Date(),
           paymentInfo: { ...(order.paymentInfo?.toObject?.() || order.paymentInfo || {}), status: 'CONFIRMED' },
         });
+
+        // Compute seller-level allocations from the confirmed payment. Idempotent:
+        // a duplicate webhook finds paymentStatus already CONFIRMED (line 78) and
+        // never re-enters this block, so allocations are created exactly once.
+        try {
+          const confirmedOrder = await ordersRepository.findById(orderId);
+          await allocationService.allocateOrder(confirmedOrder, null);
+        } catch (allocErr) {
+          // Allocation must not fail a confirmed payment; log and continue.
+          console.error('[deliveryWebhook] allocation failed for order', orderId, allocErr.message);
+        }
       } catch (err) {
         await ordersRepository.releaseCODSettlement(orderId).catch(() => null);
         throw err;

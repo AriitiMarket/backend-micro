@@ -25,6 +25,7 @@ const deliveryWebhookRoutes = require('../modules/fulfillment/routes/deliveryWeb
 const analyticsRoutes = require('../modules/platform/routes/analytics.routes');
 const settingsRoutes = require('../modules/platform/routes/settings.routes');
 const disputesRoutes = require('../modules/fulfillment/routes/disputes.routes');
+const allocationRoutes = require('../modules/fulfillment/routes/allocation.routes');
 const reviewsRoutes = require('../modules/catalog/routes/reviews.routes');
 const promotionsRoutes = require('../modules/promotions/routes/promotions.routes');
 const requestsRoutes = require('../modules/requests/routes/requests.routes');
@@ -114,6 +115,7 @@ app.use('/event', eventsRoutes);
 app.use('/conversation', conversationsRoutes);
 app.use('/message', messagesRoutes);
 app.use('/payment', paymentsRoutes);
+app.use('/payment', allocationRoutes);
 app.use('/subscription', subscriptionsRoutes);
 app.use('/sector', sectorsRoutes);
 app.use('/seller-application', sellerApplicationsRoutes);
