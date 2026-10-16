@@ -312,4 +312,4 @@ async function findBestSelling(opts = {}) {
   };
 }
 
-module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling };
+module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling, inactiveProductCategoryTitles, activeFilter };

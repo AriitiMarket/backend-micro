@@ -119,16 +119,21 @@ describe('Shop public visibility (DEFECT-002)', () => {
 
       const counts = await computeProductCountsByShop();
       assert.strictEqual(counts.get(String(shop._id)), 1);
+    });
 
     it('excludes products of suspended shops', async () => {
       const suspendedShop = await seedShop({ ...SHOP_SUSPENDED });
       const publicShop = await seedShop();
 
-      await seedProduct(suspendedShop._id, { stock: 10, reserved: 0 });
+      await seedProduct(suspendedShop._id, {
+        stock: 10,
+        reserved: 0,
+        shop: { _id: suspendedShop._id, name: 'Suspended Shop', status: 'SUSPENDED', showOnPublic: true },
+      });
       await seedProduct(publicShop._id, { stock: 10, reserved: 0 });
 
       const counts = await computeProductCountsByShop();
-      assert.strictEqual(counts.get(String(suspendedShop._id)), 0);
+      assert.ok(!counts.has(String(suspendedShop._id)), 'suspended shop should have no visible products');
       assert.strictEqual(counts.get(String(publicShop._id)), 1);
     });
 
@@ -206,4 +211,3 @@ describe('Shop public visibility (DEFECT-002)', () => {
     });
   });
 });
-    });
