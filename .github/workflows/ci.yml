@@ -20,12 +20,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: backend-services/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install root dependencies
-        working-directory: backend-services
         run: npm ci
       - name: Install shared package dependencies
-        working-directory: backend-services
         run: |
           npm --prefix packages/authz install
           npm --prefix packages/database install
@@ -35,7 +33,6 @@ jobs:
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Run architecture tests
-        working-directory: backend-services
         run: npm run test:architecture
 
   test-service:
@@ -117,12 +114,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: backend-services/${{ matrix.service.dir }}/package-lock.json
+          cache-dependency-path: ${{ matrix.service.dir }}/package-lock.json
       - name: Install service dependencies
-        working-directory: backend-services/${{ matrix.service.dir }}
+        working-directory: ${{ matrix.service.dir }}
         run: npm ci
       - name: Install shared package dependencies
-        working-directory: backend-services
         run: |
           npm --prefix packages/authz install
           npm --prefix packages/database install
@@ -132,7 +128,7 @@ jobs:
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Run service unit tests
-        working-directory: backend-services/${{ matrix.service.dir }}
+        working-directory: ${{ matrix.service.dir }}
         run: npm test
   test-integration:
     needs: test-service
@@ -189,12 +185,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: backend-services/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install root dependencies
-        working-directory: backend-services
         run: npm ci
       - name: Install shared package dependencies
-        working-directory: backend-services
         run: |
           npm --prefix packages/authz install
           npm --prefix packages/database install
@@ -204,13 +198,11 @@ jobs:
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Install service dependencies
-        working-directory: backend-services
         run: |
           npm --prefix api-gateway install
           npm --prefix identity-service install
           npm --prefix commerce-service install
           npm --prefix delivery-service install
       - name: Run integration tests
-        working-directory: backend-services
         run: npm run test:integration
 
