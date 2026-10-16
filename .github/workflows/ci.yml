@@ -96,7 +96,7 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
-      MONGODB_URI: mongodb://admin:admin123@localhost:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://localhost:27017/aritii
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
       REDIS_URI: redis://localhost:6379
       JWT_SECRET: test-jwt-secret-do-not-use-in-production
@@ -167,7 +167,7 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
-      MONGODB_URI: mongodb://admin:admin123@localhost:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://localhost:27017/aritii
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
       REDIS_URI: redis://localhost:6379
       JWT_SECRET: test-jwt-secret-do-not-use-in-production
