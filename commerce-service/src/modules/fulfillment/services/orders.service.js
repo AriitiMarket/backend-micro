@@ -838,6 +838,9 @@ class OrderService {
         );
       }
 
+      // Record units sold so best-seller ranking and "X bought" badges work.
+      await productRepository.incrementSoldOut(productId, qty);
+
       try {
         const movement = await stockMovementRepository.create({
           productId,
