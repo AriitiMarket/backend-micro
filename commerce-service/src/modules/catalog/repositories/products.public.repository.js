@@ -1,4 +1,6 @@
 const Product = require('../models/Products');
+const Order = require('../../fulfillment/models/Orders');
+const { ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
 const { inactiveProductCategoryTitles } = require('../../../shared/utils/categoryVisibility');
 
 /**
@@ -224,4 +226,90 @@ async function countPublicProductsByCategory() {
   return map;
 }
 
-module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory };
+/**
+ * Best-selling products computed from real, qualifying sales.
+ *
+ * Qualifying sales are orders whose canonical status is one of Confirmed,
+ * Shipped, In Transit or Delivered AND whose paymentStatus is CONFIRMED.
+ * Cancelled, refunded, unpaid and still-processing orders never count.
+ *
+ * Units sold are summed from order cart lines over a configurable time
+ * window (default 30 days). Only products that pass the same public
+ * visibility gate as the storefront list are returned — a product whose
+ * shop was later suspended, or that was archived/drafted, is excluded.
+ *
+ * Returns { products, count, total, page, limit, totalPages } where each
+ * product carries an extra `unitsSold` field (units sold in the window).
+ */
+async function findBestSelling(opts = {}) {
+  const { limit = 10, days = 30 } = opts;
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1, 1), 50);
+  const safeDays = Math.max(parseInt(days, 10) || 30, 1);
+  const startDate = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
+
+  const qualifyingStatuses = [
+    ORDER_STATUSES.CONFIRMED,
+    ORDER_STATUSES.SHIPPED,
+    ORDER_STATUSES.IN_TRANSIT,
+    ORDER_STATUSES.DELIVERED,
+  ];
+
+  // Aggregate qualifying order lines by product in the database — no
+  // order rows are loaded into application memory.
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        status: { $in: qualifyingStatuses },
+        paymentStatus: 'CONFIRMED',
+        createdAt: { $gte: startDate },
+      },
+    },
+    { $unwind: '$cart' },
+    {
+      $group: {
+        _id: '$cart._id',
+        unitsSold: { $sum: { $toInt: '$cart.quantity' } },
+      },
+    },
+    { $sort: { unitsSold: -1, _id: 1 } },
+    { $limit: safeLimit },
+  ]);
+
+  if (!rows.length) {
+    return { products: [], count: 0, total: 0, page: 1, limit: safeLimit, totalPages: 0 };
+  }
+
+  const unitsById = new Map(rows.map((row) => [String(row._id), row.unitsSold]));
+  const productIds = rows.map((row) => String(row._id));
+
+  // Apply the same public visibility gate as the storefront list so a
+  // delisted product can never appear in best-sellers.
+  const inactiveCategories = await inactiveProductCategoryTitles();
+  const products = await Product.find({
+    _id: { $in: productIds },
+    ...activeFilter(inactiveCategories),
+  })
+    .select(PUBLIC_LIST_FIELDS)
+    .lean();
+
+  products.sort((a, b) => {
+    const ua = unitsById.get(String(a._id)) || 0;
+    const ub = unitsById.get(String(b._id)) || 0;
+    if (ub !== ua) return ub - ua;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  return {
+    products: products.map((p) => ({
+      ...toPublicProduct(p),
+      unitsSold: unitsById.get(String(p._id)) || 0,
+    })),
+    count: products.length,
+    total: products.length,
+    page: 1,
+    limit: safeLimit,
+    totalPages: 1,
+  };
+}
+
+module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling };

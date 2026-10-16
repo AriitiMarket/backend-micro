@@ -9,6 +9,7 @@ const { validateCreateProduct, validateUpdateProduct } = require('../../../share
 
 // ── Public routes (no auth) — MUST be registered before parameterized routes ──
 router.get('/public/all', publicProductsController.getPublicAllProducts);
+router.get('/public/best-selling', publicProductsController.getBestSellingProducts);
 router.get('/public/:id', publicProductsController.getPublicProductById);
 
 // ── Authenticated routes ──
