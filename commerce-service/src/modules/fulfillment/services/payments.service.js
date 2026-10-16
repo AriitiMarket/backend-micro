@@ -32,7 +32,7 @@ class PaymentService {
       throw new ApiError('You can only create a payment for your own order', 403);
     }
     const existing = await paymentRepository.findByOrder(payload.orderId);
-    if (existing) return existing;
+    if (existing) throw new ApiError('Payment already exists for this order', 409);
     const paymentMethod = String(payload.paymentMethod || 'COD').toUpperCase();
     if (paymentMethod !== 'COD') throw new ApiError('This payment method is not connected to a verified settlement provider', 400);
 
