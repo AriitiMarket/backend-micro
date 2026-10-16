@@ -25,6 +25,7 @@ let orderRepo;
 let orderService;
 let paymentService;
 let paymentRepo;
+let productRepository;
 let ORDER_STATUSES;
 let normalizeStatus;
 let canTransition;
@@ -44,6 +45,7 @@ before(async () => {
   orderService = require('../services/orders.service');
   paymentService = require('../services/payments.service');
   paymentRepo = require('../repositories/payments.repository');
+  productRepository = require('../../catalog/repositories/products.repository');
 });
 
 // afterEach deleteMany (NOT dropDatabase): drop races parallel suite starts
@@ -539,6 +541,65 @@ describe('payments.service ↔ order consistency', () => {
     assert.strictEqual(reloadedPay.status, 'REFUNDED');
     const reloadedOrder = await Order.findById(order._id);
     assert.strictEqual(reloadedOrder.paymentStatus, 'REFUNDED');
+  });
+
+  // ── sold_out maintenance ───────────────────────────────────────────
+  it('incrementSoldOut increments sold_out on payment confirmation', async () => {
+    const product = await seedProduct({ sold_out: 0 });
+    const order = await seedOrder({
+      _product: product,
+      paymentStatus: 'PENDING',
+      cartLine: { quantity: 3 },
+    });
+
+    // Confirm payment → triggers deductInventoryOnPayment → incrementSoldOut
+    const claimed = await orderRepo.claimPaymentConfirmation(order._id);
+    assert.ok(claimed);
+    await orderService.deductInventoryOnPayment(order.cart, order._id);
+
+    const reloaded = await Product.findById(product._id);
+    assert.strictEqual(reloaded.sold_out, 3);
+  });
+
+  it('sold_out is NOT incremented for unpaid orders', async () => {
+    const product = await seedProduct({ sold_out: 0 });
+    await seedOrder({
+      _product: product,
+      quantity: 5,
+      paymentStatus: 'PENDING',
+    });
+
+    const productAfter = await Product.findById(product._id);
+    assert.strictEqual(productAfter.sold_out, 0);
+  });
+
+  it('sold_out is NOT incremented for cancelled orders', async () => {
+    const product = await seedProduct({ sold_out: 0 });
+    await seedOrder({
+      _product: product,
+      quantity: 5,
+      status: ORDER_STATUSES.CANCELLED,
+      paymentStatus: 'CONFIRMED',
+    });
+
+    const productAfter = await Product.findById(product._id);
+    assert.strictEqual(productAfter.sold_out, 0);
+  });
+
+  it('returnStock decrements sold_out on refund (clamped at 0)', async () => {
+    const product = await seedProduct({ sold_out: 5 });
+    await productRepository.returnStock(product._id, 3);
+
+    const reloaded = await Product.findById(product._id);
+    assert.strictEqual(reloaded.sold_out, 2);
+  });
+
+  it('returnStock clamps sold_out at 0', async () => {
+    const product = await seedProduct({ sold_out: 1 });
+    await productRepository.returnStock(product._id, 5);
+
+    const reloaded = await Product.findById(product._id);
+    assert.strictEqual(reloaded.sold_out, 0);
   });
 
   it('ignores a client-supplied payment status on create (server owns it)', async () => {
