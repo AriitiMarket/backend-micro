@@ -50,4 +50,22 @@ async function getBestSellingProducts(req, res, next) {
   }
 }
 
-module.exports = { getPublicAllProducts, getPublicProductById, getBestSellingProducts };
+async function getPublicDealsProducts(req, res, next) {
+  try {
+    const result = await publicProductService.getDeals({
+      limit: req.query.limit,
+    });
+    return ok(res, {
+      products: result.products,
+      count: result.count,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { getPublicAllProducts, getPublicProductById, getBestSellingProducts, getPublicDealsProducts };
