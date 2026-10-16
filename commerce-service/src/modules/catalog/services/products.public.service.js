@@ -1,4 +1,4 @@
-const { findPublicAll, findPublicById } = require('../repositories/products.public.repository');
+const { findPublicAll, findPublicById, findBestSelling } = require('../repositories/products.public.repository');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -28,6 +28,11 @@ class PublicProductService {
     const product = await findPublicById(id);
     if (!product) throw new ApiError('Product not found', 404);
     return product;
+  }
+
+  /** List best-selling products computed from real qualifying sales. */
+  async getBestSelling(opts = {}) {
+    return findBestSelling(opts);
   }
 }
 
