@@ -63,8 +63,8 @@ services:
       dockerfile: Dockerfile
     container_name: aritii-commerce
     restart: unless-stopped
-    ports:
-      - "3001:3001"
+    expose:
+      - "3001"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3001
@@ -78,7 +78,7 @@ services:
       CLOUDINARY_URL: ${CLOUDINARY_URL:-}
       API_GATEWAY_URL: http://api-gateway:3000
       DELIVERY_SERVICE_URL: http://delivery-service:3002
-      IDENTITY_SERVICE_URL: http://identity-service:3003
+      IDENTITY_SERVICE_URL: http://identity:3003
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       mongodb:
@@ -105,8 +105,8 @@ services:
       dockerfile: Dockerfile
     container_name: aritii-delivery
     restart: unless-stopped
-    ports:
-      - "3002:3002"
+    expose:
+      - "3002"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3002
@@ -119,7 +119,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       API_GATEWAY_URL: http://api-gateway:3000
       COMMERCE_SERVICE_URL: http://commerce-service:3001
-      IDENTITY_SERVICE_URL: http://identity-service:3003
+      IDENTITY_SERVICE_URL: http://identity:3003
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       mongodb:
@@ -140,14 +140,14 @@ services:
       start_period: 10s
 
   # Identity Service
-  identity-service:
+  identity:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: aritii-identity
     restart: unless-stopped
-    ports:
-      - "3003:3003"
+    expose:
+      - "3003"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3003
@@ -202,7 +202,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       COMMERCE_SERVICE_URL: http://commerce-service:3001
       DELIVERY_SERVICE_URL: http://delivery-service:3002
-      IDENTITY_SERVICE_URL: http://identity-service:3003
+      IDENTITY_SERVICE_URL: http://identity:3003
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       mongodb:
@@ -213,7 +213,7 @@ services:
         condition: service_healthy
       delivery-service:
         condition: service_healthy
-      identity-service:
+      identity:
         condition: service_healthy
     volumes:
       - ./api-gateway:/app/api-gateway
