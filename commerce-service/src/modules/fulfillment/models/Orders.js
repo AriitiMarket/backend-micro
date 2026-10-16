@@ -136,5 +136,7 @@ orderSchema.pre('save', function assignUpdatedAt(next) {
 // shop id — without this index both are collection scans.
 orderSchema.index({ 'sellerShipments.shopId': 1 });
 orderSchema.index({ requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: 'string' } } });
+// Index for best-seller aggregation: status + paymentStatus + createdAt
+orderSchema.index({ status: 1, paymentStatus: 1, createdAt: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

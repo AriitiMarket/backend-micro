@@ -256,6 +256,9 @@ async function findBestSelling(opts = {}) {
 
   // Aggregate qualifying order lines by product in the database — no
   // order rows are loaded into application memory.
+  // Cart items carry either _id or productId (or both); use whichever is
+  // present so best-seller ranking works regardless of how the order was
+  // created (checkout vs request-to-order conversion).
   const rows = await Order.aggregate([
     {
       $match: {
@@ -267,7 +270,13 @@ async function findBestSelling(opts = {}) {
     { $unwind: '$cart' },
     {
       $group: {
-        _id: '$cart._id',
+        _id: {
+          $cond: {
+            if: { $ne: ['$cart._id', null] },
+            then: '$cart._id',
+            else: '$cart.productId',
+          },
+        },
         unitsSold: { $sum: { $toInt: '$cart.quantity' } },
       },
     },
@@ -312,4 +321,56 @@ async function findBestSelling(opts = {}) {
   };
 }
 
-module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling, inactiveProductCategoryTitles, activeFilter };
+/**
+ * Publicly visible products that are on sale (discountPrice < originalPrice),
+ * sorted by discount magnitude (largest savings first), then newest first.
+ *
+ * Returns { products, count, total, page, limit, totalPages }. Each product
+ * carries an extra `discount` field (originalPrice − discountPrice) and
+ * `discountPercent` (rounded integer percentage off).
+ */
+async function findDeals(opts = {}) {
+  const { limit = 10 } = opts;
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1, 1), 50);
+  const inactiveCategories = await inactiveProductCategoryTitles();
+
+  const products = await Product.find({
+    ...activeFilter(inactiveCategories),
+    originalPrice: { $exists: true, $gt: 0 },
+  })
+    .select(PUBLIC_LIST_FIELDS)
+    .lean();
+
+  // Filter to discounted products (discountPrice < originalPrice) in JS,
+  // since Mongo $expr cross-field comparison isn't available here.
+  const withDiscount = products
+    .map((p) => {
+      const original = Number(p.originalPrice || 0);
+      const discounted = Number(p.discountPrice || 0);
+      const discount = original - discounted;
+      return { ...toPublicProduct(p), discount, discountPercent: Math.round((discount / original) * 100) };
+    })
+    .filter((p) => p.discount > 0);
+
+  withDiscount.sort((a, b) => {
+    if (b.discountPercent !== a.discountPercent) return b.discountPercent - a.discountPercent;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  const page = 1;
+  const totalPages = 1;
+  const total = withDiscount.length;
+  const count = Math.min(withDiscount.length, safeLimit);
+  const pageProducts = withDiscount.slice(0, safeLimit);
+
+  return {
+    products: pageProducts,
+    count,
+    total,
+    page,
+    limit: safeLimit,
+    totalPages,
+  };
+}
+
+module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling, findDeals, inactiveProductCategoryTitles, activeFilter };

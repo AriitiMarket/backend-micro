@@ -34,6 +34,13 @@ class PublicProductService {
   async getBestSelling(opts = {}) {
     return findBestSelling(opts);
   }
+
+  /** List discounted "deal" products: publicly visible products whose
+   *  discountPrice is strictly less than originalPrice, sorted by discount
+   *  magnitude (largest savings first). */
+  async getDeals(opts = {}) {
+    return findDeals(opts);
+  }
 }
 
 module.exports = new PublicProductService();

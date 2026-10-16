@@ -20,6 +20,7 @@ const DB_URL = process.env.MONGODB_URI
 let Order;
 let Product;
 let findBestSelling;
+let findDeals;
 let ORDER_STATUSES;
 
 const SHOP_ID = 'shop-best-1';
@@ -89,6 +90,7 @@ describe('Best-selling products', () => {
     Order = require('../../fulfillment/models/Orders');
     Product = require('../models/Products');
     findBestSelling = require('../repositories/products.public.repository').findBestSelling;
+    findDeals = require('../repositories/products.public.repository').findDeals;
     await Promise.all([Order.deleteMany({}), Product.deleteMany({})]);
     await Promise.all([Order.init(), Product.init()]);
   });
@@ -287,6 +289,140 @@ describe('Best-selling products', () => {
         assert.ok('_id' in result.products[0]);
         assert.ok('name' in result.products[0]);
       }
+    });
+  });
+
+  describe('deals (discounted products)', () => {
+    it('ranks discounted products by discount percent descending', async () => {
+      const pA = await seedProduct({
+        name: 'Product A Discount',
+        originalPrice: 100,
+        discountPrice: 50, // 50% off
+        stock: 10,
+      });
+      const pB = await seedProduct({
+        name: 'Product B Discount',
+        originalPrice: 200,
+        discountPrice: 150, // 25% off
+        stock: 10,
+      });
+      const pC = await seedProduct({
+        name: 'Product C Discount',
+        originalPrice: 50,
+        discountPrice: 25, // 50% off (tie with A, but newer)
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 10 });
+      assert.strictEqual(result.products.length, 3);
+
+      // 50% off products come first (both A and C at 50%, then B at 25%).
+      // Tie-breaker: newest first (C created after A).
+      assert.strictEqual(result.products[0].name, 'Product C Discount');
+      assert.strictEqual(result.products[0].discountPercent, 50);
+      assert.strictEqual(result.products[1].name, 'Product A Discount');
+      assert.strictEqual(result.products[1].discountPercent, 50);
+      assert.strictEqual(result.products[2].name, 'Product B Discount');
+      assert.strictEqual(result.products[2].discountPercent, 25);
+    });
+
+    it('excludes products without a discount', async () => {
+      const pNoDiscount = await seedProduct({
+        name: 'No Discount Product',
+        originalPrice: 100,
+        discountPrice: 100, // No discount
+        stock: 10,
+      });
+      const pWithDiscount = await seedProduct({
+        name: 'Has Discount Product',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 10 });
+      assert.strictEqual(result.products.length, 1);
+      assert.strictEqual(result.products[0].name, 'Has Discount Product');
+    });
+
+    it('excludes products with no discount (same price)', async () => {
+      const pNoDiscount = await seedProduct({
+        name: 'No Discount Product',
+        originalPrice: 100,
+        discountPrice: 100, // No discount - same price
+        stock: 10,
+      });
+      const pWithDiscount = await seedProduct({
+        name: 'Has Discount',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 10 });
+      assert.strictEqual(result.products.length, 1);
+      assert.strictEqual(result.products[0].name, 'Has Discount');
+    });
+
+    it('excludes products whose shop is not publicly visible', async () => {
+      const publicP = await seedProduct({
+        name: 'Public Deal Product',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+      });
+      const suspendedP = await seedProduct({
+        name: 'Suspended Shop Deal Product',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+        shop: { ...PUBLIC_SHOP, status: 'SUSPENDED' },
+      });
+
+      await seedOrder({ product: publicP, quantity: 1 });
+      await seedOrder({ product: suspendedP, quantity: 1 });
+
+      const result = await findDeals({ limit: 10 });
+      assert.strictEqual(result.products.length, 1);
+      assert.strictEqual(result.products[0].name, 'Public Deal Product');
+    });
+
+    it('returns empty list when there are no deals', async () => {
+      await seedProduct({
+        name: 'No Discount Product',
+        originalPrice: 100,
+        discountPrice: 100,
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 10 });
+      assert.strictEqual(result.products.length, 0);
+      assert.strictEqual(result.count, 0);
+      assert.strictEqual(result.total, 0);
+    });
+
+    it('clamps limit to a sane maximum', async () => {
+      const p = await seedProduct({
+        name: 'Deal Limit Product',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 1000 });
+      assert.strictEqual(result.limit, 50);
+    });
+
+    it('clamps limit to a minimum of 1', async () => {
+      const p = await seedProduct({
+        name: 'Deal Min Limit Product',
+        originalPrice: 100,
+        discountPrice: 50,
+        stock: 10,
+      });
+
+      const result = await findDeals({ limit: 0 });
+      assert.strictEqual(result.limit, 1);
     });
   });
 });
