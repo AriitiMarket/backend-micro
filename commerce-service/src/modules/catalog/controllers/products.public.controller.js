@@ -12,6 +12,9 @@ async function getPublicAllProducts(req, res, next) {
       search: req.query.search || req.query.q,
       category: req.query.category,
       shopId: req.query.shopId || req.query.shop,
+      // Location-aware discovery: the buyer's selected city/zone.
+      zoneId: req.query.zoneId || undefined,
+      cityId: req.query.cityId || undefined,
       sort: req.query.sort || '-createdAt',
       page: req.query.page || 1,
       limit: req.query.limit || 20,
@@ -31,4 +34,41 @@ async function getPublicProductById(req, res, next) {
   }
 }
 
-module.exports = { getPublicAllProducts, getPublicProductById };
+async function getBestSellingProducts(req, res, next) {
+  try {
+    const result = await publicProductService.getBestSelling({
+      limit: req.query.limit,
+      days: req.query.days,
+    });
+    return ok(res, {
+      products: result.products,
+      count: result.count,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function getPublicDealsProducts(req, res, next) {
+  try {
+    const result = await publicProductService.getDeals({
+      limit: req.query.limit,
+    });
+    return ok(res, {
+      products: result.products,
+      count: result.count,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { getPublicAllProducts, getPublicProductById, getBestSellingProducts, getPublicDealsProducts };

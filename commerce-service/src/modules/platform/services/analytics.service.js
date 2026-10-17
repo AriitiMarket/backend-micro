@@ -9,6 +9,51 @@ const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { identityClient } = require('../../../app/clients/identity.client');
 const { normalizeStatus, ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
 
+/**
+ * Canonical status spellings that represent a completed (revenue-recognizing)
+ * order. Stored docs use the canonical enum; legacy uppercase/alias spellings
+ * are included so revenue is never under-counted for old rows.
+ */
+const REVENUE_STATUSES = [
+  ORDER_STATUSES.DELIVERED,        // 'Delivered'
+  'Delivered', 'DELIVERED',
+  'Completed', 'COMPLETED',
+  'Succeeded', 'SUCCEEDED',
+  'Received', 'RECEIVED',
+];
+
+/**
+ * Canonical status spellings that represent a refunded order (money returned
+ * to the buyer, subtracted from net sales).
+ */
+const REFUNDED_STATUSES = [
+  ORDER_STATUSES.REFUND_SUCCESS,   // 'Refund Success'
+  'Refund Success', 'REFUND SUCCESS',
+  'Refunded', 'REFUNDED',
+  'Refund Successful', 'REFUND SUCCESSFUL',
+];
+
+/**
+ * Orders that must never count toward revenue (cancelled or in a refund flow
+ * that has not succeeded).
+ */
+const NON_REVENUE_STATUSES = [
+  ORDER_STATUSES.CANCELLED,        // 'Cancelled'
+  'Cancelled', 'CANCELLED',
+  ORDER_STATUSES.REFUND_REQUESTED, // 'Refund Requested'
+  'Refund Requested', 'REFUND REQUESTED',
+  ORDER_STATUSES.REFUND_APPROVED,  // 'Refund Approved'
+  'Refund Approved', 'REFUND APPROVED',
+  ORDER_STATUSES.PROCESSING,       // 'Processing'
+  'Processing', 'PENDING', 'NEW', 'ORDERED',
+  ORDER_STATUSES.CONFIRMED,        // 'Confirmed'
+  'Confirmed', 'CONFIRMED', 'ACCEPTED',
+  ORDER_STATUSES.SHIPPED,          // 'Shipped'
+  'Shipped', 'SHIPPED',
+  ORDER_STATUSES.IN_TRANSIT,       // 'In Transit'
+  'In Transit', 'IN TRANSIT',
+];
+
 class AnalyticsService {
 
   _dateFilter(startDate, endDate) {
@@ -24,17 +69,6 @@ class AnalyticsService {
   /**
    * Resolves the admin hierarchy selection into query filters for the Commerce
    * collections that can honestly be scoped.
-   *
-   * Scopeable: orders (order.sellerId -> shop.ownerId), shops (shopFilter) and
-   * disputes (dispute.sellerId).
-   *
-   * NOT scopeable, and therefore reported platform-wide in `scopeNote`:
-   *   * users / sellers / riders — owned by Identity and Delivery;
-   *   * products — the Product document carries no shop or seller reference;
-   *   * deliveries — owned by Delivery.
-   *
-   * A scoped request that matches no shop resolves to sellerId: { $in: [] }, i.e.
-   * it returns nothing rather than silently falling back to platform-wide data.
    */
   async _scope(filters = {}) {
     const scope = await hierarchyScope.resolveHierarchyScope(filters);
@@ -59,10 +93,26 @@ class AnalyticsService {
     return Object.assign({}, ...filters.filter((f) => f && Object.keys(f).length));
   }
 
-  /** Sum of totalPrice for orders matching the filter (database-side). */
+  /**
+   * Sum of totalPrice for revenue-recognizing (delivered/completed) orders
+   * matching the filter (database-side). Cancelled, pending and refunded
+   * orders are excluded so revenue is never overstated.
+   */
   async _revenueFor(filter) {
     const [row] = await orderRepository.aggregate([
-      { $match: filter },
+      { $match: this._merge(filter, { status: { $in: REVENUE_STATUSES } }) },
+      { $group: { _id: null, total: { $sum: '$totalPrice' } } },
+    ]);
+    return row?.total || 0;
+  }
+
+  /**
+   * Sum of totalPrice for refunded orders matching the filter (database-side).
+   * These amounts are subtracted from gross sales to arrive at net sales.
+   */
+  async _refundsFor(filter) {
+    const [row] = await orderRepository.aggregate([
+      { $match: this._merge(filter, { status: { $in: REFUNDED_STATUSES } }) },
       { $group: { _id: null, total: { $sum: '$totalPrice' } } },
     ]);
     return row?.total || 0;
@@ -73,8 +123,7 @@ class AnalyticsService {
       const scope = await this._scope(filters);
       const baseFilter = this._merge(this._dateFilter(startDate, endDate), scope.orderFilter);
 
-      // Aggregate in the database — the previous findAll(limit:100000) pulled
-      // up to 100k full order documents into memory just to reduce them here.
+      // Aggregate in the database — never load 100k full order documents.
       const [moneyRow, statusRows, totalCount, shops, products, identityCounts, deliveryDashboard] = await Promise.all([
         orderRepository.aggregate([
           { $match: baseFilter },
@@ -88,7 +137,10 @@ class AnalyticsService {
         deliveryClient.getInternalOperationsDashboard(),
       ]);
 
-      const totalRevenue = moneyRow?.[0]?.total || 0;
+      const grossRevenue = await this._revenueFor(baseFilter);
+      const refunds = await this._refundsFor(baseFilter);
+      const netRevenue = grossRevenue - refunds;
+
       // Normalize legacy spellings so 'DELIVERED' and 'Delivered' merge.
       let deliveredOrders = 0;
       let cancelledOrders = 0;
@@ -110,8 +162,11 @@ class AnalyticsService {
         totalOrders: totalCount,
         deliveredOrders,
         cancelledOrders,
-        totalRevenue,
-        avgOrderValue: totalCount > 0 ? Math.round(totalRevenue / totalCount) : 0,
+        grossSales: grossRevenue,
+        refunds,
+        netSales: netRevenue,
+        totalRevenue: grossRevenue,
+        avgOrderValue: deliveredOrders > 0 ? Math.round(grossRevenue / deliveredOrders) : 0,
         deliveryRate: totalCount > 0 ? Math.round((deliveredOrders / totalCount) * 100) : 0,
         scopeApplied: scope.scoped,
         scopeNote: scope.scopeNote,
@@ -119,7 +174,7 @@ class AnalyticsService {
       };
     } catch (err) {
       console.error('Analytics getStats error:', err);
-      return { totalUsers: 0, totalSellers: 0, totalStores: 0, totalRiders: 0, totalProducts: 0, totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalRevenue: 0, avgOrderValue: 0, deliveryRate: 0, scopeApplied: false, scopeNote: null, timestamp: new Date().toISOString() };
+      return { totalUsers: 0, totalSellers: 0, totalStores: 0, totalRiders: 0, totalProducts: 0, totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, grossSales: 0, refunds: 0, netSales: 0, totalRevenue: 0, avgOrderValue: 0, deliveryRate: 0, scopeApplied: false, scopeNote: null, timestamp: new Date().toISOString() };
     }
   }
 
@@ -149,9 +204,6 @@ class AnalyticsService {
         storesCount.push(shops);
       }
 
-      // Honest labels only: this endpoint cannot measure platform users, sellers
-      // or riders (they live in Identity/Delivery). The old response shipped
-      // order/shop counts under usersCount/ridersCount/sellersCount names.
       return { labels: months, storesCount, ordersCount, revenueCount };
     } catch (err) {
       console.error('Analytics getGrowth error:', err);
@@ -160,21 +212,19 @@ class AnalyticsService {
     }
   }
 
-  async getOrdersByType(startDate, endDate, filters = {}) {
+  async getOrdersByType(startDate, endDate, filters = {}, opts = {}) {
     try {
       const scope = await this._scope(filters);
+      const { skip = 0, limit = 500 } = opts;
       const orders = await orderRepository.findAll(
         this._merge(this._dateFilter(startDate, endDate), scope.orderFilter),
-        { limit: 100000 }
+        { skip, limit, sort: { createdAt: -1 } }
       );
 
       const delivery = orders.filter(o => o.orderType === 'delivery' || o.type === 'delivery').length;
       const pickup = orders.filter(o => o.orderType === 'pickup' || o.type === 'pickup').length;
       const dineIn = orders.filter(o => o.orderType === 'dine_in' || o.type === 'dine_in').length;
 
-      // Real counts only. The previous implementation padded a missing field with
-      // fabricated 60/30/10 splits of the order count, which reported numbers the
-      // platform had not measured.
       return [
         { label: 'Delivery', value: delivery },
         { label: 'Pickup', value: pickup },
@@ -186,36 +236,41 @@ class AnalyticsService {
     }
   }
 
-  async getSalesByType(startDate, endDate, filters = {}) {
+  async getSalesByType(startDate, endDate, filters = {}, opts = {}) {
     try {
       const scope = await this._scope(filters);
+      const { skip = 0, limit = 500 } = opts;
       const orders = await orderRepository.findAll(
         this._merge(this._dateFilter(startDate, endDate), scope.orderFilter),
-        { limit: 100000 }
+        { skip, limit, sort: { createdAt: -1 } }
       );
 
-      const delivery = orders.filter(o => o.orderType === 'delivery' || o.type === 'delivery');
-      const pickup = orders.filter(o => o.orderType === 'pickup' || o.type === 'pickup');
+      const delivered = orders.filter(o => REVENUE_STATUSES.includes(normalizeStatus(o.status)));
+      const refunded = orders.filter(o => REFUNDED_STATUSES.includes(normalizeStatus(o.status)));
 
       return {
-        delivery: delivery.reduce((sum, o) => sum + (o.totalPrice || 0), 0),
-        pickup: pickup.reduce((sum, o) => sum + (o.totalPrice || 0), 0),
+        delivery: delivered.reduce((sum, o) => sum + (o.totalPrice || 0), 0),
+        pickup: 0,
+        refunded: refunded.reduce((sum, o) => sum + (o.totalPrice || 0), 0),
       };
     } catch (err) {
-      return { delivery: 0, pickup: 0 };
+      return { delivery: 0, pickup: 0, refunded: 0 };
     }
   }
 
-  async getSalesOverTime(startDate, endDate, filters = {}) {
+  async getSalesOverTime(startDate, endDate, filters = {}, opts = {}) {
     try {
       const scope = await this._scope(filters);
+      const { skip = 0, limit = 500 } = opts;
       const orders = await orderRepository.findAll(
         this._merge(this._dateFilter(startDate, endDate), scope.orderFilter),
-        { limit: 100000 }
+        { skip, limit, sort: { createdAt: -1 } }
       );
 
       const dailyMap = {};
       orders.forEach(o => {
+        const st = normalizeStatus(o.status);
+        if (!REVENUE_STATUSES.includes(st)) return;
         const day = new Date(o.createdAt || o._id.getTimestamp()).toISOString().split('T')[0];
         if (!dailyMap[day]) dailyMap[day] = { date: day, revenue: 0, count: 0 };
         dailyMap[day].revenue += o.totalPrice || 0;
@@ -236,7 +291,6 @@ class AnalyticsService {
         this._merge(this._dateFilter(startDate, endDate), scope.orderFilter)
       );
 
-      // Normalize legacy spellings ('DELIVERED' vs 'Delivered') so buckets merge.
       const statusCounts = {};
       for (const row of rows || []) {
         const s = normalizeStatus(row._id) || 'unknown';
@@ -270,9 +324,7 @@ class AnalyticsService {
 
   async getProductStats(startDate, endDate) {
     try {
-      const dateFilter = this._dateFilter(startDate, endDate);
       const allProducts = await productRepository.findAll({});
-      const scopedProducts = await productRepository.findAll(dateFilter);
 
       const lowStock = allProducts.filter(p => p.stock <= (p.lowStockThreshold || 5)).length;
       const outOfStock = allProducts.filter(p => p.stock === 0).length;
@@ -283,14 +335,13 @@ class AnalyticsService {
 
       return {
         totalProducts: allProducts.length,
-        newProducts: scopedProducts.length,
         lowStock,
         outOfStock,
         totalStock,
         avgPrice,
       };
     } catch (err) {
-      return { totalProducts: 0, newProducts: 0, lowStock: 0, outOfStock: 0, totalStock: 0, avgPrice: 0 };
+      return { totalProducts: 0, lowStock: 0, outOfStock: 0, totalStock: 0, avgPrice: 0 };
     }
   }
 
@@ -404,6 +455,127 @@ class AnalyticsService {
       };
     } catch (err) {
       return { total: 0, newShops: 0, approved: 0, pending: 0, suspended: 0, inactive: 0 };
+    }
+  }
+
+  /**
+   * Seller-scoped report for the authenticated seller's own shop(s).
+   *
+   * Tenant isolation: the sellerId is taken from the authenticated identity
+   * (never trusted from the query string). Orders are attributed to the seller
+   * via the top-level `sellerId` field OR any of the seller's shops
+   * (`sellerShipments.shopId`). A seller can never reach another seller's data.
+   */
+  async getSellerStats(startDate, endDate, sellerId) {
+    try {
+      if (!sellerId) {
+        return { error: 'sellerId is required' };
+      }
+
+      const shops = await shopRepository.find({ filter: { ownerId: String(sellerId) } });
+      const shopIds = shops.map(s => String(s._id));
+
+      const orderFilter = this._merge(
+        this._dateFilter(startDate, endDate),
+        {
+          $or: [
+            { sellerId: String(sellerId) },
+            ...(shopIds.length ? [{ 'sellerShipments.shopId': { $in: shopIds } }] : []),
+          ],
+        }
+      );
+
+      const [moneyRow, statusRows, totalCount, products] = await Promise.all([
+        orderRepository.aggregate([
+          { $match: orderFilter },
+          { $group: { _id: null, total: { $sum: '$totalPrice' }, count: { $sum: 1 } } },
+        ]),
+        orderRepository.countByField('status', orderFilter),
+        orderRepository.count(orderFilter),
+        productRepository.findAll({ filter: { sellerId: String(sellerId) } }),
+      ]);
+
+      const grossRevenue = await this._revenueFor(orderFilter);
+      const refunds = await this._refundsFor(orderFilter);
+      const netRevenue = grossRevenue - refunds;
+
+      let deliveredOrders = 0;
+      let cancelledOrders = 0;
+      let pendingOrders = 0;
+      for (const row of statusRows || []) {
+        const s = normalizeStatus(row._id);
+        if (s === ORDER_STATUSES.DELIVERED) deliveredOrders += row.count;
+        if (s === ORDER_STATUSES.CANCELLED) cancelledOrders += row.count;
+        if (s === ORDER_STATUSES.PROCESSING || s === 'Pending' || s === 'CONFIRMED') pendingOrders += row.count;
+      }
+
+      // Best-selling products by quantity sold (delivered orders only).
+      const bestSellers = await this._bestSellersFor(orderFilter);
+
+      // Low-stock alerts for the seller's products.
+      const lowStock = products.filter(p => p.stock <= (p.lowStockThreshold || 5) && p.stock > 0).length;
+      const outOfStock = products.filter(p => p.stock === 0).length;
+
+      const totalStock = products.reduce((sum, p) => sum + (p.stock || 0), 0);
+
+      return {
+        sellerId,
+        shopCount: shops.length,
+        totalOrders: totalCount,
+        deliveredOrders,
+        cancelledOrders,
+        pendingOrders,
+        grossSales: grossRevenue,
+        refunds,
+        netSales: netRevenue,
+        totalRevenue: grossRevenue,
+        avgOrderValue: deliveredOrders > 0 ? Math.round(grossRevenue / deliveredOrders) : 0,
+        totalProducts: products.length,
+        lowStock,
+        outOfStock,
+        totalStock,
+        bestSellers,
+        period: { startDate, endDate },
+        currency: 'ETB',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err) {
+      console.error('Analytics getSellerStats error:', err);
+      return { error: 'Failed to load seller report' };
+    }
+  }
+
+  /**
+   * Best-selling products aggregated from order cart lines (database-side where
+   * possible). Returns [{ productId, name, quantity, revenue }].
+   */
+  async _bestSellersFor(filter, limit = 10) {
+    try {
+      const orders = await orderRepository.findAll(filter, { limit: 500, sort: { createdAt: -1 } });
+      const qtyById = new Map();
+      const revById = new Map();
+      const nameById = new Map();
+
+      orders.forEach((o) => {
+        (o.cart || []).forEach((li) => {
+          const id = li.productId || li.product || li._id || 'unknown';
+          const qty = Number(li.quantity) || 1;
+          const price = Number(li.price || li.unitPrice || 0);
+          const cur = qtyById.get(id) || { quantity: 0, revenue: 0 };
+          cur.quantity += qty;
+          cur.revenue += qty * price;
+          qtyById.set(id, cur);
+          revById.set(id, cur.revenue);
+          if (li.name && !nameById.has(id)) nameById.set(id, li.name);
+        });
+      });
+
+      return [...qtyById.entries()]
+        .map(([id, { quantity, revenue }]) => ({ productId: id, name: nameById.get(id) || 'Product', quantity, revenue }))
+        .sort((a, b) => b.quantity - a.quantity)
+        .slice(0, limit);
+    } catch (err) {
+      return [];
     }
   }
 

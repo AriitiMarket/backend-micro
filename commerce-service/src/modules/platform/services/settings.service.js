@@ -73,6 +73,18 @@ const DEFAULT_SYSTEM_SETTINGS = {
   requirePhoneVerification: false,
 };
 
+const DEFAULT_REPORT_SETTINGS = {
+  defaultReportingPeriod: '30D',
+  defaultTimezone: 'UTC',
+  defaultCurrency: 'ETB',
+  supportedCurrencies: ['USD', 'ETB'],
+  exportFormat: 'csv',
+  availableFilters: ['dateRange', 'business', 'shop', 'status', 'paymentStatus'],
+  reportRefreshMinutes: 60,
+  dataFreshnessWarningMinutes: 120,
+  reportAccessPermissions: ['ADMIN', 'SELLER'],
+};
+
 class SettingsService {
   async getPlatformSettings() {
     try {
@@ -138,6 +150,34 @@ class SettingsService {
       return await settingsRepository.updateOrCreate('system', merged);
     } catch (err) {
       console.error('Settings updateSystemSettings error:', err);
+      throw err;
+    }
+  }
+
+  async getReportSettings() {
+    try {
+      const settings = await settingsRepository.findOne('reports');
+      return { ...DEFAULT_REPORT_SETTINGS, ...(settings?.value || {}) };
+    } catch (err) {
+      console.error('Settings getReportSettings error:', err);
+      return DEFAULT_REPORT_SETTINGS;
+    }
+  }
+
+  async updateReportSettings(data) {
+    try {
+      const current = await this.getReportSettings();
+      const merged = { ...current, ...data };
+      // Validate currency
+      if (merged.defaultCurrency && !DEFAULT_REPORT_SETTINGS.supportedCurrencies.includes(merged.defaultCurrency)) {
+        throw new Error(`Unsupported default currency: ${merged.defaultCurrency}`);
+      }
+      if (merged.exportFormat && !['csv', 'pdf'].includes(merged.exportFormat)) {
+        throw new Error(`Unsupported export format: ${merged.exportFormat}`);
+      }
+      return await settingsRepository.updateOrCreate('reports', merged);
+    } catch (err) {
+      console.error('Settings updateReportSettings error:', err);
       throw err;
     }
   }

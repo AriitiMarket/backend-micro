@@ -192,6 +192,19 @@ class ProductRepository {
   }
 
   /**
+   * Record units sold at payment confirmation. `sold_out` only ever goes up
+   * here; `returnStock` clamps it at 0 on refund/cancel. Used by the
+   * best-seller ranking and frontend "X bought" badge.
+   */
+  incrementSoldOut(productId, quantity) {
+    return Product.findByIdAndUpdate(
+      productId,
+      { $inc: { sold_out: quantity }, updatedAt: new Date() },
+      { new: true }
+    );
+  }
+
+  /**
    * Reverse of `deductReserved` — only used to compensate a failed movement
    * write so the confirmation can be retried cleanly. Reserved may drift
    * upward here (conservative: never causes an oversell).

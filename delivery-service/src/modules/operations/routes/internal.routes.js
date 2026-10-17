@@ -42,6 +42,18 @@ router.get('/location/:id/children', locationsCtrl.getChildren);
 router.get('/location/:id/ancestors', locationsCtrl.getAncestors);
 router.get('/location/:id', locationsCtrl.getLocation);
 
+// ── Service-to-service reads: zone catalogue ────────────────────────────────
+// Commerce validates the buyer's delivery zone at checkout and validates the
+// zone ids an admin writes into a shop's service areas. The public equivalents
+// are either admin-gated (`/delivery/zone/:id`) or user-facing, so a peer
+// service is refused on them by gatewayOnly — these internal mirrors are the
+// supported path (reads only; zone mutations stay admin actions that require a
+// real actor identity, which a service call deliberately does not carry).
+const zonesCtrl = require('../../locations-expansion/controllers/zones.controller');
+router.get('/zone/location/:locationId', zonesCtrl.findZoneForLocation);
+router.get('/zone', zonesCtrl.getZoneSummariesInternal);
+router.get('/zone/:id', zonesCtrl.getZoneSummaryInternal);
+
 // ── Service-to-service: Commerce hands an order to the Delivery Service ─────
 // `POST /internal/delivery/request`. No `authenticate` on purpose: this router
 // only ever receives traffic from the gateway's INTERNAL surface or from a named

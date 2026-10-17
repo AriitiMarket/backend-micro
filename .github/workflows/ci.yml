@@ -1,0 +1,205 @@
+name: Backend Services CI
+
+on:
+  push:
+    branches: [ main, team-one/* ]
+  pull_request:
+    branches: [ main, team-one/* ]
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  lint-and-architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install shared package dependencies
+        run: |
+          npm --prefix packages/authz install
+          npm --prefix packages/database install
+          npm --prefix packages/internal-auth install
+          npm --prefix packages/request-context install
+          npm --prefix packages/service-client install
+          npm --prefix packages/validators install
+      - name: Run architecture tests
+        run: npm run test:architecture
+
+  test-service:
+    needs: lint-and-architecture
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: api-gateway
+            dir: api-gateway
+            needs_mongo: true
+            needs_postgres: false
+            needs_redis: true
+          - name: identity-service
+            dir: identity-service
+            needs_mongo: true
+            needs_postgres: true
+            needs_redis: true
+          - name: commerce-service
+            dir: commerce-service
+            needs_mongo: true
+            needs_postgres: false
+            needs_redis: true
+          - name: delivery-service
+            dir: delivery-service
+            needs_mongo: true
+            needs_postgres: false
+            needs_redis: true
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand({ ping: 1 })' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aritii_identity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aritii_identity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      MONGODB_URI: mongodb://localhost:27017/aritii
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
+      REDIS_URI: redis://localhost:6379
+      JWT_SECRET: test-jwt-secret-do-not-use-in-production
+      INTERNAL_SERVICE_TOKENS: gateway:test-gateway-token,identity:test-identity-token,commerce:test-commerce-token,delivery:test-delivery-token
+      COMMERCE_SERVICE_URL: http://localhost:3001
+      DELIVERY_SERVICE_URL: http://localhost:3002
+      IDENTITY_SERVICE_URL: http://localhost:3003
+      API_GATEWAY_URL: http://localhost:3000
+      LOG_LEVEL: error
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.service.dir }}/package-lock.json
+      - name: Install service dependencies
+        working-directory: ${{ matrix.service.dir }}
+        run: npm ci
+      - name: Install shared package dependencies
+        run: |
+          npm --prefix packages/authz install
+          npm --prefix packages/database install
+          npm --prefix packages/internal-auth install
+          npm --prefix packages/request-context install
+          npm --prefix packages/service-client install
+          npm --prefix packages/validators install
+      - name: Run service unit tests
+        working-directory: ${{ matrix.service.dir }}
+        run: npm test
+  test-integration:
+    needs: test-service
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand({ ping: 1 })' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aritii_identity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aritii_identity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      MONGODB_URI: mongodb://localhost:27017/aritii
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
+      REDIS_URI: redis://localhost:6379
+      JWT_SECRET: test-jwt-secret-do-not-use-in-production
+      INTERNAL_SERVICE_TOKENS: gateway:test-gateway-token,identity:test-identity-token,commerce:test-commerce-token,delivery:test-delivery-token
+      COMMERCE_SERVICE_URL: http://localhost:3001
+      DELIVERY_SERVICE_URL: http://localhost:3002
+      IDENTITY_SERVICE_URL: http://localhost:3003
+      API_GATEWAY_URL: http://localhost:3000
+      LOG_LEVEL: error
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install shared package dependencies
+        run: |
+          npm --prefix packages/authz install
+          npm --prefix packages/database install
+          npm --prefix packages/internal-auth install
+          npm --prefix packages/request-context install
+          npm --prefix packages/service-client install
+          npm --prefix packages/validators install
+      - name: Install service dependencies
+        run: |
+          npm --prefix api-gateway install
+          npm --prefix identity-service install
+          npm --prefix commerce-service install
+          npm --prefix delivery-service install
+      - name: Run integration tests
+        run: npm run test:integration
+

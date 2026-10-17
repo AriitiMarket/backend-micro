@@ -1,4 +1,6 @@
 const Product = require('../models/Products');
+const Order = require('../../fulfillment/models/Orders');
+const { ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
 const { inactiveProductCategoryTitles } = require('../../../shared/utils/categoryVisibility');
 
 /**
@@ -88,15 +90,20 @@ async function computeProductCountsByShop() {
 
 /**
  * List public products with allowlisted fields.
- * Supports: search, category, shopId, sort, page, limit.
+ * Supports: search, category, shopId, zoneId, cityId, sort, page, limit.
+ *
+ * Location-aware discovery (Rule C):
+ *   * `zoneId`  → only products from shops whose ACTIVE delivery coverage
+ *                 includes that delivery zone. Shops without configured
+ *                 coverage never match — not "serving every zone by default".
+ *   * `cityId`  → only products from shops physically located in that city.
+ * Both are AND-ed with the existing search/category/visibility filters.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, shopId, sort = '-createdAt', page = 1, limit = 20 } = opts;
+  const { search, category, shopId, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
 
   // AND-ed clauses: the visibility gates (including the category gate) and the
-  // search `$or` coexist here. (They used to share one `$or` key, so searching
-  // dropped the status gate and returned unpublished products to anonymous
-  // callers.)
+  // search `$or` coexist here.
   const clauses = visibilityClauses(await inactiveProductCategoryTitles());
 
   if (category) {
@@ -119,6 +126,25 @@ async function findPublicAll(opts = {}) {
         }),
       });
     }
+  }
+
+  // Location-aware filtering: resolve shop IDs that serve the selected
+  // zone / city, then restrict products to those shops.
+  if (zoneId || cityId) {
+    const Shop = require('../../selling/models/Shops');
+    const shopFilter = {};
+    if (zoneId) {
+      shopFilter['deliveryCoverage.zoneIds'] = String(zoneId);
+      shopFilter['deliveryCoverage.status'] = 'ACTIVE';
+    }
+    if (cityId) {
+      shopFilter['locationSnapshot.cityId'] = String(cityId);
+    }
+    const servingShops = await Shop.find(shopFilter).select('_id').lean();
+    const servingShopIds = servingShops.map((s) => String(s._id));
+    // A zone/city with no serving shops means zero products match —
+    // fail-closed rather than showing everything.
+    clauses.push({ shopId: { $in: servingShopIds.length ? servingShopIds : ['__none__'] } });
   }
 
   const filter = { $and: clauses };
@@ -224,4 +250,151 @@ async function countPublicProductsByCategory() {
   return map;
 }
 
-module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory };
+/**
+ * Best-selling products computed from real, qualifying sales.
+ *
+ * Qualifying sales are orders whose canonical status is one of Confirmed,
+ * Shipped, In Transit or Delivered AND whose paymentStatus is CONFIRMED.
+ * Cancelled, refunded, unpaid and still-processing orders never count.
+ *
+ * Units sold are summed from order cart lines over a configurable time
+ * window (default 30 days). Only products that pass the same public
+ * visibility gate as the storefront list are returned — a product whose
+ * shop was later suspended, or that was archived/drafted, is excluded.
+ *
+ * Returns { products, count, total, page, limit, totalPages } where each
+ * product carries an extra `unitsSold` field (units sold in the window).
+ */
+async function findBestSelling(opts = {}) {
+  const { limit = 10, days = 30 } = opts;
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1, 1), 50);
+  const safeDays = Math.max(parseInt(days, 10) || 30, 1);
+  const startDate = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
+
+  const qualifyingStatuses = [
+    ORDER_STATUSES.CONFIRMED,
+    ORDER_STATUSES.SHIPPED,
+    ORDER_STATUSES.IN_TRANSIT,
+    ORDER_STATUSES.DELIVERED,
+  ];
+
+  // Aggregate qualifying order lines by product in the database — no
+  // order rows are loaded into application memory.
+  // Cart items carry either _id or productId (or both); use whichever is
+  // present so best-seller ranking works regardless of how the order was
+  // created (checkout vs request-to-order conversion).
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        status: { $in: qualifyingStatuses },
+        paymentStatus: 'CONFIRMED',
+        createdAt: { $gte: startDate },
+      },
+    },
+    { $unwind: '$cart' },
+    {
+      $group: {
+        _id: {
+          $cond: {
+            if: { $ne: ['$cart._id', null] },
+            then: '$cart._id',
+            else: '$cart.productId',
+          },
+        },
+        unitsSold: { $sum: { $toInt: '$cart.quantity' } },
+      },
+    },
+    { $sort: { unitsSold: -1, _id: 1 } },
+    { $limit: safeLimit },
+  ]);
+
+  if (!rows.length) {
+    return { products: [], count: 0, total: 0, page: 1, limit: safeLimit, totalPages: 0 };
+  }
+
+  const unitsById = new Map(rows.map((row) => [String(row._id), row.unitsSold]));
+  const productIds = rows.map((row) => String(row._id));
+
+  // Apply the same public visibility gate as the storefront list so a
+  // delisted product can never appear in best-sellers.
+  const inactiveCategories = await inactiveProductCategoryTitles();
+  const products = await Product.find({
+    _id: { $in: productIds },
+    ...activeFilter(inactiveCategories),
+  })
+    .select(PUBLIC_LIST_FIELDS)
+    .lean();
+
+  products.sort((a, b) => {
+    const ua = unitsById.get(String(a._id)) || 0;
+    const ub = unitsById.get(String(b._id)) || 0;
+    if (ub !== ua) return ub - ua;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  return {
+    products: products.map((p) => ({
+      ...toPublicProduct(p),
+      unitsSold: unitsById.get(String(p._id)) || 0,
+    })),
+    count: products.length,
+    total: products.length,
+    page: 1,
+    limit: safeLimit,
+    totalPages: 1,
+  };
+}
+
+/**
+ * Publicly visible products that are on sale (discountPrice < originalPrice),
+ * sorted by discount magnitude (largest savings first), then newest first.
+ *
+ * Returns { products, count, total, page, limit, totalPages }. Each product
+ * carries an extra `discount` field (originalPrice − discountPrice) and
+ * `discountPercent` (rounded integer percentage off).
+ */
+async function findDeals(opts = {}) {
+  const { limit = 10 } = opts;
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1, 1), 50);
+  const inactiveCategories = await inactiveProductCategoryTitles();
+
+  const products = await Product.find({
+    ...activeFilter(inactiveCategories),
+    originalPrice: { $exists: true, $gt: 0 },
+  })
+    .select(PUBLIC_LIST_FIELDS)
+    .lean();
+
+  // Filter to discounted products (discountPrice < originalPrice) in JS,
+  // since Mongo $expr cross-field comparison isn't available here.
+  const withDiscount = products
+    .map((p) => {
+      const original = Number(p.originalPrice || 0);
+      const discounted = Number(p.discountPrice || 0);
+      const discount = original - discounted;
+      return { ...toPublicProduct(p), discount, discountPercent: Math.round((discount / original) * 100) };
+    })
+    .filter((p) => p.discount > 0);
+
+  withDiscount.sort((a, b) => {
+    if (b.discountPercent !== a.discountPercent) return b.discountPercent - a.discountPercent;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  const page = 1;
+  const totalPages = 1;
+  const total = withDiscount.length;
+  const count = Math.min(withDiscount.length, safeLimit);
+  const pageProducts = withDiscount.slice(0, safeLimit);
+
+  return {
+    products: pageProducts,
+    count,
+    total,
+    page,
+    limit: safeLimit,
+    totalPages,
+  };
+}
+
+module.exports = { findPublicAll, findPublicById, computeProductCountsByShop, countPublicProductsByCategory, findBestSelling, findDeals, inactiveProductCategoryTitles, activeFilter };

@@ -2,14 +2,15 @@ const Shop = require('../models/Shops');
 const Product = require('../../catalog/models/Products');
 const { isValidObjectId } = require('../../../shared/utils/mongoId');
 const { publicVisibilityFilter } = require('../shops.mapper');
+const { inactiveProductCategoryTitles, activeFilter } = require('../../catalog/repositories/products.public.repository');
 
 /**
  * Public Shop Repository — read-only, field-limited queries for unauthenticated
  * marketplace browsing. Uses Mongoose .select() allowlists and .lean().
  */
 
-const PUBLIC_LIST_FIELDS = '_id name avatar description address ratings ratingCount productCount category';
-const PUBLIC_DETAIL_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.regionName locationSnapshot.areaName locationSnapshot.cityName';
+const PUBLIC_LIST_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.cityName locationSnapshot.areaName locationSnapshot.regionName locationSnapshot.sectorName locationSnapshot.fullAddress deliveryCoverage.zoneIds deliveryCoverage.zoneNames deliveryCoverage.status';
+const PUBLIC_DETAIL_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.regionName locationSnapshot.areaName locationSnapshot.cityName locationSnapshot.sectorName locationSnapshot.fullAddress locationSnapshot.landmark locationSnapshot.resolvedAt deliveryCoverage.zoneIds deliveryCoverage.zoneNames deliveryCoverage.status';
 
 /**
  * Visibility filter — admin-curated public view: approved/active status AND
@@ -23,10 +24,15 @@ function approvedFilter() {
 
 /**
  * Compute productCount per shop via aggregation.
+ * Only publicly visible products count — same activeFilter() gate as the
+ * storefront product listing (isActive, PUBLISHED status, showOnPublic,
+ * shop in good standing, active category, stock > reserved).
  * Returns a Map<shopId, count>.
  */
 async function computeProductCountsByShop() {
+  const inactiveCategories = await inactiveProductCategoryTitles();
   const counts = await Product.aggregate([
+    { $match: activeFilter(inactiveCategories) },
     { $group: { _id: '$shopId', count: { $sum: 1 } } },
   ]);
   const map = new Map();
@@ -38,15 +44,23 @@ async function computeProductCountsByShop() {
 
 /**
  * Compute ratings and ratingCount per shop from product reviews.
+ * Only reviews of publicly visible products count, and only reviews with
+ * moderationStatus 'approved' — matching what the storefront renders.
  * Returns a Map<shopId, { ratings, ratingCount }>.
  */
 async function computeShopRatings() {
-  // ONE aggregation over the products collection — it used to run one query
-  // per shop (N+1) on every public list page.
+  const inactiveCategories = await inactiveProductCategoryTitles();
   const rows = await Product.aggregate([
+    { $match: activeFilter(inactiveCategories) },
     { $unwind: '$reviews' },
-    { $match: { 'reviews.rating': { $exists: true, $ne: null } } },
-    { $group: { _id: '$shopId', sum: { $sum: '$reviews.rating' }, count: { $sum: 1 } } },
+    { $match: { 'reviews.moderationStatus': 'approved' } },
+    {
+      $group: {
+        _id: '$shopId',
+        sum: { $sum: '$reviews.rating' },
+        count: { $sum: 1 },
+      },
+    },
   ]);
   const map = new Map();
   for (const row of rows) {
@@ -60,10 +74,26 @@ async function computeShopRatings() {
 
 /**
  * List public shops with allowlisted fields and computed productCount/ratings.
+ *
+ * Location-aware discovery (Rule C):
+ *   * `zoneId`  → only shops whose ACTIVE coverage includes that delivery zone.
+ *                 A shop with no configured coverage can never match — it is
+ *                 not "serving every zone by default".
+ *   * `cityId`  → only shops whose physical location snapshot is in that city.
+ * Both are AND-ed with the existing search/category/visibility filters, so the
+ * same eligibility rule applies wherever shops are listed.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, sort = '-createdAt', page = 1, limit = 20 } = opts;
+  const { search, category, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
   const filter = approvedFilter();
+
+  if (zoneId) {
+    filter['deliveryCoverage.zoneIds'] = String(zoneId);
+    filter['deliveryCoverage.status'] = 'ACTIVE';
+  }
+  if (cityId) {
+    filter['locationSnapshot.cityId'] = String(cityId);
+  }
 
   // Shop category browse (type 'business') — exact, case-insensitive match on
   // the title-as-FK, exactly how products.public.repository filters `category`.
@@ -129,8 +159,12 @@ async function findPublicById(id) {
     .lean();
   if (!shop) return null;
 
-  // Enrich with productCount and ratings
-  const products = await Product.find({ shopId: String(shop._id) }).lean();
+  // Enrich with productCount and ratings — only publicly visible products count.
+  const inactiveCategories = await inactiveProductCategoryTitles();
+  const products = await Product.find({
+    shopId: String(shop._id),
+    ...activeFilter(inactiveCategories),
+  }).lean();
   const reviewRatings = [];
   for (const p of products) {
     for (const r of (p.reviews || [])) {

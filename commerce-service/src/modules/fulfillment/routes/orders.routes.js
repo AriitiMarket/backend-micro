@@ -34,6 +34,6 @@ router.post('/cancel/:orderId', authenticate, authorize('BUYER', { exact: true }
 router.get('/:orderId/delivery', authenticate, ordersController.getOrderDelivery);
 
 // PHASE 2: Inventory availability endpoint
-router.get('/availability/:productId', ordersController.getInventoryAvailability);
+router.get('/availability/:productId', authenticate, ordersController.getInventoryAvailability);
 
 module.exports = router;

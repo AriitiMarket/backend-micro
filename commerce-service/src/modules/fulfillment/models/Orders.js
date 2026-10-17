@@ -46,6 +46,11 @@ const orderSchema = new mongoose.Schema({
   // Set when the order was created from an agreed product request
   // (Request Management → order). Null for a normal checkout.
   requestId: { type: String, default: null },
+  // Groups the per-seller Order documents produced by one buyer checkout into
+  // a single "buyer order". All seller fulfillment groups from the same
+  // checkout share this id, so the admin audit view and the allocation ledger
+  // can reconstruct the complete purchase from its seller-level rows.
+  orderGroupId: { type: String, index: true, default: null },
 
   // --- Money (server-computed, per order) ---
   // One checkout can split into several orders (one per seller/shop), so each
@@ -84,6 +89,14 @@ const orderSchema = new mongoose.Schema({
     cityName: { type: String, default: '' },
     sectorId: { type: String, default: null },
     sectorName: { type: String, default: '' },
+
+    // THE order's single delivery zone (Rule A: one order = one zone).
+    // Resolved/validated server-side at checkout (shopCoverage.service) from
+    // the buyer's address or the zone covering the destination location —
+    // never trusted blindly from the client and never changed afterwards.
+    // Legacy orders predate the field and carry null.
+    deliveryZoneId: { type: String, default: null, index: true },
+    deliveryZoneName: { type: String, default: '' },
 
     // Full address details
     fullAddress: { type: String, default: '' },
@@ -136,5 +149,8 @@ orderSchema.pre('save', function assignUpdatedAt(next) {
 // shop id — without this index both are collection scans.
 orderSchema.index({ 'sellerShipments.shopId': 1 });
 orderSchema.index({ requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: 'string' } } });
+orderSchema.index({ orderGroupId: 1 });
+// Index for best-seller aggregation: status + paymentStatus + createdAt
+orderSchema.index({ status: 1, paymentStatus: 1, createdAt: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -5,6 +5,7 @@ const stockMovementRepository = require('../../catalog/repositories/stockMovemen
 const orderDeliveryService = require('./orderDelivery.service');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const { resolveShipmentBusinessId } = require('../../selling/services/business.service');
+const shopCoverageService = require('../../selling/services/shopCoverage.service');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { ORDER_STATUSES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 const { isProductPubliclyVisible } = require('../../../shared/utils/productVisibility');
@@ -195,6 +196,11 @@ class OrderService {
       cityName: destination.cityName || '',
       sectorId: destination.sectorId || null,
       sectorName: destination.sectorName || '',
+      // The order's delivery zone — overwritten below with the SERVER-resolved
+      // zone (resolveDestinationZone), kept here so a supplied id+name pair
+      // travels together when the caller already verified it.
+      deliveryZoneId: destination.deliveryZoneId || null,
+      deliveryZoneName: destination.deliveryZoneName || '',
       fullAddress: destination.fullAddress || '',
       landmark: destination.landmark || '',
       building: destination.building || '',
@@ -295,6 +301,10 @@ class OrderService {
     }
     const safePaymentInfo = { type: 'Cash on Delivery', method: 'COD', status: 'PENDING' };
     const buyerId = user && (user._id || user.id) || null;
+    // One buyer order = one group of per-seller fulfillment groups. All Order
+    // documents created in this checkout share this id so the admin audit view
+    // and the allocation ledger can reconstruct the complete purchase.
+    const orderGroupId = payload.orderGroupId || new mongoose.Types.ObjectId().toString();
 
     if (!Array.isArray(cart) || cart.length === 0) {
       throw new ApiError('Cart items are required', 400);
@@ -369,8 +379,16 @@ class OrderService {
       throw new ApiError('Delivery destination is required: sectorId, fullAddress, and phone are mandatory', 400);
     }
 
+    // ── Rule A: ONE order belongs to exactly ONE delivery zone ──────────────
+    // The zone is resolved and validated SERVER-side (explicit zone on the
+    // address, else the zone covering the destination location) BEFORE any
+    // order row exists, so a checkout can never record an unverifiable zone.
+    const orderZone = await shopCoverageService.resolveDestinationZone(destination);
+
     // Location snapshot (historical, immutable after order creation)
     const destinationSnapshot = await this._buildDestinationSnapshot(destination);
+    destinationSnapshot.deliveryZoneId = orderZone.id;
+    destinationSnapshot.deliveryZoneName = orderZone.name;
 
     // Group cart items by shopId
     const shopItemsMap = new Map();
@@ -385,6 +403,14 @@ class OrderService {
     const shops = await Promise.all(shopIds.map(id => shopRepository.findById(id)));
     const shopMap = new Map();
     shops.forEach((shop, i) => { if (shop) shopMap.set(shopIds[i], shop); });
+
+    // ── Rule A: every shop in this order must serve the order's zone ────────
+    // Authoritative backend check against trusted coverage (shop docs written
+    // only after Delivery validated their zone ids). Throws
+    // SHOP_NOT_SERVING_ZONE / LOCATION_NOT_CONFIGURED / ZONE_MISMATCH with the
+    // offending shop named, before a single order row or stock reservation
+    // exists. Products are never silently dropped.
+    await shopCoverageService.assertShopsServeZone(shops, orderZone);
 
     // Build seller shipments and resolve origins in parallel
     const shipmentPromises = [...shopItemsMap.entries()].map(async ([shopId, items]) => {
@@ -441,6 +467,7 @@ class OrderService {
           buyerId,
           sellerId: shipment.sellerId,
           requestId: requestId || null,
+          orderGroupId,
           destination: destinationSnapshot,
           sellerShipments: [shipment],
           status: ORDER_STATUSES.PROCESSING,
@@ -537,7 +564,11 @@ class OrderService {
     if (!destination || !destination.sectorId || !destination.fullAddress) {
       throw new ApiError('Delivery destination is required: sectorId, fullAddress, and phone are mandatory', 400);
     }
+    // Same zone rule as a normal checkout: one order, one server-verified zone.
+    const orderZone = await shopCoverageService.resolveDestinationZone(destination);
     const destinationSnapshot = await this._buildDestinationSnapshot(destination);
+    destinationSnapshot.deliveryZoneId = orderZone.id;
+    destinationSnapshot.deliveryZoneName = orderZone.name;
 
     // The agreement is always against one shop (the request addresses it, or
     // the seller's own shop once they claim an open request).
@@ -547,6 +578,9 @@ class OrderService {
       shop = owned[0] || null;
     }
     if (!shop) throw new ApiError("The seller's shop is required to create this order", 400);
+
+    // Rule A applies to agreement orders too: the shop must serve the zone.
+    await shopCoverageService.assertShopsServeZone([shop], orderZone);
 
     const origin = await this._resolveShopOrigin(shop);
     const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
@@ -837,6 +871,9 @@ class OrderService {
           400
         );
       }
+
+      // Record units sold so best-seller ranking and "X bought" badges work.
+      await productRepository.incrementSoldOut(productId, qty);
 
       try {
         const movement = await stockMovementRepository.create({

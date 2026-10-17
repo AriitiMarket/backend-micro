@@ -102,21 +102,31 @@ test('the edge gate accepts a named caller with its own credential', () => {
 });
 
 // ── Authorization table ──────────────────────────────────────────────────────
-// Regression: the location tree is reference data every actor needs (address
-// pickers), and Delivery serves those reads without an identity. A BUYER token
-// used to be stopped at the edge with `403 PERMISSION_DENIED:
-// locations.view`, so the customer-facing address picker could never load.
-test('the location tree is a shared actor read, not an admin-only surface', () => {
+// Regression: the location tree and zone coverage reads are public reference
+// data every marketplace visitor needs (address/location pickers), so they are
+// readable WITHOUT a token — exactly like public product/shop reads. Writes
+// remain gated behind `locations.view`/`locations.manage` (and the zone CRUD
+// admin gates).
+test('the location tree and zone coverage are public reads, not admin-only surfaces', () => {
   const authorizeRequest = require('../middleware/authorizeRequest');
 
-  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/location/hierarchy'), 'locations.view');
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/location/hierarchy'), null);
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/location/search'), null);
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/location/harar'), null);
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/zone/public'), null);
+  assert.equal(authorizeRequest.requiredPermission('GET', '/delivery/zone/location/harar-123'), null);
+
+  // A verified actor token still passes these through to Delivery (shared actor
+  // read — Delivery's own role gate is the authority), so the path check stays
+  // meaningful even though no permission claim is required at the edge.
   assert.equal(authorizeRequest.isActorSharedPath('/delivery/location/hierarchy'), true);
   assert.equal(authorizeRequest.isActorSharedPath('/delivery/location/search'), true);
-  assert.equal(authorizeRequest.isActorSharedPath('/delivery/location'), true);
+  assert.equal(authorizeRequest.isActorSharedPath('/delivery/location/harar'), true);
 
   // The rest of the network configuration stays admin-only at the edge.
   for (const path of ['/delivery/zone', '/delivery/hub', '/delivery/route', '/delivery/operation/dashboard']) {
     assert.equal(authorizeRequest.isActorSharedPath(path), false, `${path} must stay admin-gated at the edge`);
+    assert.ok(authorizeRequest.requiredPermission('PUT', path), `${path} writes must stay gated`);
   }
 });
 
