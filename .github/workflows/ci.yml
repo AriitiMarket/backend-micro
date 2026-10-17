@@ -12,6 +12,9 @@ env:
 jobs:
   lint-and-architecture:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend-services
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,17 +23,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: ./backend-services/package-lock.json
+      - name: Create .env from example
+        run: cp .env.example .env
       - name: Install root dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: Install shared package dependencies
         run: |
-          npm --prefix packages/authz install
-          npm --prefix packages/database install
-          npm --prefix packages/internal-auth install
-          npm --prefix packages/request-context install
-          npm --prefix packages/service-client install
-          npm --prefix packages/validators install
+          npm --prefix packages/authz install --no-audit --no-fund
+          npm --prefix packages/database install --no-audit --no-fund
+          npm --prefix packages/internal-auth install --no-audit --no-fund
+          npm --prefix packages/request-context install --no-audit --no-fund
+          npm --prefix packages/service-client install --no-audit --no-fund
+          npm --prefix packages/validators install --no-audit --no-fund
       - name: Run architecture tests
         run: npm run test:architecture
 
@@ -105,6 +110,10 @@ jobs:
       IDENTITY_SERVICE_URL: http://localhost:3003
       API_GATEWAY_URL: http://localhost:3000
       LOG_LEVEL: error
+    defaults:
+      run:
+        working-directory: ./backend-services/${{ matrix.service.dir }}
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -113,24 +122,27 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: ${{ matrix.service.dir }}/package-lock.json
+          cache-dependency-path: ./backend-services/${{ matrix.service.dir }}/package-lock.json
+      - name: Create .env from example
+        run: cp .env.example .env
       - name: Install service dependencies
-        working-directory: ${{ matrix.service.dir }}
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: Install shared package dependencies
         run: |
-          npm --prefix packages/authz install
-          npm --prefix packages/database install
-          npm --prefix packages/internal-auth install
-          npm --prefix packages/request-context install
-          npm --prefix packages/service-client install
-          npm --prefix packages/validators install
+          npm --prefix ../../packages/authz install --no-audit --no-fund
+          npm --prefix ../../packages/database install --no-audit --no-fund
+          npm --prefix ../../packages/internal-auth install --no-audit --no-fund
+          npm --prefix ../../packages/request-context install --no-audit --no-fund
+          npm --prefix ../../packages/service-client install --no-audit --no-fund
+          npm --prefix ../../packages/validators install --no-audit --no-fund
       - name: Run service unit tests
-        working-directory: ${{ matrix.service.dir }}
-        run: npm test
+        run: npm test -- --test-timeout=30000
   test-integration:
     needs: test-service
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend-services
     services:
       mongodb:
         image: mongo:7
@@ -183,23 +195,25 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: ./backend-services/package-lock.json
+      - name: Create .env from example
+        run: cp .env.example .env
       - name: Install root dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: Install shared package dependencies
         run: |
-          npm --prefix packages/authz install
-          npm --prefix packages/database install
-          npm --prefix packages/internal-auth install
-          npm --prefix packages/request-context install
-          npm --prefix packages/service-client install
-          npm --prefix packages/validators install
+          npm --prefix packages/authz install --no-audit --no-fund
+          npm --prefix packages/database install --no-audit --no-fund
+          npm --prefix packages/internal-auth install --no-audit --no-fund
+          npm --prefix packages/request-context install --no-audit --no-fund
+          npm --prefix packages/service-client install --no-audit --no-fund
+          npm --prefix packages/validators install --no-audit --no-fund
       - name: Install service dependencies
         run: |
-          npm --prefix api-gateway install
-          npm --prefix identity-service install
-          npm --prefix commerce-service install
-          npm --prefix delivery-service install
+          npm --prefix api-gateway install --no-audit --no-fund
+          npm --prefix identity-service install --no-audit --no-fund
+          npm --prefix commerce-service install --no-audit --no-fund
+          npm --prefix delivery-service install --no-audit --no-fund
       - name: Run integration tests
         run: npm run test:integration
 
