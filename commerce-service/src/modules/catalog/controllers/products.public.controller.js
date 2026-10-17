@@ -12,7 +12,11 @@ async function getPublicAllProducts(req, res, next) {
       search: req.query.search || req.query.q,
       category: req.query.category,
       shopId: req.query.shopId || req.query.shop,
-      // Location-aware discovery: the buyer's selected city/zone.
+      regionId: req.query.regionId,
+      minPrice: req.query.minPrice,
+      maxPrice: req.query.maxPrice,
+      rating: req.query.rating,
+      // Location-aware discovery: the buyer's selected region / city / zone.
       zoneId: req.query.zoneId || undefined,
       cityId: req.query.cityId || undefined,
       sort: req.query.sort || '-createdAt',

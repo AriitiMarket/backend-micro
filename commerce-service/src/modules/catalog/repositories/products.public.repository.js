@@ -100,7 +100,20 @@ async function computeProductCountsByShop() {
  * Both are AND-ed with the existing search/category/visibility filters.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, shopId, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
+  const {
+    search,
+    category,
+    shopId,
+    regionId,
+    minPrice,
+    maxPrice,
+    rating,
+    sort = '-createdAt',
+    page = 1,
+    limit = 20,
+    zoneId,
+    cityId,
+  } = opts;
 
   // AND-ed clauses: the visibility gates (including the category gate) and the
   // search `$or` coexist here.
@@ -128,11 +141,36 @@ async function findPublicAll(opts = {}) {
     }
   }
 
+  // Price range filter on the effective selling price (discountPrice when set,
+  // otherwise originalPrice).
+  if (minPrice || maxPrice) {
+    const priceExpr = { $and: [] };
+    if (minPrice) {
+      priceExpr.$and.push({
+        $gte: [{ $ifNull: ['$discountPrice', '$originalPrice'] }, Number(minPrice)],
+      });
+    }
+    if (maxPrice) {
+      priceExpr.$and.push({
+        $lte: [{ $ifNull: ['$discountPrice', '$originalPrice'] }, Number(maxPrice)],
+      });
+    }
+    clauses.push({ $expr: priceExpr });
+  }
+
+  // Minimum rating filter.
+  if (rating) {
+    clauses.push({ ratings: { $gte: Number(rating) } });
+  }
+
   // Location-aware filtering: resolve shop IDs that serve the selected
-  // zone / city, then restrict products to those shops.
-  if (zoneId || cityId) {
+  // region / city / zone, then restrict products to those shops.
+  if (regionId || zoneId || cityId) {
     const Shop = require('../../selling/models/Shops');
     const shopFilter = {};
+    if (regionId) {
+      shopFilter['locationSnapshot.regionId'] = String(regionId);
+    }
     if (zoneId) {
       shopFilter['deliveryCoverage.zoneIds'] = String(zoneId);
       shopFilter['deliveryCoverage.status'] = 'ACTIVE';
@@ -142,7 +180,7 @@ async function findPublicAll(opts = {}) {
     }
     const servingShops = await Shop.find(shopFilter).select('_id').lean();
     const servingShopIds = servingShops.map((s) => String(s._id));
-    // A zone/city with no serving shops means zero products match —
+    // A region/city/zone with no serving shops means zero products match —
     // fail-closed rather than showing everything.
     clauses.push({ shopId: { $in: servingShopIds.length ? servingShopIds : ['__none__'] } });
   }
