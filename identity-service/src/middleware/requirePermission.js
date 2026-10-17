@@ -4,9 +4,9 @@
 // ADMIN bypass (see the shared-middleware contract and its test). Permission
 // checks are opt-in per route and are applied AFTER `authorize('ADMIN')`.
 //
-// Semantics: an admin holding the wildcard passes — which includes every admin
-// that has no explicit RBAC assignment yet, so turning RBAC on can only narrow
-// access, never lock an existing admin out.
+// Semantics: an admin holding the wildcard passes. New administrator accounts
+// must receive an explicit role assignment; the Identity authorization resolver
+// has an opt-in migration switch for legacy unassigned accounts.
 function requirePermission(permission) {
   const required = Array.isArray(permission) ? permission : [permission];
   return function (req, res, next) {

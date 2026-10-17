@@ -21,6 +21,7 @@ async function seed() {
     } else {
       console.log(`Admin ${ADMIN_EMAIL} already exists (id: ${row.id})`);
     }
+    await ensureSuperAdminAssignment(pool, row.id);
     return;
   }
 
@@ -30,8 +31,22 @@ async function seed() {
     'INSERT INTO users (id, name, email, password_hash, role, status, is_verified, admin_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);',
     [id, ADMIN_NAME, ADMIN_EMAIL, passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] })]
   );
+  await ensureSuperAdminAssignment(pool, id);
   console.log(`Admin created: ${ADMIN_EMAIL} (id: ${id})`);
   console.log(`Scope: all locations, all services`);
+}
+
+async function ensureSuperAdminAssignment(pool, userId) {
+  const role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', ['SUPER_ADMIN']);
+  if (!role.rows[0]) {
+    throw new Error('SUPER_ADMIN role is not seeded; initialize the Identity database first');
+  }
+  await pool.query(
+    `INSERT INTO admin_user_roles (user_id, role_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, role_id) DO NOTHING;`,
+    [userId, role.rows[0].id]
+  );
 }
 
 seed().then(() => process.exit(0)).catch((err) => { console.error(err); process.exit(1); });
