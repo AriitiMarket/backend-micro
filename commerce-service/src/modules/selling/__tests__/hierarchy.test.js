@@ -114,6 +114,20 @@ function stubClients() {
   });
   deliveryClient.getChildren = async () => ({ status: 200, body: { children: [] } });
   deliveryClient.createDeliveryRequest = async () => ({ status: 201, body: { delivery: { _id: 'd1' } } });
+  // Delivery zone catalogue stubs (real service code paths through
+  // shopCoverage.service.resolveDestinationZone / assertShopsServeZone).
+  const TEST_ZONE = {
+    _id: SECTOR_ID, name: 'Harar City Zone', code: 'HZ-CITY',
+    status: 'active', lifecycle: 'LIVE', serviceable: true,
+  };
+  deliveryClient.getZoneSummary = async (id) => ({
+    status: 200, ok: true,
+    body: { zone: String(id) === String(SECTOR_ID) ? TEST_ZONE : null },
+  });
+  deliveryClient.getZonesForLocation = async () => ({
+    status: 200, ok: true,
+    body: { zones: [TEST_ZONE] },
+  });
 
   identityClient.getSellerStatus = async () => ({ status: 200, body: { sellerStatus: 'APPROVED' } });
   identityClient.linkShopId = async () => ({ status: 200, body: {} });
@@ -262,7 +276,16 @@ describe('Order → Business', () => {
 
   it('a real checkout writes a business id onto the shipment', async () => {
     const business = await createBusiness('seller-checkout');
-    const shop = await createShopDoc({ ownerId: 'seller-checkout', businessId: String(business._id) });
+    const shop = await createShopDoc({
+      ownerId: 'seller-checkout',
+      businessId: String(business._id),
+      // The shop serves the sector's zone — otherwise checkout rejects it.
+      deliveryCoverage: {
+        zoneIds: [SECTOR_ID],
+        zoneNames: [{ id: SECTOR_ID, name: 'Sector 01' }],
+        status: 'ACTIVE',
+      },
+    });
     const product = await Product.create(productDoc(shop));
 
     const orders = await orderService.createOrder({

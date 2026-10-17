@@ -15,6 +15,7 @@ const {
   toAdminRow,
   countMapFromRows,
 } = require('../shops.mapper');
+const { publicDeliveryInfo } = require('./shopCoverage.service');
 
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 
@@ -460,7 +461,17 @@ class ShopService {
    * document in full (owner ids, balances, hidden shops) to any logged-in user.
    */
   getAllShops(opts = {}) {
-    return findPublicAll(opts);
+    const zoneId = opts.zoneId ? String(opts.zoneId) : null;
+    // Same location-aware contract as the public list: eligibility filters are
+    // applied in the repository and each shop carries its `delivery` block, so
+    // a signed-in buyer's marketplace behaves exactly like the guest one.
+    return findPublicAll(opts).then((result) => {
+      result.shops = result.shops.map((shop) => ({
+        ...shop,
+        delivery: publicDeliveryInfo(shop, zoneId),
+      }));
+      return result;
+    });
   }
 
   /**
@@ -682,6 +693,11 @@ class ShopService {
     );
     await this.syncShopSnapshot(id, { showOnPublic: value });
     return updated;
+  }
+
+  /** ADMIN: set a shop's delivery coverage (service areas). */
+  async setCoverage(shopId, { zoneIds, status }, admin = {}) {
+    return shopCoverageService.setCoverage(shopId, { zoneIds, status }, admin);
   }
 }
 

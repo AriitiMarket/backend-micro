@@ -24,9 +24,11 @@
 //
 // Methods that belonged to the admin/actor surface (createDelivery,
 // updateDeliveryStatus, assignDelivery, initiateDelivery, automaticAssignment,
-// getAssignment, zone reads, validateAddress, ...) were removed: they are
+// getAssignment, validateAddress, ...) were removed: they are
 // Delivery-side admin operations that require a real actor identity and had no
-// caller in this service.
+// caller in this service. Zone READS were later reintroduced (see the Zones
+// section below) because checkout revalidation and admin coverage writes need
+// the zone catalogue — reads only, never mutations.
 const { createInternalClient } = require('../../shared/internal-client');
 const { services } = require('../config/services');
 
@@ -111,6 +113,34 @@ async function getLocationHierarchy() {
   return get('/internal/delivery/location/hierarchy');
 }
 
+// --- Zones (Delivery owns the zone catalogue) -------------------------------
+//
+// Commerce never copies zone definitions: these reads are how it validates the
+// buyer's delivery zone at checkout and the zone ids an admin writes into a
+// shop's service areas. The public zone routes are user-facing/admin-gated and
+// therefore off limits to a peer service (gatewayOnly) — the internal mirrors
+// are the supported path.
+
+/** One zone summary (null → the id is unknown to Delivery). */
+async function getZoneSummary(id) {
+  return get('/internal/delivery/zone/' + encodeURIComponent(String(id)));
+}
+
+/** Batch zone summaries for a comma-separated id list (coverage writes). */
+async function getZoneSummaries(ids = []) {
+  const list = (ids || []).map(String).filter(Boolean).join(',');
+  return get('/internal/delivery/zone', { query: { ids: list } });
+}
+
+/**
+ * Zones covering a location (ancestor-aware — a zone on the city covers its
+ * neighbourhoods). Used to resolve a delivery zone for an address/destination
+ * that does not carry one explicitly.
+ */
+async function getZonesForLocation(locationId) {
+  return get('/internal/delivery/zone/location/' + encodeURIComponent(String(locationId)));
+}
+
 module.exports = {
   deliveryClient: {
     createDeliveryRequest,
@@ -123,6 +153,9 @@ module.exports = {
     getLocation,
     getChildren,
     getLocationHierarchy,
+    getZoneSummary,
+    getZoneSummaries,
+    getZonesForLocation,
   },
   // Exposed for health checks and diagnostics.
   deliveryClientInternals: client,

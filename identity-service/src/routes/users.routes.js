@@ -24,7 +24,7 @@ router.get('/internal/users/:id/membership/:role', internalOnly, usersController
 
 // Public profile lookup by internal user id. The id is a UUID, so a malformed
 // value must be a 400 rather than a database-level 500.
-router.get('/user/user-info/:id', validateUuidParam('id'), usersController.getUserInfo);
+router.get('/user/user-info/:id', authenticate, validateUuidParam('id'), usersController.getUserInfo);
 router.put('/user/update-user-info', authenticate, validateUpdateProfile, usersController.updateProfile);
 router.put('/user/update-user-password', authenticate, validateUpdatePassword, usersController.updatePassword);
 router.put('/user/update-user-addresses', authenticate, validateUpdateAddress, usersController.updateAddress);

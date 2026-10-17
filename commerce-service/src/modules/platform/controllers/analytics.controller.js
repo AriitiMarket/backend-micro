@@ -106,6 +106,18 @@ async function getShopStats(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+async function getSellerStats(req, res, next) {
+  try {
+    const { startDate, endDate } = req.query;
+    // Tenant isolation: scope to the authenticated seller's own identity id.
+    // A query-param sellerId is never trusted for data access.
+    const sellerId = req.user && req.user.id ? String(req.user.id) : null;
+    const data = await analyticsService.getSellerStats(startDate, endDate, sellerId);
+    if (data.error) return res.status(400).json({ success: false, code: 'BAD_REQUEST', message: data.error, errors: [] });
+    return ok(res, { data });
+  } catch (err) { return next(err); }
+}
+
 async function getDashboardUsers(req, res, next) {
   try {
     const counts = await analyticsService.getDashboardUsers();
@@ -131,5 +143,5 @@ module.exports = {
   getStats, getUsersGrowth, getOrdersByType, getSalesByType,
   getSalesOverTime, getOrdersByStatus, getCategoryActivity, getProductStats,
   getDisputeStats, getDeliveryStats, getRiderPerformance, getShopStats,
-  getDashboardUsers, getPendingApprovals, getRecentActivity,
+  getDashboardUsers, getPendingApprovals, getRecentActivity, getSellerStats,
 };

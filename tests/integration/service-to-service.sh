@@ -11,8 +11,6 @@
 # Requires the stack to be up:  docker compose up -d --build
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
-
 CONTAINER="commerce-service"
 CHECKS="tests/integration/service-to-service.checks.js"
 REMOTE="/tmp/aritii-s2s-checks.js"

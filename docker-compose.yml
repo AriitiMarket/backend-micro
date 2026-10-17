@@ -92,7 +92,7 @@ services:
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -133,7 +133,7 @@ services:
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -171,12 +171,13 @@ services:
         condition: service_healthy
     volumes:
       - ./identity-service:/app/identity-service
+      - ./identity-service/src/config/keys:/app/src/config/keys
       - ./packages:/app/packages
       - /app/node_modules
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3003/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -222,7 +223,7 @@ services:
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

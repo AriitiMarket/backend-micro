@@ -49,7 +49,11 @@ const deliveriesRepo = {
   async findAll(filter = {}, _opts = {}) {
     const out = [];
     for (const d of store.deliveries.values()) {
-      if (filter.status && d.status !== filter.status) continue;
+      if (filter.status) {
+        if (filter.status.$in) {
+          if (!filter.status.$in.includes(d.status)) continue;
+        } else if (d.status !== filter.status) continue;
+      }
       if ('shipmentId' in filter && d.shipmentId != null) continue;
       if (filter['origin.locationId'] && String(d.origin?.locationId) !== String(filter['origin.locationId'])) continue;
       if (filter['destination.locationId'] && String(d.destination?.locationId) !== String(filter['destination.locationId'])) continue;
@@ -68,7 +72,14 @@ const deliveriesRepo = {
     for (const d of store.deliveries.values()) {
       if (filter._id && filter._id.$in) {
         const idMatches = filter._id.$in.includes(d._id) || filter._id.$in.includes(String(d._id));
-        const statusOk = !filter.status || d.status === filter.status;
+        let statusOk = true;
+        if (filter.status) {
+          if (filter.status.$in) {
+            statusOk = filter.status.$in.includes(d.status);
+          } else {
+            statusOk = d.status === filter.status;
+          }
+        }
         const shipmentOk = !('shipmentId' in filter) || d.shipmentId == null;
         if (idMatches && statusOk && shipmentOk) {
           if (update.$set) Object.assign(d, update.$set);

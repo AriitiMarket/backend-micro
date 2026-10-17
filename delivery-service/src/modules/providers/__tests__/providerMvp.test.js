@@ -207,7 +207,6 @@ test('approving clears the rejection decision but keeps the application answers 
   });
   const record = await providersRepo.findByIdentityUserId('user-4');
   await providersService.rejectProvider(record._id, 'Blurry ID', admin);
-  await applicationsService.applyForProvider('user-4', { name: 'Sara', phone: '0911000004' });
   await providersService.approveProvider(record._id, admin);
 
   const approved = await providersRepo.findById(record._id);
