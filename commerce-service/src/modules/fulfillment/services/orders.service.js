@@ -94,7 +94,9 @@ class OrderService {
     const role = normalizeRole(requestingUserRole);
     if (role === 'ADMIN') return;
     if (role !== 'SELLER') throw new ApiError('Forbidden: only sellers can query seller orders', 403);
-    if (sellerId === requestingUserId) return; // the seller's own identity id
+    
+    // If sellerId equals the requesting user's ID, allow (seller's own identity)
+    if (sellerId === requestingUserId) return;
 
     // The seller UI passes the SHOP id (it manages orders per shop). Accept it
     // only when the requesting seller actually owns that shop — the query then
@@ -103,6 +105,8 @@ class OrderService {
       const shop = await shopRepository.findById(sellerId);
       if (shop && String(shop.ownerId) === String(requestingUserId)) return;
     }
+    
+    // If we reach here, the seller doesn't own this shop/seller ID
     throw new ApiError('Forbidden: you can only access your own seller orders', 403);
   }
 
