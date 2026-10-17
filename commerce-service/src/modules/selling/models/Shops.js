@@ -56,6 +56,40 @@ const shopSchema = new mongoose.Schema({
     },
     resolvedAt: { type: Date, default: null },
   },
+
+  // DELIVERY COVERAGE (service areas) — which delivery ZONES this shop serves.
+  //
+  // Deliberately separate from `locationSnapshot` above: the snapshot is WHERE
+  // the shop physically is, coverage is WHERE it delivers to. A shop in Harar
+  // may serve several zones; neither field can stand in for the other.
+  //
+  // The zone IDs reference the Delivery Service's Zone collection (the single
+  // source of truth for zone definitions) — Commerce only caches the reference,
+  // never zone data. Zone ids/names are re-validated against Delivery whenever
+  // an admin writes this block (shopCoverage.service), and `zoneNames` is the
+  // denormalized snapshot of that validation so public payloads stay a local
+  // read.
+  //
+  // Legacy documents predate the field: readers MUST treat an absent/empty
+  // block as UNCONFIGURED ("Delivery coverage not configured") and block
+  // checkout for that shop — never guess a zone.
+  deliveryCoverage: {
+    zoneIds: [{ type: String }],
+    zoneNames: [{
+      _id: false,
+      id: { type: String },
+      name: { type: String },
+    }],
+    status: {
+      type: String,
+      enum: ['UNCONFIGURED', 'ACTIVE', 'PAUSED'],
+      default: 'UNCONFIGURED',
+    },
+    source: { type: String, enum: ['ADMIN', 'APPLICATION', 'MIGRATION'], default: null },
+    verifiedBy: { type: String, default: null },
+    verifiedAt: { type: Date, default: null },
+    updatedAt: { type: Date, default: null },
+  },
   
   // NEW: Status tracking (separate from role which is always 'Seller')
   status: {
@@ -126,5 +160,9 @@ shopSchema.index({ sectorId: 1, status: 1 });
 shopSchema.index({ 'locationSnapshot.regionId': 1, status: 1 });
 shopSchema.index({ 'locationSnapshot.cityId': 1, status: 1 });
 shopSchema.index({ 'locationSnapshot.areaId': 1, status: 1 });
+// Zone-aware discovery + admin coverage filters: "which shops serve zone X?"
+// and "which shops have no configured coverage?" would otherwise scan.
+shopSchema.index({ 'deliveryCoverage.zoneIds': 1, status: 1 });
+shopSchema.index({ 'deliveryCoverage.status': 1, status: 1 });
 
 module.exports = mongoose.model('Shop', shopSchema);

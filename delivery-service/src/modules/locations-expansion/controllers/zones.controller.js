@@ -102,7 +102,48 @@ async function findZoneForLocation(req, res, next) {
   catch (err) { return next(err); }
 }
 
+/**
+ * Public zone catalogue for the marketplace location selector. Served WITHOUT
+ * authentication on purpose (same posture as the location tree): it exposes
+ * only the minimal, active, serviceable zones — no operational configuration —
+ * and anonymous buyers need it to choose a city/zone before they can ever hold
+ * a token. Writes on this router stay admin-only.
+ */
+async function getPublicZones(req, res, next) {
+  try {
+    const zones = await svc.getPublicZones({ cityId: req.query.cityId || null });
+    return ok(res, { zones, count: zones.length });
+  } catch (err) { return next(err); }
+}
+
+/**
+ * Internal (service-to-service) zone summaries — Commerce validates zone ids
+ * at checkout and when an admin writes shop coverage. Guarded by the cluster
+ * credential at the edge and in `gatewayOnly`, never reachable by a browser.
+ */
+async function getZoneSummariesInternal(req, res, next) {
+  try {
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const zones = await svc.getZoneSummaries(ids);
+    return ok(res, { zones, count: zones.length });
+  } catch (err) { return next(err); }
+}
+
+async function getZoneSummaryInternal(req, res, next) {
+  try {
+    const zone = await svc.getZoneSummary(req.params.id);
+    if (!zone) {
+      return res.status(404).json({ success: false, code: 'ZONE_NOT_FOUND', message: 'Zone not found', errors: [] });
+    }
+    return ok(res, { zone });
+  } catch (err) { return next(err); }
+}
+
 module.exports = {
   createZone, getZone, updateZone, deleteZone, getZones, getZoneStats, activateZone, deactivateZone,
   addLocationToZone, removeLocationFromZone, checkCoverage, findZoneForLocation,
+  getPublicZones, getZoneSummariesInternal, getZoneSummaryInternal,
 };

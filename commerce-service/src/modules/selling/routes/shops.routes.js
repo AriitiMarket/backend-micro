@@ -42,5 +42,7 @@ router.post('/admin/shops/:id/suspend', authenticate, authorize('ADMIN'), shopsC
 router.post('/admin/shops/:id/activate', authenticate, authorize('ADMIN'), shopsController.activateShop);
 // Admin public-allow toggle (in-place switch on the Stores table).
 router.patch('/admin/shops/:id/public', authenticate, authorize('ADMIN'), shopsController.setShopShowOnPublic);
+// Admin delivery coverage (service areas) for a shop.
+router.put('/admin/shops/:id/coverage', authenticate, authorize('ADMIN'), shopsController.setShopCoverage);
 
 module.exports = router;

@@ -4,6 +4,13 @@ const ctrl = require('../controllers/zones.controller');
 const { authenticate } = require('../../../app/middleware/authenticate');
 const authorize = require('../../../app/middleware/authorize');
 
+// Specific paths first: `/public` and `/location/:locationId` must not be
+// swallowed by `/:id`.
+//
+// `/public` is the anonymous marketplace selector's read (minimal projection of
+// active zones); Delivery serves it without an identity on purpose. The gateway
+// mirrors that posture with a method-restricted public-read rule.
+router.get('/public', ctrl.getPublicZones);
 router.get('/coverage/:locationId', ctrl.checkCoverage);
 router.get('/location/:locationId', ctrl.findZoneForLocation);
 router.get('/stats', authenticate, authorize('ADMIN'), ctrl.getZoneStats);

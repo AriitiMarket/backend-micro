@@ -209,16 +209,10 @@ async function assertShopsServeZone(shops, zone) {
   }
 
   const verdicts = (shops || []).map((shop) => verdictForShop(shop, zone.id, zone.name));
-  // Only enforce the zone-serving rule for shops that have ACTIVE delivery
-  // coverage configured. Shops without coverage (never set up, or paused) are
-  // allowed in degraded mode — the rule can't be verified for them — while a
-  // shop that IS configured for delivery but does not serve this zone is still
-  // rejected (Rule A: one order, one zone).
-  const enforceable = verdicts.filter((v) => v.configured && v.status === 'ACTIVE');
-  const failures = enforceable.filter((verdict) => !verdict.servesZone);
+  const failures = verdicts.filter((verdict) => !verdict.servesZone);
   if (!failures.length) return verdicts;
 
-  const passing = enforceable.length - failures.length;
+  const passing = verdicts.length - failures.length;
   if (passing > 0) {
     const names = failures.map((verdict) => verdict.shopName).join(', ');
     throw new ZoneError(

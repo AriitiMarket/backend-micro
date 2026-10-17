@@ -14,6 +14,9 @@ async function getPublicAllShops(req, res, next) {
       sort: req.query.sort || '-createdAt',
       page: req.query.page || 1,
       limit: req.query.limit || 20,
+      // Location-aware discovery: the buyer's selected city/zone.
+      zoneId: req.query.zoneId || undefined,
+      cityId: req.query.cityId || undefined,
     });
     return ok(res, { shops: result.shops, count: result.count, total: result.total, page: result.page, limit: result.limit });
   } catch (err) {
@@ -23,7 +26,9 @@ async function getPublicAllShops(req, res, next) {
 
 async function getPublicShopById(req, res, next) {
   try {
-    const shop = await publicShopService.getShopInfo(req.params.id);
+    const shop = await publicShopService.getShopInfo(req.params.id, {
+      zoneId: req.query.zoneId || undefined,
+    });
     return ok(res, { shop });
   } catch (err) {
     return next(err);

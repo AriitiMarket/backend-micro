@@ -201,6 +201,28 @@ async function setShopShowOnPublic(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+/** ADMIN: set a shop's delivery coverage (service areas). */
+async function setShopCoverage(req, res, next) {
+  try {
+    const { zoneIds, status } = req.body || {};
+    const admin = {
+      id: req.user && (req.user.id || req.user.sub),
+      name: req.user && (req.user.name || req.user.email || req.headers['x-user-email']),
+    };
+    const updated = await shopService.setCoverage(req.params.id, { zoneIds, status }, admin);
+    sendAudit({
+      action: 'SHOP_COVERAGE_UPDATED',
+      ...getAdminFromReq(req),
+      targetEntity: 'shop',
+      targetId: req.params.id,
+      details: { zoneIds, status },
+    });
+    return ok(res, { shop: updated }, 'Delivery coverage updated');
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   createShop,
   getSeller,
@@ -216,4 +238,5 @@ module.exports = {
   suspendShop,
   activateShop,
   setShopShowOnPublic,
+  setShopCoverage,
 };

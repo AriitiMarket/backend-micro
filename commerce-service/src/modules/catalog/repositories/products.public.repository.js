@@ -90,15 +90,20 @@ async function computeProductCountsByShop() {
 
 /**
  * List public products with allowlisted fields.
- * Supports: search, category, shopId, sort, page, limit.
+ * Supports: search, category, shopId, zoneId, cityId, sort, page, limit.
+ *
+ * Location-aware discovery (Rule C):
+ *   * `zoneId`  → only products from shops whose ACTIVE delivery coverage
+ *                 includes that delivery zone. Shops without configured
+ *                 coverage never match — not "serving every zone by default".
+ *   * `cityId`  → only products from shops physically located in that city.
+ * Both are AND-ed with the existing search/category/visibility filters.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, shopId, sort = '-createdAt', page = 1, limit = 20 } = opts;
+  const { search, category, shopId, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
 
   // AND-ed clauses: the visibility gates (including the category gate) and the
-  // search `$or` coexist here. (They used to share one `$or` key, so searching
-  // dropped the status gate and returned unpublished products to anonymous
-  // callers.)
+  // search `$or` coexist here.
   const clauses = visibilityClauses(await inactiveProductCategoryTitles());
 
   if (category) {
@@ -121,6 +126,25 @@ async function findPublicAll(opts = {}) {
         }),
       });
     }
+  }
+
+  // Location-aware filtering: resolve shop IDs that serve the selected
+  // zone / city, then restrict products to those shops.
+  if (zoneId || cityId) {
+    const Shop = require('../../selling/models/Shops');
+    const shopFilter = {};
+    if (zoneId) {
+      shopFilter['deliveryCoverage.zoneIds'] = String(zoneId);
+      shopFilter['deliveryCoverage.status'] = 'ACTIVE';
+    }
+    if (cityId) {
+      shopFilter['locationSnapshot.cityId'] = String(cityId);
+    }
+    const servingShops = await Shop.find(shopFilter).select('_id').lean();
+    const servingShopIds = servingShops.map((s) => String(s._id));
+    // A zone/city with no serving shops means zero products match —
+    // fail-closed rather than showing everything.
+    clauses.push({ shopId: { $in: servingShopIds.length ? servingShopIds : ['__none__'] } });
   }
 
   const filter = { $and: clauses };

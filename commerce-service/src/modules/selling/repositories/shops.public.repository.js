@@ -9,8 +9,8 @@ const { inactiveProductCategoryTitles, activeFilter } = require('../../catalog/r
  * marketplace browsing. Uses Mongoose .select() allowlists and .lean().
  */
 
-const PUBLIC_LIST_FIELDS = '_id name avatar description address ratings ratingCount productCount category';
-const PUBLIC_DETAIL_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.regionName locationSnapshot.areaName locationSnapshot.cityName';
+const PUBLIC_LIST_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.cityName locationSnapshot.areaName locationSnapshot.regionName locationSnapshot.sectorName locationSnapshot.fullAddress deliveryCoverage.zoneIds deliveryCoverage.zoneNames deliveryCoverage.status';
+const PUBLIC_DETAIL_FIELDS = '_id name avatar description address ratings ratingCount productCount category locationSnapshot.regionName locationSnapshot.areaName locationSnapshot.cityName locationSnapshot.sectorName locationSnapshot.fullAddress locationSnapshot.landmark locationSnapshot.resolvedAt deliveryCoverage.zoneIds deliveryCoverage.zoneNames deliveryCoverage.status';
 
 /**
  * Visibility filter — admin-curated public view: approved/active status AND
@@ -74,10 +74,26 @@ async function computeShopRatings() {
 
 /**
  * List public shops with allowlisted fields and computed productCount/ratings.
+ *
+ * Location-aware discovery (Rule C):
+ *   * `zoneId`  → only shops whose ACTIVE coverage includes that delivery zone.
+ *                 A shop with no configured coverage can never match — it is
+ *                 not "serving every zone by default".
+ *   * `cityId`  → only shops whose physical location snapshot is in that city.
+ * Both are AND-ed with the existing search/category/visibility filters, so the
+ * same eligibility rule applies wherever shops are listed.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, sort = '-createdAt', page = 1, limit = 20 } = opts;
+  const { search, category, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
   const filter = approvedFilter();
+
+  if (zoneId) {
+    filter['deliveryCoverage.zoneIds'] = String(zoneId);
+    filter['deliveryCoverage.status'] = 'ACTIVE';
+  }
+  if (cityId) {
+    filter['locationSnapshot.cityId'] = String(cityId);
+  }
 
   // Shop category browse (type 'business') — exact, case-insensitive match on
   // the title-as-FK, exactly how products.public.repository filters `category`.
