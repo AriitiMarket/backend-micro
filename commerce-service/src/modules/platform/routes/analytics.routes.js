@@ -23,4 +23,7 @@ router.get('/analytics/delivery-stats', authenticate, authorize('ADMIN'), contro
 router.get('/analytics/rider-performance', authenticate, authorize('ADMIN'), controller.getRiderPerformance);
 router.get('/analytics/shop-stats', authenticate, authorize('ADMIN'), controller.getShopStats);
 
+// Seller-scoped reports — a seller may only read their own shop's data.
+router.get('/analytics/seller/stats', authenticate, authorize('SELLER'), controller.getSellerStats);
+
 module.exports = router;

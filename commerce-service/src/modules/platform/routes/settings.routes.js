@@ -14,4 +14,8 @@ router.put('/settings/notifications', authenticate, authorize('ADMIN'), controll
 router.get('/settings/system', authenticate, authorize('ADMIN'), controller.getSystemSettings);
 router.put('/settings/system', authenticate, authorize('ADMIN'), controller.updateSystemSettings);
 
+// Report settings (admin only)
+router.get('/settings/reports', authenticate, authorize('ADMIN'), controller.getReportSettings);
+router.put('/settings/reports', authenticate, authorize('ADMIN'), controller.updateReportSettings);
+
 module.exports = router;
