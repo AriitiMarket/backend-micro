@@ -37,8 +37,9 @@ services:
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 30s
+      retries: 10
+      start_period: 30s
 
   # Redis Cache
   redis:
@@ -87,6 +88,7 @@ services:
         condition: service_healthy
     volumes:
       - ./commerce-service:/app/commerce-service
+      - /app/commerce-service/node_modules
       - ./packages:/app/packages
       - /app/node_modules
     networks:
@@ -128,6 +130,7 @@ services:
         condition: service_healthy
     volumes:
       - ./delivery-service:/app/delivery-service
+      - /app/delivery-service/node_modules
       - ./packages:/app/packages
       - /app/node_modules
     networks:
@@ -171,7 +174,7 @@ services:
         condition: service_healthy
     volumes:
       - ./identity-service:/app/identity-service
-      - ./identity-service/src/config/keys:/app/src/config/keys
+      - /app/identity-service/node_modules
       - ./packages:/app/packages
       - /app/node_modules
     networks:
@@ -218,6 +221,7 @@ services:
         condition: service_healthy
     volumes:
       - ./api-gateway:/app/api-gateway
+      - /app/api-gateway/node_modules
       - ./packages:/app/packages
       - /app/node_modules
     networks:

@@ -29,6 +29,7 @@ app.set('trust proxy', 1);
 app.use(enforceHttps);
 app.use(securityHeaders);
 app.use(cors(corsConfig));
+app.use(express.json());
 app.use(requestId);
 app.use(requestLogger);
 

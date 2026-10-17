@@ -1,5 +1,5 @@
 # Multi-stage build for Node.js services
-FROM node:latest AS builder
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ COPY . .
 RUN npm run build || true
 
 # Production image
-FROM node:latest
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 

@@ -66,35 +66,51 @@ function forward(req, res, targetUrl) {
   const query = req.url.includes('?') ? req.url.split('?')[1] : '';
   const targetPath = query ? rewrittenPath + '?' + query : rewrittenPath;
 
-  // Buffer the request body so we can forward it after async JWT verification.
-  const bodyChunks = [];
-  let received = 0;
-  let aborted = false;
+  // Use parsed body if available (express.json()), otherwise read from stream
+  const hasParsedBody = req.body && Object.keys(req.body).length > 0;
+  let body;
+  let bodyPromise;
 
-  req.on('data', (chunk) => {
-    if (aborted) return;
-    received += chunk.length;
-    if (received > env.maxBodyBytes) {
-      aborted = true;
-      if (!res.headersSent) {
-        res.writeHead(413, { 'Content-Type': 'application/json', 'X-Request-ID': req.id || '' });
-        res.end(JSON.stringify({
-          success: false,
-          code: 'PAYLOAD_TOO_LARGE',
-          message: 'Request body exceeds the ' + Math.floor(env.maxBodyBytes / (1024 * 1024)) + 'MB limit',
-          errors: [],
-        }));
-      }
-      req.destroy();
-      return;
-    }
-    bodyChunks.push(chunk);
-  });
+  if (hasParsedBody) {
+    body = Buffer.from(JSON.stringify(req.body));
+    bodyPromise = Promise.resolve(body);
+  } else {
+    // Buffer the request body so we can forward it after async JWT verification.
+    const bodyChunks = [];
+    let received = 0;
+    let aborted = false;
 
-  req.on('end', () => {
-    if (aborted) return;
-    const body = Buffer.concat(bodyChunks);
+    bodyPromise = new Promise((resolve, reject) => {
+      req.on('data', (chunk) => {
+        if (aborted) return;
+        received += chunk.length;
+        if (received > env.maxBodyBytes) {
+          aborted = true;
+          if (!res.headersSent) {
+            res.writeHead(413, { 'Content-Type': 'application/json', 'X-Request-ID': req.id || '' });
+            res.end(JSON.stringify({
+              success: false,
+              code: 'PAYLOAD_TOO_LARGE',
+              message: 'Request body exceeds the ' + Math.floor(env.maxBodyBytes / (1024 * 1024)) + 'MB limit',
+              errors: [],
+            }));
+          }
+          req.destroy();
+          return;
+        }
+        bodyChunks.push(chunk);
+      });
 
+      req.on('end', () => {
+        if (aborted) return;
+        resolve(Buffer.concat(bodyChunks));
+      });
+
+      req.on('error', reject);
+    });
+  }
+
+  bodyPromise.then((body) => {
     extractIdentityFromHeader(req.headers.authorization).then((identity) => {
       const headers = {};
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
