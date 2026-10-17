@@ -29,7 +29,6 @@ jobs:
           npm --prefix packages/database install
           npm --prefix packages/internal-auth install
           npm --prefix packages/request-context install
-          npm --prefix packages/response-utils install
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Run architecture tests
@@ -124,7 +123,6 @@ jobs:
           npm --prefix packages/database install
           npm --prefix packages/internal-auth install
           npm --prefix packages/request-context install
-          npm --prefix packages/response-utils install
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Run service unit tests
@@ -194,7 +192,6 @@ jobs:
           npm --prefix packages/database install
           npm --prefix packages/internal-auth install
           npm --prefix packages/request-context install
-          npm --prefix packages/response-utils install
           npm --prefix packages/service-client install
           npm --prefix packages/validators install
       - name: Install service dependencies
