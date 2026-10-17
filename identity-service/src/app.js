@@ -24,7 +24,7 @@ const app = express();
 // handling this request is correlated with the id the gateway assigned at the
 // edge.
 app.use(requestId);
-app.use(cors({ origin: [env.corsOrigin, 'http://localhost:8000'], credentials: false }));
+app.use(cors({ origin: [env.corsOrigin, 'http://localhost:3000'], credentials: false }));
 app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.get('/', function (req, res) { res.send('Identity Service is running'); });
