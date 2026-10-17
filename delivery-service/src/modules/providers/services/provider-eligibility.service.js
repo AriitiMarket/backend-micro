@@ -22,7 +22,7 @@ function isProviderEligible(provider, constraints = {}) {
   if (!provider) return { eligible: false, reason: 'Provider does not exist' };
 
   // 1. Account status — a provider the admin deactivated must never receive work.
-  if (provider.status === 'suspended') return { eligible: false, reason: 'Provider account is deactivated' };
+  if (provider.status === 'suspended') return { eligible: false, reason: 'Provider account is suspended (deactivated)' };
   if (provider.status === 'pending') return { eligible: false, reason: 'Provider is not approved yet' };
   if (provider.status === 'rejected') return { eligible: false, reason: 'Provider application was rejected' };
 
@@ -30,20 +30,24 @@ function isProviderEligible(provider, constraints = {}) {
   if (provider.status === 'offline' || !provider.availability?.isOnline) {
     return { eligible: false, reason: 'Provider is offline' };
   }
-  // BUSY is not eligible for a NEW assignment: the provider is already on work
-  // (at capacity / handling deliveries). It flips back to `available` through
-  // the capacity service as work completes.
-  if (provider.status !== 'available') {
-    return { eligible: false, reason: `Provider status ${provider.status} is not assignable` };
-  }
 
-  // 3. Capacity Constraints (docs missing the field fall back to the schema default)
+  // 3. Capacity Constraints — checked BEFORE the status gate below so a
+  // provider whose status was already flipped to `busy` by the capacity
+  // service still reports a capacity/limit reason (not "busy is not
+  // assignable"). Docs missing the field fall back to the schema default.
   const maxAssignments = Number.isFinite(provider.maxActiveAssignments) ? provider.maxActiveAssignments : 3;
   if ((provider.activeDeliveries ?? 0) >= maxAssignments) {
     return { eligible: false, reason: 'Provider maximum assignment limit reached' };
   }
   if (constraints.weight && provider.maxCapacityKg && constraints.weight > provider.maxCapacityKg) {
     return { eligible: false, reason: 'Provider weight capacity exceeded' };
+  }
+
+  // BUSY is not eligible for a NEW assignment: the provider is already on work
+  // (at capacity / handling deliveries). It flips back to `available` through
+  // the capacity service as work completes.
+  if (provider.status !== 'available') {
+    return { eligible: false, reason: `Provider status ${provider.status} is not assignable` };
   }
 
   // 4. Service Coverage

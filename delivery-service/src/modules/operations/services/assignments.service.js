@@ -156,10 +156,11 @@ async function createAssignment(data) {
     // Ownership first, so the state-machine side effects (milestone, tracking,
     // Commerce notification) carry the provider and the assignment reference.
     const ownership = { providerId: data.providerId, assignmentId: assignment._id };
-    // Backfill ONLY a missing zone from the resolved one. An existing zone/port
-    // is the delivery's real area and is never overwritten — not even by the
-    // assigned provider's own zone/port (MVP §12), forced or not.
+    // Backfill ONLY a missing zone/port. An existing zone/port is the
+    // delivery's real area and is never overwritten — not even by the assigned
+    // provider's own zone/port (MVP §12), forced or not.
     if (zoneId && !originalZoneId) ownership['destination.zoneId'] = zoneId;
+    if (provider.portId && !originalPortId) ownership['destination.portId'] = provider.portId;
     await deliveriesRepo.updateFields(data.deliveryId, ownership);
     // One state machine for every assignment path: the status change, its
     // milestone (`assignedAt`) and the downstream notifications are identical
