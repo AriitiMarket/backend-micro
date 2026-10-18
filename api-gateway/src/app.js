@@ -7,6 +7,7 @@ const requestId = require('./middleware/requestId');
 const requestLogger = require('./middleware/requestLogger');
 const identify = require('./middleware/identify');
 const authorizeRequest = require('./middleware/authorizeRequest');
+const enforcePermissions = require('./middleware/enforcePermissions');
 const { apiLimiter, authLimiter } = require('./middleware/rateLimiter');
 const { enforceHttps, securityHeaders } = require('./middleware/security');
 const routes = require('./routes');
@@ -118,6 +119,11 @@ app.use('/api', identify, apiLimiter);
 // proxy, which only relays coarse identity downstream. Paths with no entry in
 // authorizeRequest's table are untouched.
 app.use('/api', authorizeRequest);
+
+// Permission enforcement — validates that the authenticated admin has the required
+// permissions for the endpoint (2-role system: SUPER_ADMIN vs OPERATIONS_ADMIN).
+// Applies to all /admin/* and /delivery/* endpoints.
+app.use('/api', enforcePermissions);
 
 // Pure proxy.
 app.use('/api', routes);
