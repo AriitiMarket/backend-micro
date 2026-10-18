@@ -131,6 +131,9 @@ jobs:
           npm --prefix ../packages/request-context install --no-audit --no-fund
           npm --prefix ../packages/service-client install --no-audit --no-fund
           npm --prefix ../packages/validators install --no-audit --no-fund
+      - name: Generate ephemeral JWT signing keys
+        if: ${{ matrix.service.dir == 'identity-service' }}
+        run: node src/config/keys/generate.js
       - name: Run service unit tests
         run: npm test
   test-integration:
