@@ -22,8 +22,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: backend-services/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install root dependencies
@@ -121,8 +119,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: backend-services/${{ matrix.service.dir }}/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install service dependencies
@@ -194,8 +190,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: backend-services/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install root dependencies
