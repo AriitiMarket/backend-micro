@@ -231,4 +231,67 @@ router.post('/admin/reviews/:reviewId/reject', authenticate, authorize('ADMIN'),
   }
 });
 
+// FIX #4: Reconcile order group - check for split payments between seller orders
+router.get('/admin/order-group/:orderGroupId/reconcile', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { orderGroupId } = req.params;
+    
+    if (!orderGroupId) {
+      return res.status(400).json({
+        success: false,
+        error: 'orderGroupId is required',
+        code: 'MISSING_ORDER_GROUP'
+      });
+    }
+    
+    // Find all orders in this group
+    const orders = await Order.find({ orderGroupId }).select('_id status paymentStatus totalPrice buyerId sellerId createdAt');
+    
+    if (orders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order group not found',
+        code: 'ORDER_GROUP_NOT_FOUND'
+      });
+    }
+    
+    // Check payment status split
+    const paymentStatuses = orders.map(o => o.paymentStatus);
+    const uniqueStatuses = [...new Set(paymentStatuses)];
+    
+    const allPaid = paymentStatuses.every(s => s === 'PAID');
+    const allPending = paymentStatuses.every(s => s === 'PENDING');
+    const isSplit = !allPaid && !allPending && uniqueStatuses.length > 1;
+    
+    // Build response
+    const reconciliation = {
+      orderGroupId,
+      totalOrders: orders.length,
+      totalAmount: orders.reduce((sum, o) => sum + (o.totalPrice || 0), 0),
+      isReconciled: !isSplit,
+      status: isSplit ? 'SPLIT_PAYMENT' : 'RECONCILED',
+      paymentStatuses: {
+        PAID: orders.filter(o => o.paymentStatus === 'PAID').length,
+        PENDING: orders.filter(o => o.paymentStatus === 'PENDING').length,
+        FAILED: orders.filter(o => o.paymentStatus === 'FAILED').length,
+        REFUNDED: orders.filter(o => o.paymentStatus === 'REFUNDED').length
+      },
+      orders: orders.map(o => ({
+        orderId: o._id,
+        status: o.status,
+        paymentStatus: o.paymentStatus,
+        totalPrice: o.totalPrice,
+        createdAt: o.createdAt
+      })),
+      alert: isSplit 
+        ? 'Split payment detected - some orders paid, others not. Manual intervention may be needed.'
+        : null
+    };
+    
+    return res.json({ success: true, reconciliation });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 module.exports = router;

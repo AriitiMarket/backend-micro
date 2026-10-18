@@ -141,11 +141,14 @@ async function cancelOrder(req, res, next) {
 /**
  * PHASE 2: Get real-time inventory availability.
  * Returns stock, reserved, and available quantities.
+ * ALSO validates that seller serves buyer's zone (FIX #1)
  */
 async function getInventoryAvailability(req, res, next) {
   try {
     const { productId } = req.params;
-    const availability = await orderService.getInventoryAvailability(productId);
+    const buyerId = req.user.id;
+    
+    const availability = await orderService.getInventoryAvailability(productId, buyerId);
     return ok(res, { availability });
   } catch (err) { return next(err); }
 }
@@ -158,15 +161,19 @@ async function getInventoryAvailability(req, res, next) {
  * with this order's delivery?" without a cross-service call. Authorization
  * follows the ORDER's ownership (buyer / owning seller / admin), so a delivery
  * detail can never be used to probe someone else's shipment.
+ * 
+ * FIX #15: Return null delivery instead of 404 when not yet linked
  */
 async function getOrderDelivery(req, res, next) {
   try {
     await orderService.validateOrderOwnership(req.params.orderId, req.user.id, req.user.role);
     const delivery = await orderDeliveryService.getByOrderId(req.params.orderId);
-    if (!delivery) {
-      return res.status(404).json({ success: false, message: 'No delivery linked to this order', errors: [] });
-    }
-    return ok(res, { delivery });
+    // FIX #15: Return structured response with null delivery instead of 404
+    return ok(res, { 
+      delivery: delivery || null, 
+      linked: Boolean(delivery),
+      message: delivery ? 'Delivery linked to order' : 'No delivery linked yet - order may still be in processing'
+    });
   } catch (err) { return next(err); }
 }
 

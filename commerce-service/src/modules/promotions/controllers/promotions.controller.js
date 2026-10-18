@@ -71,6 +71,35 @@ async function deletePromotion(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+/**
+ * Validate a promo code for checkout.
+ * Public endpoint - buyers can validate codes before placing an order.
+ */
+async function validatePromoCode(req, res, next) {
+  try {
+    const { code, cartItems, subtotal, buyerId, isFirstOrder } = req.body;
+    const result = await promotionsService.validateCode(
+      code,
+      cartItems,
+      subtotal,
+      buyerId || caller(req).userId,
+      isFirstOrder || false
+    );
+    return ok(res, result);
+  } catch (err) { return next(err); }
+}
+
+/**
+ * Get usage statistics for a promotion.
+ * Owner/admin only.
+ */
+async function getPromotionStats(req, res, next) {
+  try {
+    const stats = await promotionsService.getUsageStats(req.params.id, caller(req));
+    return ok(res, stats);
+  } catch (err) { return next(err); }
+}
+
 module.exports = {
   listPromotions,
   listShopPromotions,
@@ -78,4 +107,6 @@ module.exports = {
   createPromotion,
   updatePromotion,
   deletePromotion,
+  validatePromoCode,
+  getPromotionStats,
 };

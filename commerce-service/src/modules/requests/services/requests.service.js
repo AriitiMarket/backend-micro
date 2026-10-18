@@ -500,6 +500,14 @@ class RequestsService {
     this.assertNotSuspended(request);
     await this.assertNotRestricted(user.id, isBuyerSide ? 'BUYER' : 'SELLER');
 
+    // FIX #13: Check negotiation depth to prevent offer spirals
+    if (request.negotiationDepth >= (request.maxNegotiationDepth || 10)) {
+      throw new ApiError(
+        'Maximum negotiation rounds reached. Please reach an agreement or close this request.',
+        400
+      );
+    }
+
     const quantity = Number(payload.quantity); const unitPrice = Number(payload.unitPrice);
     if (!Number.isInteger(quantity) || quantity < 1 || !Number.isFinite(unitPrice) || unitPrice < 0) throw new ApiError('A valid quantity and unitPrice are required', 400);
 
@@ -539,7 +547,13 @@ class RequestsService {
     };
     const offers = (request.offers || []).map((item) => ({ ...plainOffer(item), status: 'SUPERSEDED' }));
     offers.push(offer);
-    const updated = await requestRepository.findByIdAndUpdate(id, { offers, status: 'NEGOTIATING' });
+    
+    // FIX #13: Increment negotiation depth
+    const updated = await requestRepository.findByIdAndUpdate(id, { 
+      offers, 
+      status: 'NEGOTIATING',
+      negotiationDepth: (request.negotiationDepth || 0) + 1
+    });
 
     const party = isBuyerSide ? 'Buyer' : 'Seller';
     const unitLabel = unit ? ` ${unit}` : '';

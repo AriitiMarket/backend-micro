@@ -189,6 +189,7 @@ const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 const PUBLIC_READ_PREFIXES = [
   '/delivery/zone/public',
   '/delivery/zone/location/',
+  '/delivery/location',
   '/delivery/location/',
 ];
 

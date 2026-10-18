@@ -676,15 +676,15 @@ class ProductService {
    * on, so a deactivated product actually disappears from the storefront instead
    * of the button being decorative.
    */
-  async bulkSetProductVisibility(productIds, action) {
+  async bulkSetProductVisibility(productIds, action, seller = null) {
     if (!Array.isArray(productIds) || productIds.length === 0) {
       throw new ApiError('productIds must be a non-empty array', 400);
     }
     if (productIds.length > 500) {
       throw new ApiError('Too many products: the limit is 500 per action', 400);
     }
-    if (!['activate', 'deactivate'].includes(action)) {
-      throw new ApiError('action must be "activate" or "deactivate"', 400);
+    if (!['activate', 'deactivate', 'publish', 'draft', 'archive', 'unarchive'].includes(action)) {
+      throw new ApiError('action must be one of: activate, deactivate, publish, draft, archive, unarchive', 400);
     }
     // One malformed id used to CastError the whole batch into a 400 with no
     // per-id detail; reject the bad shapes up front with a clear message.
@@ -693,12 +693,56 @@ class ProductService {
       throw new ApiError(`productIds contains ${invalid.length} invalid id(s)`, 400);
     }
 
-    const isActive = action === 'activate';
-    const result = await productRepository.setActiveForIds(productIds, isActive);
+    // FIX #6: If seller is provided, verify they own all products
+    if (seller && seller.role === 'SELLER') {
+      const products = await productRepository.find({ _id: { $in: productIds } });
+      const unownedIds = products.filter(p => String(p.sellerId) !== String(seller.id)).map(p => p._id);
+      
+      if (unownedIds.length > 0) {
+        throw new ApiError(`You can only bulk update your own products. ${unownedIds.length} product(s) not owned by you.`, 403);
+      }
+    }
+
+    // Perform the bulk action
+    let result;
+    switch (action) {
+      case 'activate':
+      case 'deactivate':
+        const isActive = action === 'activate';
+        result = await productRepository.setActiveForIds(productIds, isActive);
+        break;
+        
+      case 'publish':
+        result = await productRepository.updateMany(
+          { _id: { $in: productIds } },
+          { status: 'PUBLISHED' }
+        );
+        break;
+        
+      case 'draft':
+        result = await productRepository.updateMany(
+          { _id: { $in: productIds } },
+          { status: 'DRAFT' }
+        );
+        break;
+        
+      case 'archive':
+        result = await productRepository.updateMany(
+          { _id: { $in: productIds } },
+          { archived: true }
+        );
+        break;
+        
+      case 'unarchive':
+        result = await productRepository.updateMany(
+          { _id: { $in: productIds } },
+          { archived: false }
+        );
+        break;
+    }
 
     return {
       action,
-      isActive,
       requested: productIds.length,
       updated: result.modifiedCount || 0,
       matched: result.matchedCount || 0,
@@ -715,9 +759,11 @@ class ProductService {
    * name/description/category/tags), but it is now expressed as a single indexed
    * Mongo query with a bounded page size.
    *
+   * FIX #7: Added zone/city filtering to show only products from shops serving that area
+   *
    * Returns `{ products, total, page, limit, totalPages }`.
    */
-  async searchProducts(query, { requester = null, page = 1, limit = 50 } = {}) {
+  async searchProducts(query, { requester = null, page = 1, limit = 50, zoneId = null, cityId = null } = {}) {
     // Always visibility-filtered: unauthenticated search used to load the raw
     // collection and leaked deactivated products + unmoderated reviews.
     const isAdmin = isAdminRequester(requester);
@@ -726,6 +772,33 @@ class ProductService {
     // Gates as AND-ed clauses (never one object) so the search `$or` below
     // cannot clobber them — same class of bug as the public list leak.
     clauses.push(...(await visibilityClauses({ includeInactive: isAdmin })));
+    
+    // FIX #7: Filter by zone/city if provided
+    if (zoneId || cityId) {
+      const shopQuery = {};
+      if (zoneId) {
+        shopQuery['deliveryCoverage.zoneIds'] = zoneId;
+      }
+      if (cityId) {
+        shopQuery['locationSnapshot.cityId'] = cityId;
+      }
+      
+      const shopsInZone = await shopRepository.find(shopQuery).select('_id');
+      const shopIds = shopsInZone.map(s => String(s._id));
+      
+      if (shopIds.length === 0) {
+        // No shops serve this zone, return empty results
+        return {
+          products: [],
+          total: 0,
+          page: Math.max(1, Number(page)),
+          limit: Math.max(1, Math.min(Number(limit) || 50, 200)),
+          totalPages: 0
+        };
+      }
+      
+      clauses.push({ shopId: { $in: shopIds } });
+    }
 
     const terms = String(query || '').trim().split(/\s+/).filter(Boolean).map(escapeRegex);
     if (terms.length) {

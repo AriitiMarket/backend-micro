@@ -15,6 +15,7 @@ const sellerShipmentSchema = new mongoose.Schema({
   // Products from this seller in the order
   items: [{ type: mongoose.Schema.Types.Mixed, required: true }],
   subtotal: { type: Number, default: 0 },
+  discountAmount: { type: Number, default: 0 }, // Shop-specific promotion discount
 
   // Origin / pickup location snapshot (read-only at time of order)
   origin: {
@@ -60,8 +61,20 @@ const orderSchema = new mongoose.Schema({
   // the buyer's history).
   subtotal: { type: Number, default: 0 },
   shippingFee: { type: Number, default: 0 },
+  discountAmount: { type: Number, default: 0 }, // Applied promotion discount
   currency: { type: String, default: 'ETB' },
   totalPrice: { type: Number, required: true },
+
+  // --- Promotion applied to this order ---
+  appliedPromotionId: { type: String, default: null },
+  promoCode: { type: String, default: null },
+  promoDiscountDetails: {
+    discountType: { type: String },
+    discountPercent: { type: Number },
+    fixedAmount: { type: Number },
+    maxDiscountAmount: { type: Number },
+    isPlatformWide: { type: Boolean },
+  },
   // The canonical order lifecycle (modules/fulfillment/constants/orderStatuses).
   // This was a bare String, so any `.save()` could persist a status the state
   // machine knows nothing about — and every read then had to guess. Legacy

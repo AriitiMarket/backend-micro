@@ -172,20 +172,28 @@ async function getAllProducts(req, res, next) {
 async function bulkProductAction(req, res, next) {
   try {
     const { productIds, action } = req.body || {};
-    const result = await productService.bulkSetProductVisibility(productIds, action);
-    const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({
-      action: 'PRODUCT_VISIBILITY_CHANGED',
-      level: 'INFO',
-      adminId,
-      adminName,
-      module: 'commerce',
-      targetEntity: 'product',
-      targetId: null,
-      details: { operation: 'bulk_visibility', action: result.action, updated: result.updated },
-      ipAddress,
-    });
-    return ok(res, result, `${result.updated} product(s) updated`);
+    
+    // FIX #6: For sellers, verify they own all products being updated
+    if (req.user && req.user.role === 'SELLER') {
+      const result = await productService.bulkSetProductVisibility(productIds, action, req.user);
+      return ok(res, result, `${result.updated} product(s) updated`);
+    } else {
+      // Admin can bulk update any products
+      const result = await productService.bulkSetProductVisibility(productIds, action);
+      const { adminId, adminName, ipAddress } = getAdminFromReq(req);
+      sendAudit({
+        action: 'PRODUCT_VISIBILITY_CHANGED',
+        level: 'INFO',
+        adminId,
+        adminName,
+        module: 'commerce',
+        targetEntity: 'product',
+        targetId: null,
+        details: { operation: 'bulk_visibility', action: result.action, updated: result.updated },
+        ipAddress,
+      });
+      return ok(res, result, `${result.updated} product(s) updated`);
+    }
   } catch (err) { return next(err); }
 }
 
@@ -238,10 +246,15 @@ async function createReview(req, res, next) {
 async function searchProducts(req, res, next) {
   try {
     const query = (req.query.q || '').trim();
+    // FIX #7: Add zone and city filtering
+    const { zoneId, cityId } = req.query;
+    
     const result = await productService.searchProducts(query, {
       requester: req.user || null,
       page: req.query.page,
       limit: req.query.limit,
+      zoneId,
+      cityId
     });
     return ok(res, {
       products: result.products,

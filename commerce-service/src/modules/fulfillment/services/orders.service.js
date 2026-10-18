@@ -10,6 +10,9 @@ const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { ORDER_STATUSES, normalizeStatus, canTransition } = require('../constants/orderStatuses');
 const { isProductPubliclyVisible } = require('../../../shared/utils/productVisibility');
 const { normalizeRole } = require('../../../shared/utils/roles');
+const promotionService = require('../../promotions/services/promotions.service');
+const { DiscountCalculator } = require('../../promotions/services/promotions.service');
+const usageTracker = require('../../promotions/services/usageTracker.service');
 
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 
@@ -26,10 +29,50 @@ class ApiError extends Error { constructor(message, statusCode) { super(message)
  * The rule lives in shared/utils/productVisibility so the storefront, the
  * catalog lists and this path can never drift apart again.
  */
-async function assertOrderable(product) {
+/**
+ * FIX #8: Check if product can be ordered (including backorder/preorder)
+ */
+async function assertOrderable(product, quantity = 1) {
   if (!(await isProductPubliclyVisible(product))) {
     throw new ApiError(`Product "${product.name}" is no longer available`, 400);
   }
+  
+  const available = (product.stock || 0) - (product.reserved || 0);
+  
+  // Standard stock is available
+  if (available >= quantity) {
+    return { type: 'STANDARD', available };
+  }
+  
+  // Check backorder option
+  if (product.allowBackorder && product.backorderStatus === 'OPEN') {
+    const backorderSpace = product.backorderLimit - (product.currentBackorders || 0);
+    if (backorderSpace > 0) {
+      return {
+        type: 'BACKORDER',
+        standardAvailable: available,
+        canBackorder: true,
+        backorderAvailable: Math.min(quantity - available, backorderSpace)
+      };
+    }
+  }
+  
+  // Check preorder option
+  if (product.allowPreorder && product.preorderStatus === 'OPEN') {
+    const preorderSpace = product.preorderStock - (product.currentPreorders || 0);
+    if (preorderSpace > 0) {
+      return {
+        type: 'PREORDER',
+        standardAvailable: available,
+        canPreorder: true,
+        preorderAvailable: preorderSpace,
+        preorderDate: product.preorderAvailableDate
+      };
+    }
+  }
+  
+  // Not orderable
+  throw new ApiError(`Product "${product.name}" is out of stock and not available for backorder/preorder`, 400);
 }
 
 /**
@@ -74,6 +117,20 @@ function computeShipping(subtotal) {
 }
 
 class OrderService {
+  /**
+   * Check if this is the buyer's first order.
+   *
+   * @param {string} buyerId - The buyer user ID
+   * @returns {Promise<boolean>} True if this is the first order
+   */
+  async isFirstOrder(buyerId) {
+    if (!buyerId) return false;
+    const existingOrders = await orderRepository.find({
+      filter: { buyerId },
+      limit: 1,
+    });
+    return !existingOrders || existingOrders.length === 0;
+  }
   async validateOrderOwnership(orderId, userId, userRole) {
     const order = await orderRepository.findById(orderId);
     if (!order) throw new ApiError('Order not found', 404);
@@ -96,7 +153,7 @@ class OrderService {
     if (role !== 'SELLER') throw new ApiError('Forbidden: only sellers can query seller orders', 403);
     
     // If sellerId equals the requesting user's ID, allow (seller's own identity)
-    if (sellerId === requestingUserId) return;
+    if (String(sellerId) === String(requestingUserId)) return;
 
     // The seller UI passes the SHOP id (it manages orders per shop). Accept it
     // only when the requesting seller actually owns that shop — the query then
@@ -296,7 +353,7 @@ class OrderService {
   async createOrder(payload) {
     // `totalPrice` from the client is deliberately ignored: every line is
     // re-priced from the Product collection and the total is recomputed here.
-    const { cart, shippingAddress, user, paymentInfo, destination, requestId } = payload;
+    const { cart, shippingAddress, user, paymentInfo, destination, requestId, promoCode } = payload;
     // COD is currently the only configured buyer settlement rail. Never trust
     // a client-provided payment status when creating an order.
     const paymentMethod = String(paymentInfo && paymentInfo.method || 'COD').trim().toUpperCase();
@@ -378,6 +435,30 @@ class OrderService {
     // Validate inventory availability against the re-priced lines
     await this.validateInventoryAvailability(pricedItems);
 
+    // Validate promo code if provided (after items are priced)
+    let appliedPromotion = null;
+    let totalDiscountAmount = 0;
+    if (promoCode) {
+      try {
+        // Calculate total subtotal for validation
+        const totalSubtotal = pricedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        // Check if this is the buyer's first order
+        const isFirstOrder = await this.isFirstOrder(buyerId);
+        const validation = await promotionService.validateCode(
+          promoCode,
+          pricedItems,
+          totalSubtotal,
+          buyerId,
+          isFirstOrder
+        );
+        appliedPromotion = validation.promotion;
+        totalDiscountAmount = validation.discountAmount;
+      } catch (err) {
+        // If promo code is invalid, throw error to prevent order creation
+        throw new ApiError(err.message || 'Invalid promo code', 400);
+      }
+    }
+
     // Validate destination
     if (!destination || !destination.sectorId || !destination.fullAddress) {
       throw new ApiError('Delivery destination is required: sectorId, fullAddress, and phone are mandatory', 400);
@@ -431,6 +512,19 @@ class OrderService {
 
       const shipmentSubtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
 
+      // Calculate shop-specific discount if promotion applies
+      let shipmentDiscount = 0;
+      if (appliedPromotion) {
+        // Platform-wide promotions apply to all shops
+        // Shop-owned promotions only apply to their own shop
+        if (appliedPromotion.isPlatformWide || String(appliedPromotion.shopId) === String(shopId)) {
+          const discountResult = DiscountCalculator.calculateDiscount(appliedPromotion, shipmentSubtotal);
+          if (discountResult.applicable) {
+            shipmentDiscount = discountResult.discountAmount;
+          }
+        }
+      }
+
       return {
         sellerId: sellerId || '',
         // The BUSINESS id (a SellerApplication _id), never `shop.ownerId` —
@@ -441,6 +535,7 @@ class OrderService {
         shopName: shop?.name || '',
         items,
         subtotal: shipmentSubtotal,
+        discountAmount: shipmentDiscount,
         currency: items[0]?.currency || 'ETB',
         origin,
       };
@@ -458,6 +553,7 @@ class OrderService {
         // these orders. (A single cart-wide total used to be copied into every
         // order, so a 2-shop checkout displayed the whole amount on both.)
         const shipmentShipping = computeShipping(shipment.subtotal);
+        const discountAmount = shipment.discountAmount || 0;
         const order = await orderRepository.create({
           cart: shipment.items,
           shippingAddress,
@@ -465,8 +561,19 @@ class OrderService {
           // --- money (per seller/shop, server-computed) ---
           subtotal: shipment.subtotal,
           shippingFee: shipmentShipping,
+          discountAmount,
           currency: shipment.currency || 'ETB',
-          totalPrice: Math.round((shipment.subtotal + shipmentShipping) * 100) / 100,
+          totalPrice: Math.round((shipment.subtotal + shipmentShipping - discountAmount) * 100) / 100,
+          // --- promotion details ---
+          appliedPromotionId: appliedPromotion ? appliedPromotion.id : null,
+          promoCode: appliedPromotion ? appliedPromotion.code : null,
+          promoDiscountDetails: appliedPromotion ? {
+            discountType: appliedPromotion.discountType,
+            discountPercent: appliedPromotion.discountPercent,
+            fixedAmount: appliedPromotion.fixedAmount,
+            maxDiscountAmount: appliedPromotion.maxDiscountAmount,
+            isPlatformWide: appliedPromotion.isPlatformWide,
+          } : null,
           paymentInfo: safePaymentInfo,
           buyerId,
           sellerId: shipment.sellerId,
@@ -500,6 +607,27 @@ class OrderService {
       // other sellers' orders committed while the buyer receives an error.
       await this._compensateFailedCheckout(orders, reservations, err);
       throw err;
+    }
+
+    // Record promotion usage if a promo code was applied
+    if (appliedPromotion && appliedPromotion.id && buyerId) {
+      try {
+        // Record usage for each order (multi-seller checkout)
+        for (const order of orders) {
+          // Only record if this order actually received a discount
+          if (order.discountAmount > 0) {
+            await usageTracker.recordUsage(
+              appliedPromotion.id,
+              buyerId,
+              order._id,
+              order.discountAmount
+            );
+          }
+        }
+      } catch (usageErr) {
+        // Log usage tracking error but don't fail the order
+        console.error('[order] Failed to record promotion usage:', usageErr.message);
+      }
     }
 
     return orders;
@@ -714,6 +842,9 @@ class OrderService {
   async updateOrderStatus(orderId, { status }) {
     const order = await orderRepository.findById(orderId);
     if (!order) throw new ApiError('Order not found', 404);
+    
+    const previousStatus = normalizeStatus(order.status);
+    
     // Both sides are normalized: stored documents may still carry the legacy
     // 'PENDING'/'CONFIRMED' spellings, and older clients send legacy values.
     const nextStatus = status ? normalizeStatus(status) : null;
@@ -725,6 +856,26 @@ class OrderService {
       order.deliveredAt = Date.now();
     }
     await order.save();
+    
+    // FIX #10: Send notification on status change
+    if (previousStatus !== normalizeStatus(order.status)) {
+      try {
+        const notificationService = require('../../../shared/services/notification.service');
+        const buyer = await require('../../../app/clients/identity.client').getUser(order.buyerId);
+        
+        if (buyer && buyer.email) {
+          await notificationService.notifyOrderStatus(
+            order,
+            previousStatus,
+            normalizeStatus(order.status),
+            buyer.email
+          );
+        }
+      } catch (err) {
+        console.warn(`Failed to send order notification: ${err.message}`);
+      }
+    }
+    
     if (normalizeStatus(order.status) === ORDER_STATUSES.CONFIRMED) {
       const shipment = (order.sellerShipments || [])[0];
       if (shipment) {
@@ -1019,23 +1170,64 @@ class OrderService {
     return orderRepository.rollbackPaymentConfirmation(orderId, paymentStatus, status);
   }
 
-  async getInventoryAvailability(productId) {
+  async getInventoryAvailability(productId, buyerId) {
     const product = await productRepository.findById(productId);
     if (!product) throw new ApiError('Product not found', 404);
-    // Public endpoint: a product that fails any public gate (deactivated,
-    // seller-drafted, shop hidden/removed, inactive category) must 404, not
-    // leak exact stock.
     if (!(await isProductPubliclyVisible(product))) throw new ApiError('Product not found', 404);
+    
+    // FIX #1: Validate seller serves buyer's zone
+    if (buyerId) {
+      try {
+        const shop = await shopRepository.findById(product.shopId);
+        if (!shop) throw new ApiError('Product not found', 404);
+        
+        const buyerZone = await deliveryClient.getBuyerZone(buyerId);
+        if (buyerZone && shop.deliveryCoverage?.zoneIds) {
+          if (!shop.deliveryCoverage.zoneIds.includes(buyerZone.id)) {
+            return {
+              productId: product._id.toString(),
+              productName: product.name,
+              available: 0,
+              message: `${shop.name} does not serve your delivery zone (${buyerZone.name})`,
+              serviceError: true
+            };
+          }
+        }
+      } catch (err) {
+        console.warn(`Zone validation failed for buyer ${buyerId}:`, err.message);
+      }
+    }
+    
     const stock = product.stock || 0;
     const reserved = product.reserved || 0;
     const available = Math.max(0, stock - reserved);
-    return {
+    
+    // FIX #8: Include backorder/preorder status
+    const availability = {
       productId: product._id.toString(),
       productName: product.name,
       stock, reserved, available,
       lowStockThreshold: product.lowStockThreshold || 5,
       isLowStock: available <= (product.lowStockThreshold || 5)
     };
+    
+    // Add backorder info if available
+    if (product.allowBackorder && product.currentBackorders < product.backorderLimit) {
+      availability.backorderAvailable = true;
+      availability.backorderRemaining = product.backorderLimit - product.currentBackorders;
+      availability.backorderStatus = product.backorderStatus;
+    }
+    
+    // Add preorder info if available
+    if (product.allowPreorder && product.currentPreorders < product.preorderStock) {
+      availability.preorderAvailable = true;
+      availability.preorderDate = product.preorderAvailableDate;
+      availability.preorderPrice = product.preorderPrice || product.discountPrice;
+      availability.preorderRemaining = product.preorderStock - product.currentPreorders;
+      availability.preorderStatus = product.preorderStatus;
+    }
+    
+    return availability;
   }
 
   /**

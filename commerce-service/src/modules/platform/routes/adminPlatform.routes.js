@@ -3,6 +3,7 @@ const router = express.Router();
 const controller = require('../controllers/adminPlatform.controller');
 const { authenticate } = require('../../../app/middleware/authenticate');
 const { authorize } = require('../../../app/middleware/authorize');
+const promotionsController = require('../../promotions/controllers/promotions.controller');
 
 /**
  * Platform Admin Routes
@@ -33,5 +34,12 @@ router.get('/orders/:orderId/pickup-delivery', authenticate, authorize('ADMIN'),
 
 // Analytics
 router.get('/growth-analytics', authenticate, authorize('ADMIN'), controller.getGrowthAnalytics);
+
+// Promotions - Platform-wide oversight
+router.get('/promotions', authenticate, authorize('ADMIN'), promotionsController.listPromotions);
+router.get('/promotions/:id', authenticate, authorize('ADMIN'), promotionsController.getPromotion);
+router.get('/promotions/:id/stats', authenticate, authorize('ADMIN'), promotionsController.getPromotionStats);
+router.put('/promotions/:id', authenticate, authorize('ADMIN'), promotionsController.updatePromotion);
+router.delete('/promotions/:id', authenticate, authorize('ADMIN'), promotionsController.deletePromotion);
 
 module.exports = router;

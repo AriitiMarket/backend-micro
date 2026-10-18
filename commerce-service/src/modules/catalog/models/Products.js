@@ -62,6 +62,21 @@ const productSchema = new mongoose.Schema({
   shop: { type: Object, required: true },
   sellerId: { type: String },
   sold_out: { type: Number, default: 0 },
+  
+  // FIX #8: Backorder/Preorder Support
+  allowBackorder: { type: Boolean, default: false },
+  backorderLimit: { type: Number, default: 0 }, // Max backorders allowed
+  currentBackorders: { type: Number, default: 0 }, // Current backorder count
+  backorderStatus: { type: String, enum: ['OPEN', 'CLOSED', 'FULL'], default: 'CLOSED' },
+  
+  // Preorder support (scheduled availability)
+  allowPreorder: { type: Boolean, default: false },
+  preorderAvailableDate: { type: Date, default: null }, // When product will be available
+  preorderStock: { type: Number, default: 0 }, // Max preorder quantity
+  currentPreorders: { type: Number, default: 0 }, // Current preorder count
+  preorderPrice: { type: Number, default: null }, // Can differ from regular price
+  preorderStatus: { type: String, enum: ['OPEN', 'CLOSED', 'FULFILLED'], default: 'CLOSED' },
+  
   createdAt: { type: Date, default: Date.now },
 });
 

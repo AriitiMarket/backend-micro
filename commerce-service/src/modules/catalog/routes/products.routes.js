@@ -23,7 +23,8 @@ router.get('/get-all-products', authenticate, productsController.getAllProducts)
 
 // Admin bulk visibility action. Declared before the '/:param' style routes so
 // 'bulk' can never be read as an identifier.
-router.post('/bulk', authenticate, authorize('ADMIN'), productsController.bulkProductAction);
+// FIX #6: Allow sellers to bulk update their own products (not just admins)
+router.post('/bulk', authenticate, authorize(['SELLER', 'ADMIN']), productsController.bulkProductAction);
 
 router.get('/get-product/:id', authenticate, productsController.getProduct);
 router.get('/search', productsController.searchProducts);

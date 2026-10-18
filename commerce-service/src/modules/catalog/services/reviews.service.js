@@ -116,7 +116,66 @@ class ReviewsService {
 
     return pageOf(mine.sort(byNewest), opts);
   }
+
+  /** FIX #5: Admin - Get all pending reviews across all products */
+  async getPendingReviews(opts = {}) {
+    const products = await reviewRepository.findAllProducts();
+    const pending = [];
+
+    for (const product of products) {
+      for (const review of product.reviews || []) {
+        if (review.moderationStatus !== 'PENDING' && review.moderationStatus !== 'pending') continue;
+        pending.push(reviewDto(product, review, { withAuthorId: true }));
+      }
+    }
+
+    return pageOf(pending.sort(byNewest), opts);
+  }
+
+  /** FIX #5: Admin - Get all reviews for a product (all statuses) */
+  async getProductAllReviews(productId, opts = {}) {
+    const product = await reviewRepository.findProductById(productId);
+    if (!product) throw new ApiError('Product not found', 404);
+
+    const allReviews = (product.reviews || [])
+      .sort(byNewest)
+      .map((review) => reviewDto(product, review, { withAuthorId: true }));
+
+    return pageOf(allReviews, opts);
+  }
+
+  /** FIX #5: Admin - Approve a review by product and review ID */
+  async approveReview(productId, reviewId) {
+    const product = await reviewRepository.findProductById(productId);
+    if (!product) throw new ApiError('Product not found', 404);
+
+    const review = (product.reviews || []).find((r) => String(r._id) === String(reviewId));
+    if (!review) throw new ApiError('Review not found', 404);
+
+    review.moderationStatus = PUBLIC_STATUS;
+    review.approvedAt = new Date();
+
+    await product.save();
+    return reviewDto(product, review);
+  }
+
+  /** FIX #5: Admin - Reject a review with optional reason */
+  async rejectReview(productId, reviewId, reason = '') {
+    const product = await reviewRepository.findProductById(productId);
+    if (!product) throw new ApiError('Product not found', 404);
+
+    const review = (product.reviews || []).find((r) => String(r._id) === String(reviewId));
+    if (!review) throw new ApiError('Review not found', 404);
+
+    review.moderationStatus = 'REJECTED';
+    review.rejectionReason = reason;
+    review.rejectedAt = new Date();
+
+    await product.save();
+    return reviewDto(product, review);
+  }
 }
+
 
 module.exports = new ReviewsService();
 module.exports.reviewDto = reviewDto;

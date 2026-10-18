@@ -97,6 +97,11 @@ const requestSchema = new mongoose.Schema({
   status: { type: String, enum: PRODUCT_REQUEST_STATUSES, default: 'PENDING', index: true },
   expiresAt: { type: Date, default: null },
   conversationId: { type: String, default: null, index: true },
+  
+  // FIX #13: Track negotiation depth to prevent offer spirals
+  negotiationDepth: { type: Number, default: 0 },
+  maxNegotiationDepth: { type: Number, default: 10 }, // Prevent infinite offer loops
+  
   offers: [offerSchema],
   response: { type: String, default: '' },
   respondedBy: { type: String, default: null },

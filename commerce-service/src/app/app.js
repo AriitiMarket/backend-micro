@@ -7,6 +7,7 @@ const gatewayOnly = require('./middleware/gatewayOnly');
 const { requestId } = require('../shared/request-context');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
+const { standardErrorHandler } = require('../shared/middleware/standardErrorHandler');
 const shopsRoutes = require('../modules/selling/routes/shops.routes');
 const productsRoutes = require('../modules/catalog/routes/products.routes');
 const categoriesRoutes = require('../modules/catalog/routes/categories.routes');
@@ -31,6 +32,7 @@ const reviewsRoutes = require('../modules/catalog/routes/reviews.routes');
 const promotionsRoutes = require('../modules/promotions/routes/promotions.routes');
 const requestsRoutes = require('../modules/requests/routes/requests.routes');
 const adminPlatformRoutes = require('../modules/platform/routes/adminPlatform.routes');
+const returnsRoutes = require('../modules/fulfillment/routes/returns.routes');
 
 const app = express();
 // Trace id first: every log line, every error response and every outbound
@@ -135,11 +137,12 @@ app.use('/disputes', disputesRoutes);
 app.use('/review', reviewsRoutes);
 app.use('/promotion', promotionsRoutes);
 app.use('/request', requestsRoutes);
+app.use('/return', returnsRoutes);
 app.use('/admin', adminPlatformRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', settingsRoutes);
 
 app.use(notFound);
-app.use(errorHandler);
+app.use(standardErrorHandler);
 
 module.exports = app;
