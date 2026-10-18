@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: ./backend-services/package-lock.json
+          cache-dependency-path: backend-services/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install root dependencies
@@ -122,7 +122,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: ./backend-services/${{ matrix.service.dir }}/package-lock.json
+          cache-dependency-path: backend-services/${{ matrix.service.dir }}/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install service dependencies
@@ -195,7 +195,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: ./backend-services/package-lock.json
+          cache-dependency-path: backend-services/package-lock.json
       - name: Create .env from example
         run: cp .env.example .env
       - name: Install root dependencies
@@ -216,4 +216,3 @@ jobs:
           npm --prefix delivery-service install --no-audit --no-fund
       - name: Run integration tests
         run: npm run test:integration
-
