@@ -33,6 +33,15 @@ const promotionsRoutes = require('../modules/promotions/routes/promotions.routes
 const requestsRoutes = require('../modules/requests/routes/requests.routes');
 const adminPlatformRoutes = require('../modules/platform/routes/adminPlatform.routes');
 const returnsRoutes = require('../modules/fulfillment/routes/returns.routes');
+const orderNotesRoutes = require('../modules/fulfillment/routes/orderNotes.routes');
+const orderHoldRoutes = require('../modules/fulfillment/routes/orderHold.routes');
+const paymentLedgerRoutes = require('../modules/fulfillment/routes/paymentLedger.routes');
+const commissionLedgerRoutes = require('../modules/fulfillment/routes/commissionLedger.routes');
+const orderPriorityRoutes = require('../modules/fulfillment/routes/orderPriority.routes');
+const orderSLARoutes = require('../modules/fulfillment/routes/orderSLA.routes');
+const orderExportRoutes = require('../modules/fulfillment/routes/orderExport.routes');
+const paymentReconciliationRoutes = require('../modules/fulfillment/routes/paymentReconciliation.routes');
+const orderDisputeRoutes = require('../modules/fulfillment/routes/orderDispute.routes');
 
 const app = express();
 // Trace id first: every log line, every error response and every outbound
@@ -138,6 +147,15 @@ app.use('/review', reviewsRoutes);
 app.use('/promotion', promotionsRoutes);
 app.use('/request', requestsRoutes);
 app.use('/return', returnsRoutes);
+app.use('/order-notes', orderNotesRoutes);
+app.use('/order-hold', orderHoldRoutes);
+app.use('/payment-ledger', paymentLedgerRoutes);
+app.use('/commission-ledger', commissionLedgerRoutes);
+app.use('/order-priority', orderPriorityRoutes);
+app.use('/order-sla', orderSLARoutes);
+app.use('/order-export', orderExportRoutes);
+app.use('/payment-reconciliation', paymentReconciliationRoutes);
+app.use('/order-dispute', orderDisputeRoutes);
 app.use('/admin', adminPlatformRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', settingsRoutes);
