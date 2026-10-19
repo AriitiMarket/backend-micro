@@ -7,7 +7,9 @@ const promotionsController = require('../../promotions/controllers/promotions.co
 
 /**
  * Platform Admin Routes
- * All routes require SUPER_ADMIN authentication and authorization
+ * All routes require an ADMIN account. The API Gateway applies the specific
+ * RBAC permission: operational users may view daily operations, while only
+ * users with businesses.manage can approve or reject businesses.
  */
 
 // Platform Overview

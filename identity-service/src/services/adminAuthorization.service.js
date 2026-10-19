@@ -12,13 +12,18 @@
 //   * a non-ADMIN account gets no admin authorization at all;
 //   * an ADMIN with an explicit admin_user_roles assignment is restricted to the
 //     union of those roles' permission keys;
-//   * an ADMIN with NO assignment keeps the wildcard, so enabling RBAC cannot
-//     lock the seeded admin (created without an admin_roles link) out of the
-//     console.
+//   * an ADMIN with NO assignment receives no permissions by default. The
+//     temporary ALLOW_UNASSIGNED_ADMIN_WILDCARD switch exists only for a
+//     controlled migration of legacy accounts.
 const adminRolesRepo = require('../repositories/admin-roles.repository');
 
 const WILDCARD = '*';
 const UNRESTRICTED_ADMIN_ROLE = 'SUPER_ADMIN';
+// During migration, set this to "true" only if legacy ADMIN accounts must keep
+// access before they receive an explicit admin role assignment. New deployments
+// should leave it disabled: an ADMIN with no assignment must fail closed.
+const ALLOW_UNASSIGNED_ADMIN_WILDCARD =
+  String(process.env.ALLOW_UNASSIGNED_ADMIN_WILDCARD || '').toLowerCase() === 'true';
 
 /**
  * Resolves the effective admin authorization for a user.
@@ -46,7 +51,7 @@ async function resolveAdminAuthorization(user) {
     throw error;
   }
 
-  if (!roles.length) {
+  if (!roles.length && ALLOW_UNASSIGNED_ADMIN_WILDCARD) {
     return {
       adminRoles: [UNRESTRICTED_ADMIN_ROLE],
       permissions: [WILDCARD],
@@ -70,4 +75,5 @@ module.exports = {
   resolveAdminAuthorization,
   WILDCARD,
   UNRESTRICTED_ADMIN_ROLE,
+  ALLOW_UNASSIGNED_ADMIN_WILDCARD,
 };

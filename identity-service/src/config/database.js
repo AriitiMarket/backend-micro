@@ -448,6 +448,27 @@ async function initSchema(p) {
       is_system: true,
     },
     {
+      name: 'OPERATIONAL_ADMIN',
+      display_name: 'Operational Admin',
+      description: 'Runs daily orders, delivery, and dispute operations without access to RBAC, platform settings, or financial configuration',
+      permissions: [
+        'dashboard.view',
+        'users.view',
+        'businesses.view',
+        'shops.view',
+        'locations.view',
+        'orders.view',
+        'orders.manage',
+        'delivery.view',
+        'delivery.manage',
+        'disputes.view',
+        'disputes.manage',
+        'reports.view',
+        'audit.view',
+      ],
+      is_system: true,
+    },
+    {
       name: 'SELLER_ADMIN',
       display_name: 'Seller Admin',
       description: 'Manages sellers, businesses, shops, and commerce',
@@ -471,7 +492,14 @@ async function initSchema(p) {
   ];
   for (const role of defaultRoles) {
     await p.query(
-      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING;`,
+      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (name) DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         description = EXCLUDED.description,
+         permissions = EXCLUDED.permissions,
+         is_system = EXCLUDED.is_system,
+         updated_at = NOW();`,
       [role.name, role.display_name, role.description, JSON.stringify(role.permissions), role.is_system]
     );
   }
