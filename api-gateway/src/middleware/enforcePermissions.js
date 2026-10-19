@@ -18,6 +18,17 @@ const env = require('../config/env');
  * If an endpoint is not in this map, it is denied by default (fail-secure).
  */
 const ENDPOINT_PERMISSIONS = {
+  // ── Authentication (public, no permission required) ──
+  // These endpoints are unauthenticated or for session management.
+  // Wildcard '*' means "allow all" — either public access or just needs to be authenticated.
+  'POST /auth/authorize': ['*'],
+  'POST /auth/token': ['*'],
+  'POST /auth/refresh': ['*'],
+  'POST /auth/revoke': ['*'],
+  'POST /auth/register': ['*'],
+  'POST /auth/register/:role': ['*'],
+  'GET /user/getuser': ['*'],
+
   // ── Admin Management (SUPER_ADMIN only) ──
   'GET /admin/admins': ['admin_roles.view'],
   'GET /admin/admins/:id': ['admin_roles.view'],
@@ -31,9 +42,11 @@ const ENDPOINT_PERMISSIONS = {
   'POST /admin/admin-roles': ['admin_roles.manage'],
   'PUT /admin/admin-roles/:id': ['admin_roles.manage'],
   'DELETE /admin/admin-roles/:id': ['admin_roles.manage'],
-  'GET /admin/permissions': ['admin_roles.view'],
-  'GET /admin/permissions/by-module': ['admin_roles.view'],
+  'GET /admin/permissions': ['*'],
+  'GET /admin/permissions/by-module': ['*'],
+  'GET /admin/user-roles': ['*'],
   'GET /admin/user-roles/:userId': ['admin_roles.view'],
+  'GET /admin/roles': ['admin_roles.view'],
   'POST /admin/user-roles/:userId/:roleId': ['admin_roles.manage'],
   'DELETE /admin/user-roles/:userId/:roleId': ['admin_roles.manage'],
 
@@ -74,6 +87,7 @@ const ENDPOINT_PERMISSIONS = {
   'GET /admin/businesses/:id': ['*'],
   'POST /admin/businesses/:id/approve': ['*'],
   'POST /admin/businesses/:id/reject': ['*'],
+  'GET /admin/shops': ['*'],
   'GET /shop/admin/shops': ['*'],
   'GET /shop/admin/shops/pending': ['*'],
   'GET /order/admin': ['*'],
@@ -90,6 +104,10 @@ const ENDPOINT_PERMISSIONS = {
   'PUT /delivery/actor/:id/status': ['*'],
   'GET /delivery/operation/dashboard': ['*'],
   'GET /delivery/operation/:stage': ['*'],
+  'GET /delivery/port': ['*'],
+  'GET /delivery/service': ['*'],
+  'GET /delivery/request': ['*'],
+  'GET /delivery/delivery': ['*'],
 
   // ── Analytics & Reports (both roles) ──
   'GET /analytics/stats': ['*'],
@@ -104,6 +122,30 @@ const ENDPOINT_PERMISSIONS = {
   'GET /category': ['*'],
   'GET /sector': ['*'],
   'GET /order/admin/reviews/pending': ['*'],
+
+  // ── Products & Catalog (both roles) ──
+  'GET /product/get-all-products': ['*'],
+  'GET /product/:id': ['*'],
+  'POST /product': ['*'],
+  'PUT /product/:id': ['*'],
+  'DELETE /product/:id': ['*'],
+
+  // ── Payments (both roles) ──
+  'GET /payment/get-all-payments': ['*'],
+  'GET /payment/:id': ['*'],
+
+  // ── Seller Applications (both roles) ──
+  'GET /seller-application': ['*'],
+  'GET /seller-application/:id': ['*'],
+  'POST /seller-application': ['*'],
+  'PATCH /seller-application/:id/status': ['*'],
+
+  // ── Requests (both roles) ──
+  'GET /request/admin': ['*'],
+  'GET /request/admin/:id': ['*'],
+  'GET /request/admin/stats': ['*'],
+  'POST /request': ['*'],
+  'PATCH /request/:id/status': ['*'],
 
   // ── Notifications (both roles) ──
   'GET /admin/notifications': ['*'],
@@ -148,9 +190,9 @@ function hasPermission(userPermissions, requiredPermissions) {
  * Applies to all /admin/* and /delivery/* endpoints that deal with admin operations.
  */
 function enforcePermissions(req, res, next) {
-  // Extract user info from request
-  const user = req.user || {};
-  const userPermissions = Array.isArray(user.permissions) ? user.permissions : [];
+  // Extract user info from request — the token carries admin authorization
+  const token = req.token || {};
+  const userPermissions = Array.isArray(token.permissions) ? token.permissions : [];
 
   // Construct the endpoint key
   const endpointKey = normalizePathForMatching(req.method, req.path);
@@ -176,7 +218,7 @@ function enforcePermissions(req, res, next) {
   if (!hasPermission(userPermissions, requiredPermissions)) {
     if (env.nodeEnv === 'development') {
       console.warn(
-        `[enforcePermissions] Access denied for ${user.id} to ${endpointKey}. Required: ${requiredPermissions.join(', ')}, User has: ${userPermissions.join(', ')}`
+        `[enforcePermissions] Access denied for ${token.sub} to ${endpointKey}. Required: ${requiredPermissions.join(', ')}, User has: ${userPermissions.join(', ')}`
       );
     }
 

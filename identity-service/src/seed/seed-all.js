@@ -72,6 +72,7 @@ async function seed() {
     console.log(`  ✓ Admin created: ${ADMIN.email} / ${ADMIN.password}`);
     results.admin = { id, email: ADMIN.email };
   }
+  await ensureSuperAdminRoleAssignment(pool, results.admin.id);
 
   // ─── 2. Seed Sellers ────────────────────────────────────────────────────────
   console.log('\n── Seeding Sellers ──');
@@ -149,6 +150,30 @@ async function seed() {
   console.log('='.repeat(60));
 
   return results;
+}
+
+async function ensureSuperAdminRoleAssignment(pool, userId) {
+  const role = await pool.query(
+    'SELECT id FROM admin_roles WHERE name = $1;',
+    ['SUPER_ADMIN']
+  );
+  if (!role.rows[0]) {
+    throw new Error(
+      'SUPER_ADMIN role is not seeded; initialize the Identity database first'
+    );
+  }
+  await pool.query(
+    `DELETE FROM admin_user_roles
+     WHERE user_id = $1
+       AND role_id <> $2;`,
+    [userId, role.rows[0].id]
+  );
+  await pool.query(
+    `INSERT INTO admin_user_roles (user_id, role_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, role_id) DO NOTHING;`,
+    [userId, role.rows[0].id]
+  );
 }
 
 seed().then(() => process.exit(0)).catch((err) => { console.error('Seed failed:', err); process.exit(1); });

@@ -492,7 +492,14 @@ async function initSchema(p) {
   ];
   for (const role of defaultRoles) {
     await p.query(
-      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING;`,
+      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (name) DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         description = EXCLUDED.description,
+         permissions = EXCLUDED.permissions,
+         is_system = EXCLUDED.is_system,
+         updated_at = NOW();`,
       [role.name, role.display_name, role.description, JSON.stringify(role.permissions), role.is_system]
     );
   }

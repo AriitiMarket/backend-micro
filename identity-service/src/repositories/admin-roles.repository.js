@@ -100,13 +100,17 @@ async function deleteRole(id) {
 async function getUserRoles(userId) {
   const pool = await getPool();
   const result = await pool.query(`
-    SELECT r.id, r.name, r.display_name, r.description, r.permissions, ur.assigned_at, ur.assigned_by
+    SELECT r.id, r.name, r.display_name, r.description, ur.assigned_at, ur.assigned_by,
+      array_agg(DISTINCT ap.key) FILTER (WHERE ap.id IS NOT NULL) as permission_keys
     FROM admin_roles r
     JOIN admin_user_roles ur ON ur.role_id = r.id
+    LEFT JOIN admin_role_permissions arp ON r.id = arp.role_id
+    LEFT JOIN admin_permissions ap ON arp.permission_id = ap.id
     WHERE ur.user_id = $1
+    GROUP BY r.id, r.name, r.display_name, r.description, ur.assigned_at, ur.assigned_by
     ORDER BY r.name;
   `, [userId]);
-  return result.rows.map(r => ({ ...r, permissions: r.permissions || [] }));
+  return result.rows.map(r => ({ ...r, permissions: r.permission_keys || [] }));
 }
 
 async function getAllUserRoles() {
@@ -147,9 +151,11 @@ async function removeRole(userId, roleId) {
 async function getEffectivePermissions(userId) {
   const pool = await getPool();
   const result = await pool.query(`
-    SELECT DISTINCT unnest(r.permissions) as permission
+    SELECT DISTINCT ap.key as permission
     FROM admin_roles r
     JOIN admin_user_roles ur ON ur.role_id = r.id
+    JOIN admin_role_permissions arp ON r.id = arp.role_id
+    JOIN admin_permissions ap ON arp.permission_id = ap.id
     WHERE ur.user_id = $1;
   `, [userId]);
   return result.rows.map(r => r.permission);
