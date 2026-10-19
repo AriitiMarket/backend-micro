@@ -156,13 +156,17 @@ const ENDPOINT_PERMISSIONS = {
  * Converts dynamic segments like :id to :id for matching.
  *
  * Example: /admin/users/123 → /admin/users/:id
+ * Example: /admin/businesses/6ad620836af0599a2b166922 → /admin/businesses/:id
  */
 function normalizePathForMatching(method, path) {
   // Remove query string
   const pathOnly = path.split('?')[0];
 
-  // Replace UUIDs and numeric IDs with :id
-  const normalized = pathOnly.replace(/\/[a-f0-9\-]{36}|\d+(?=\/|$)/g, ':id');
+  // Replace various ID formats with :id
+  // - UUIDs: /[a-f0-9\-]{36}
+  // - Numeric IDs: /\d+
+  // - MongoDB ObjectIds: /[a-f0-9]{24}
+  const normalized = pathOnly.replace(/\/([a-f0-9\-]{36}|[a-f0-9]{24}|\d+)(?=\/|$)/g, '/:id');
 
   return `${method} ${normalized}`;
 }
