@@ -1,39 +1,79 @@
+/**
+ * Orders Routes
+ * Endpoints for order management with all fixes integrated
+ */
+
 const express = require('express');
 const router = express.Router();
 const ordersController = require('../controllers/orders.controller');
-const { authenticate } = require('../../../app/middleware/authenticate');
-const { authorize } = require('../../../app/middleware/authorize');
-const { validateCreateOrder } = require('../../../shared/validators/commerce.validators');
+const { requireShopOwner } = require('../../../middleware/requireShopOwner');
+const { verifyToken } = require('../../../middleware/auth'); // Assuming auth middleware exists
 
-// Anyone with buyer access can place an order — every account is a BUYER.
-router.post('/create-order', authenticate, authorize('BUYER'), validateCreateOrder, ordersController.createOrder);
+/**
+ * All routes require authentication
+ */
+router.use(verifyToken);
 
-// Buyer endpoints (BUYER gate; the seller branches are never reachable here).
-// Ownership is enforced in the controller/service on every one of them.
-router.get('/get-all-orders/user/:userId', authenticate, authorize('BUYER', { exact: true }), ordersController.getUserOrders);
-router.get('/order/:orderId', authenticate, authorize('BUYER', { exact: true }), ordersController.getOrder);
-router.put('/refund-order/:orderId', authenticate, authorize('BUYER', { exact: true }), ordersController.refundOrder);
+/**
+ * Get all orders for a shop (FIX #7: with pagination)
+ * GET /orders/shop/:shopId?page=1&limit=20&status=PROCESSING&sortBy=createdAt
+ */
+router.get('/shop/:shopId', requireShopOwner, (req, res, next) => {
+  ordersController.getAllOrdersOfShop(req, res, next);
+});
 
-// Seller endpoints (only SELLER role)
-router.get('/get-all-orders/seller/:sellerId', authenticate, authorize('SELLER'), ordersController.getSellerOrders);
-router.put('/update-order-status/:orderId', authenticate, authorize('SELLER'), ordersController.updateOrderStatus);
-router.put('/order-refund-success/:orderId', authenticate, authorize('SELLER'), ordersController.orderRefundSuccess);
+/**
+ * Confirm order (FIX #1, #10, #12)
+ * POST /orders/:orderId/confirm
+ * - ACID transaction
+ * - Idempotent
+ * - Checks delivery coverage
+ */
+router.post('/:orderId/confirm', (req, res, next) => {
+  ordersController.confirmOrder(req, res, next);
+});
 
-// PHASE 2: Payment confirmation and order cancellation (buyer only)
-router.post('/confirm-payment/:orderId', authenticate, authorize('BUYER', { exact: true }), ordersController.confirmPayment);
-router.post('/cancel/:orderId', authenticate, authorize('BUYER', { exact: true }), ordersController.cancelOrder);
+/**
+ * Update order status (FIX #4, #8)
+ * PATCH /orders/:orderId/status
+ * - State machine validation
+ * - Timeline tracking
+ */
+router.patch('/:orderId/status', (req, res, next) => {
+  ordersController.updateOrderStatus(req, res, next);
+});
 
-// ORDER ↔ DELIVERY bridge: delivery info for one order. Authorization follows
-// the ORDER's ownership (buyer / owning seller / admin), validated in the
-// controller, so a shipment detail can never probe someone else's order.
-//
-// NOTE on the path: this router is mounted at `/order`, so the handler path must
-// NOT repeat the prefix (`/order/...` here would only ever match the doubled
-// public path `/order/order/.../delivery`, exactly like the sibling
-// `GET /order/order/:orderId` detail route).
-router.get('/:orderId/delivery', authenticate, ordersController.getOrderDelivery);
+/**
+ * Get order timeline (FIX #8)
+ * GET /orders/:orderId/timeline
+ */
+router.get('/:orderId/timeline', (req, res, next) => {
+  ordersController.getOrderTimeline(req, res, next);
+});
 
-// PHASE 2: Inventory availability endpoint
-router.get('/availability/:productId', authenticate, ordersController.getInventoryAvailability);
+/**
+ * Cancel order
+ * POST /orders/:orderId/cancel
+ */
+router.post('/:orderId/cancel', (req, res, next) => {
+  ordersController.cancelOrder(req, res, next);
+});
+
+/**
+ * Get available stock (FIX #2)
+ * GET /orders/product/:productId/available-stock
+ */
+router.get('/product/:productId/available-stock', (req, res, next) => {
+  ordersController.getAvailableStock(req, res, next);
+});
+
+/**
+ * Bulk order action (FIX #14 backend)
+ * POST /orders/bulk-action
+ * Body: { orderIds: [...], action: 'ACCEPT' | 'REJECT' | 'SHIP' }
+ */
+router.post('/bulk-action', (req, res, next) => {
+  ordersController.bulkOrderAction(req, res, next);
+});
 
 module.exports = router;

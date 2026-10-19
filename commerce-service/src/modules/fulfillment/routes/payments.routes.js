@@ -42,6 +42,7 @@ const ownershipByOrder = requirePaymentOwnership((req) => paymentService.getPaym
 // authorize() silently dropped — only SELLER was ever accepted, and ADMIN/BUYER
 // were locked out. It is a list now.
 router.post('/create-payment', authenticate, authorize(['SELLER', 'BUYER', 'ADMIN']), paymentsController.createPayment);
+router.post('/chapa/verify', authenticate, authorize('BUYER'), paymentsController.verifyChapaPayment);
 router.get('/get-payment/:id', authenticate, ownershipById, paymentsController.getPayment);
 router.get('/get-payment-by-order/:orderId', authenticate, ownershipByOrder, paymentsController.getPaymentByOrder);
 router.get('/get-user-payments/:userId', authenticate, authorize('BUYER', { exact: true }), paymentsController.getUserPayments);
@@ -52,8 +53,14 @@ router.get('/get-active-methods', authenticate, paymentsController.listActiveMet
 router.get('/admin/methods', authenticate, authorize('ADMIN'), paymentsController.listMethods);
 router.post('/admin/methods', authenticate, authorize('ADMIN'), paymentsController.saveMethod);
 router.put('/admin/methods/:id', authenticate, authorize('ADMIN'), paymentsController.saveMethod);
+router.post('/admin/methods/:id/test', authenticate, authorize('ADMIN'), paymentsController.testConnection);
 router.get('/admin/seller-accounts', authenticate, authorize('ADMIN'), paymentsController.listSellerAccounts);
 router.post('/seller/:sellerId/payment-accounts', authenticate, authorize('SELLER', 'ADMIN'), paymentsController.createSellerAccount);
+// Delete a payout account. Scoped to the owning seller in the controller AND
+// in the service (the row is matched on (id, sellerId)). This is deliberately
+// NOT `DELETE /payment/delete-payment/:id`, which deletes a PAYMENT — a
+// financial transaction record.
+router.delete('/seller/:sellerId/payment-accounts/:id', authenticate, authorize('SELLER', 'ADMIN'), paymentsController.deleteSellerAccount);
 router.get('/admin/reconciliation', authenticate, authorize('ADMIN'), paymentsController.reconciliation);
 // Payment status changes require an authoritative provider settlement/refund
 // event. No seller or admin-facing route may self-report those outcomes.

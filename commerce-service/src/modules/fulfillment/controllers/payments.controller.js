@@ -6,8 +6,13 @@ const { isAdmin } = require('../../../shared/utils/roles');
 async function createPayment(req, res, next) {
   try {
     const payment = await paymentService.createPayment(req.body, req.user);
-    return created(res, { payment });
+    return created(res, { payment, checkoutUrl: payment.checkoutUrl || null, txRef: payment.txRef || null });
   } catch (err) { return next(err); }
+}
+
+async function verifyChapaPayment(req, res, next) {
+  try { return ok(res, await paymentService.verifyChapaPayment(req.body.orderId, req.body.txRef, req.user)); }
+  catch (err) { return next(err); }
 }
 
 async function getPayment(req, res, next) {
@@ -65,6 +70,7 @@ async function getAllPayments(req, res, next) {
 async function listMethods(req, res, next) { try { return ok(res, { methods: await paymentService.listMethods() }); } catch (err) { return next(err); } }
 async function listActiveMethods(req, res, next) { try { return ok(res, { methods: await paymentService.listActiveMethods() }); } catch (err) { return next(err); } }
 async function saveMethod(req, res, next) { try { return ok(res, { method: await paymentService.saveMethod(req.params.id, req.body) }); } catch (err) { return next(err); } }
+async function testConnection(req, res, next) { try { return ok(res, { result: await paymentService.testConnection(req.params.id) }); } catch (err) { return next(err); } }
 async function listSellerAccounts(req, res, next) { try { return ok(res, { accounts: await paymentService.listSellerAccounts(isAdmin(req.user) ? undefined : req.user.id) }); } catch (err) { return next(err); } }
 async function createSellerAccount(req, res, next) {
   try {
@@ -72,6 +78,20 @@ async function createSellerAccount(req, res, next) {
       return res.status(403).json({ success: false, message: 'You can only configure your own payment account', errors: [] });
     }
     return created(res, { account: await paymentService.createSellerAccount(req.params.sellerId, req.body) });
+  } catch (err) { return next(err); }
+}
+async function deleteSellerAccount(req, res, next) {
+  try {
+    const requesterId = String(req.user.id || req.user._id || '');
+    const sellerId = String(req.params.sellerId || requesterId);
+    // A seller may only delete their OWN payout account. The row is matched on
+    // (id, sellerId) in the service, so this can never reach another seller's
+    // account — nor any other record.
+    if (!isAdmin(req.user) && requesterId !== sellerId) {
+      return res.status(403).json({ success: false, message: 'You can only delete your own payment account', errors: [] });
+    }
+    const result = await paymentService.deleteSellerAccount(sellerId, req.params.id);
+    return ok(res, result, 'Payment account deleted');
   } catch (err) { return next(err); }
 }
 async function reconciliation(req, res, next) { try { return ok(res, { rows: await paymentService.reconciliation(req.query) }); } catch (err) { return next(err); } }
@@ -103,4 +123,4 @@ async function deletePayment(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { createPayment, getPayment, getPaymentByOrder, getUserPayments, getSellerPayments, getAllPayments, updatePaymentStatus, processRefund, deletePayment, listMethods, listActiveMethods, saveMethod, listSellerAccounts, createSellerAccount, reconciliation };
+module.exports = { createPayment, verifyChapaPayment, getPayment, getPaymentByOrder, getUserPayments, getSellerPayments, getAllPayments, updatePaymentStatus, processRefund, deletePayment, listMethods, listActiveMethods, saveMethod, testConnection, listSellerAccounts, createSellerAccount, deleteSellerAccount, reconciliation };

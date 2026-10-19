@@ -1,192 +1,189 @@
-const orderService = require('../services/orders.service');
-const orderDeliveryService = require('../services/orderDelivery.service');
-const { ok, created } = require('../../../shared/utils/response');
-const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
-const { isAdmin, isSeller } = require('../../../shared/utils/roles');
+/**
+ * Orders Controller
+ * Integrates all fixes: pagination, ACID transactions, state machine,
+ * delivery coverage, idempotency, and bulk actions
+ */
 
-async function createOrder(req, res, next) {
-  try {
-    const payload = { ...req.body };
-    payload.user = { id: req.user.id, email: req.user.email };
-    const orders = await orderService.createOrder(payload);
-    return created(res, { orders });
-  } catch (err) { return next(err); }
-}
+const ordersService = require('../services/orders.service');
+const orderStateService = require('../services/orderState.service');
+const returnsService = require('../services/returns.service');
 
-async function getUserOrders(req, res, next) {
-  try {
-    if (!isAdmin(req.user) && req.params.userId !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Forbidden: cannot view other users orders', errors: [] });
+class OrdersController {
+  /**
+   * Get all orders for a shop (with pagination)
+   * FIX #7: Server-side pagination
+   */
+  async getAllOrdersOfShop(req, res, next) {
+    try {
+      const { shopId } = req.params;
+      const { page, limit, status, sortBy, sortOrder } = req.query;
+
+      const result = await ordersService.getAllOrdersOfShop(shopId, {
+        page: parseInt(page) || 1,
+        limit: parseInt(limit) || 20,
+        status,
+        sortBy,
+        sortOrder,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-    const orders = await orderService.getUserOrders(req.params.userId);
-    return ok(res, { orders });
-  } catch (err) { return next(err); }
-}
+  }
 
-/**
- * Get orders for a specific seller.
- * - SELLER can only retrieve their own orders
- * - ADMIN can retrieve any seller's orders
- * - CUSTOMER cannot access this endpoint (handled by authorize middleware)
- */
-async function getSellerOrders(req, res, next) {
-  try {
-    const { sellerId } = req.params;
-    
-    // Validate ownership: seller can only see their own orders
-    await orderService.validateSellerOwnership(sellerId, req.user.id, req.user.role);
-    
-    const orders = await orderService.getSellerOrders(sellerId);
-    return ok(res, { orders });
-  } catch (err) { return next(err); }
-}
+  /**
+   * Confirm order (FIX #1, #10, #12)
+   * - ACID transaction
+   * - Idempotent (returns 200 if already confirmed)
+   * - Checks delivery coverage
+   */
+  async confirmOrder(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const userId = req.user?.id || req.user?._id;
+      const userRole = req.user?.role;
 
-/**
- * Update order status.
- * - SELLER can only update orders they own
- * - ADMIN can update any order
- */
-async function updateOrderStatus(req, res, next) {
-  try {
-    const { orderId } = req.params;
+      const order = await ordersService.confirmOrder(orderId, {
+        userId,
+        userRole,
+      });
 
-    if (isSeller(req.user) && !isAdmin(req.user) && req.body.status !== ORDER_STATUSES.CONFIRMED) {
-      return res.status(409).json({ success: false, code: 'DELIVERY_OWNS_SHIPMENT_STATUS', message: 'Sellers may confirm an order; shipment statuses are managed through Delivery', errors: [] });
+      res.json({
+        message: 'Order confirmed successfully',
+        order,
+      });
+    } catch (err) {
+      next(err);
     }
-    
-    // Validate ownership before updating
-    await orderService.validateOrderOwnership(orderId, req.user.id, req.user.role);
-    
-    const order = await orderService.updateOrderStatus(orderId, req.body);
-    return ok(res, { order });
-  } catch (err) { return next(err); }
+  }
+
+  /**
+   * Update order status (FIX #4, #8)
+   * - State machine validation
+   * - Timeline tracking
+   */
+  async updateOrderStatus(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const { status } = req.body;
+      const userId = req.user?.id || req.user?._id;
+      const userRole = req.user?.role;
+
+      if (!status) {
+        return res.status(400).json({ error: 'Status required' });
+      }
+
+      const order = await ordersService.updateOrderStatus(
+        orderId,
+        status,
+        {
+          userId,
+          userRole,
+          reason: req.body.reason,
+        }
+      );
+
+      res.json({
+        message: 'Order status updated',
+        order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get order timeline (FIX #8)
+   */
+  async getOrderTimeline(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const timeline = await ordersService.getOrderTimeline(orderId);
+
+      res.json({
+        orderId,
+        timeline,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Bulk order action (FIX #14 backend)
+   * Accept/reject/ship multiple orders at once
+   */
+  async bulkOrderAction(req, res, next) {
+    try {
+      const { orderIds, action } = req.body;
+      const userId = req.user?.id || req.user?._id;
+      const userRole = req.user?.role;
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ error: 'orderIds array required' });
+      }
+
+      if (!['ACCEPT', 'REJECT', 'SHIP'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action' });
+      }
+
+      const result = await ordersService.bulkOrderAction(
+        orderIds,
+        action,
+        {
+          userId,
+          userRole,
+        }
+      );
+
+      res.json({
+        message: `Bulk ${action} completed`,
+        ...result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Cancel order
+   */
+  async cancelOrder(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const userId = req.user?.id || req.user?._id;
+
+      const order = await ordersService.cancelOrder(orderId, {
+        userId,
+        reason: req.body.reason || 'Cancelled by system',
+      });
+
+      res.json({
+        message: 'Order cancelled',
+        order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get available stock for product
+   */
+  async getAvailableStock(req, res, next) {
+    try {
+      const { productId } = req.params;
+      const available = await ordersService.getAvailableStock(productId);
+
+      res.json({
+        productId,
+        available,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
-async function refundOrder(req, res, next) {
-  try {
-    const order = await orderService.refundOrder(req.params.orderId, req.body, req.user);
-    return ok(res, { order, message: 'Refund request sent to the seller' });
-  } catch (err) { return next(err); }
-}
-
-/**
- * Mark refund as successful.
- * - SELLER can only refund orders they own
- * - ADMIN can refund any order
- */
-async function orderRefundSuccess(req, res, next) {
-  try {
-    const { orderId } = req.params;
-    
-    // Validate ownership before processing refund
-    await orderService.validateOrderOwnership(orderId, req.user.id, req.user.role);
-    
-    const order = await orderService.refundSuccess(orderId, req.body);
-    return ok(res, { order });
-  } catch (err) { return next(err); }
-}
-
-/**
- * Get a single order by ID.
- * - SELLER can only get their own orders
- * - CUSTOMER can only get their own orders
- * - ADMIN can get any order
- */
-async function getOrder(req, res, next) {
-  try {
-    const { orderId } = req.params;
-    
-    // Validate ownership: users can only access their own orders
-    await orderService.validateOrderOwnership(orderId, req.user.id, req.user.role);
-    
-    const order = await orderService.getOrderById(orderId);
-    return ok(res, { order });
-  } catch (err) { return next(err); }
-}
-
-/**
- * PHASE 2: Confirm payment for an order.
- * - Atomically claims the confirmation (one winner — no double deduct)
- * - Deducts stock + consumes this order's reservation (idempotent per line)
- * - Rolls the claim back if the deduct fails, so the client may retry
- */
-async function confirmPayment(req, res, next) {
-  const err = new Error('Payment confirmation must come from a verified settlement event');
-  err.statusCode = 409;
-  err.code = 'PAYMENT_SETTLEMENT_REQUIRED';
-  return next(err);
-}
-
-/**
- * PHASE 2: Cancel an order.
- * - Releases reserved inventory
- * - Sets order status to CANCELLED
- * - Sets paymentStatus appropriately
- * - Creates stock movement audit trail
- */
-async function cancelOrder(req, res, next) {
-  try {
-    const { orderId } = req.params;
-    const { reason } = req.body || {};
-    
-    // Validate ownership
-    await orderService.validateOrderOwnership(orderId, req.user.id, req.user.role);
-    
-    const order = await orderService.cancelOrder(orderId, reason || 'Order cancelled by customer');
-    
-    return ok(res, { order, message: 'Order cancelled and inventory released' });
-  } catch (err) { return next(err); }
-}
-
-/**
- * PHASE 2: Get real-time inventory availability.
- * Returns stock, reserved, and available quantities.
- * ALSO validates that seller serves buyer's zone (FIX #1)
- */
-async function getInventoryAvailability(req, res, next) {
-  try {
-    const { productId } = req.params;
-    const buyerId = req.user.id;
-    
-    const availability = await orderService.getInventoryAvailability(productId, buyerId);
-    return ok(res, { availability });
-  } catch (err) { return next(err); }
-}
-
-/**
- * Delivery info for one order — read from the ORDER ↔ DELIVERY bridge table.
- *
- * That table is what connects an order to its shipment (both services key it by
- * the order id), so this is the single endpoint that answers "what is happening
- * with this order's delivery?" without a cross-service call. Authorization
- * follows the ORDER's ownership (buyer / owning seller / admin), so a delivery
- * detail can never be used to probe someone else's shipment.
- * 
- * FIX #15: Return null delivery instead of 404 when not yet linked
- */
-async function getOrderDelivery(req, res, next) {
-  try {
-    await orderService.validateOrderOwnership(req.params.orderId, req.user.id, req.user.role);
-    const delivery = await orderDeliveryService.getByOrderId(req.params.orderId);
-    // FIX #15: Return structured response with null delivery instead of 404
-    return ok(res, { 
-      delivery: delivery || null, 
-      linked: Boolean(delivery),
-      message: delivery ? 'Delivery linked to order' : 'No delivery linked yet - order may still be in processing'
-    });
-  } catch (err) { return next(err); }
-}
-
-module.exports = {
-  createOrder,
-  getUserOrders,
-  getSellerOrders,
-  updateOrderStatus,
-  refundOrder,
-  orderRefundSuccess,
-  getOrder,
-  getOrderDelivery,
-  confirmPayment,
-  cancelOrder,
-  getInventoryAvailability
-};
+module.exports = new OrdersController();
