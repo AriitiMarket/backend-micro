@@ -27,7 +27,15 @@ const ENDPOINT_PERMISSIONS = {
   'POST /auth/revoke': ['*'],
   'POST /auth/register': ['*'],
   'POST /auth/register/:role': ['*'],
+  'POST /auth/verify-2fa': ['*'],
   'GET /user/getuser': ['*'],
+
+  // ── User 2FA Management ──
+  'GET /user/2fa/setup': ['*'],
+  'POST /user/2fa/verify-setup': ['*'],
+  'GET /user/2fa/status': ['*'],
+  'POST /user/2fa/disable': ['*'],
+  'POST /user/2fa/backup-codes/regenerate': ['*'],
 
   // ── Admin Management (SUPER_ADMIN only) ──
   'GET /admin/admins': ['admin_roles.view'],
