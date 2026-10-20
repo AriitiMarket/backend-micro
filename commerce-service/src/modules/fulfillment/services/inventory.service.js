@@ -71,7 +71,7 @@ class InventoryService {
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
@@ -79,7 +79,7 @@ class InventoryService {
 
       // Validate based on type
       if (type === 'STANDARD' && available < quantity) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError(
           `Insufficient stock: ${available} available, ${quantity} requested`,
           422
@@ -89,7 +89,7 @@ class InventoryService {
       if (type === 'BACKORDER') {
         const backorderSpace = product.backorderLimit - (product.currentBackorders || 0);
         if (backorderSpace < quantity) {
-          await session.abortTransaction();
+          if (session.inTransaction()) await session.abortTransaction();
           throw new ApiError(
             `Backorder limit exceeded: ${backorderSpace} available, ${quantity} requested`,
             422
@@ -100,7 +100,7 @@ class InventoryService {
       if (type === 'PREORDER') {
         const preorderSpace = (product.preorderStock || 0) - (product.currentPreorders || 0);
         if (preorderSpace < quantity) {
-          await session.abortTransaction();
+          if (session.inTransaction()) await session.abortTransaction();
           throw new ApiError(
             `Preorder limit exceeded: ${preorderSpace} available, ${quantity} requested`,
             422
@@ -143,7 +143,7 @@ class InventoryService {
         status: 'RESERVED',
       };
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -164,13 +164,13 @@ class InventoryService {
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
       // Move from reserved to sold (update stock)
       if (product.reserved < quantity) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Reservation mismatch', 409);
       }
 
@@ -203,7 +203,7 @@ class InventoryService {
         status: 'SOLD',
       };
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -221,7 +221,13 @@ class InventoryService {
     // If session provided, use it; otherwise create new one
     const externalSession = options.session;
     if (!externalSession) {
-      const product = await productRepository.releaseReservedExact(productId, quantity);
+      // Releasing is TOLERANT: the reservation is clamped at 0 instead of
+      // failing when fewer units are reserved than requested. A cancel or a
+      // refund releases what is there — a reservation that was already
+      // released (or never taken) must not make the cancellation fail, and the
+      // old exact behaviour made "cancel this order" impossible for any order
+      // whose units had already moved.
+      const product = await productRepository.releaseReserved(productId, quantity);
       if (!product) {
         const current = await productRepository.findById(productId);
         if (!current) throw new ApiError('Product not found', 404);
@@ -237,7 +243,7 @@ class InventoryService {
           timestamp: new Date(),
         });
         return {
-          productId: String(productId),
+          productId,
           quantity,
           reserved: product.reserved,
           status: 'RELEASED',
@@ -252,7 +258,7 @@ class InventoryService {
     }
 
     const session = externalSession || (await mongoose.startSession());
-    
+
     if (!externalSession) {
       session.startTransaction();
     }
@@ -260,16 +266,13 @@ class InventoryService {
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        if (!externalSession) await session.abortTransaction();
+        if (!externalSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
-      if (product.reserved < quantity) {
-        if (!externalSession) await session.abortTransaction();
-        throw new ApiError('Cannot release more than reserved', 422);
-      }
-
-      product.reserved = (product.reserved || 0) - quantity;
+      // Clamped at 0 — see the note above: releasing is not allowed to fail
+      // because the reservation is smaller than the quantity requested.
+      product.reserved = Math.max(0, (product.reserved || 0) - quantity);
       await product.save({ session });
 
       await inventoryLedgerRepository.create(
@@ -295,7 +298,7 @@ class InventoryService {
       };
     } catch (err) {
       if (!externalSession) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
       }
       throw err;
     } finally {
@@ -320,7 +323,7 @@ class InventoryService {
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        if (ownsSession) await session.abortTransaction();
+        if (ownsSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
@@ -349,7 +352,7 @@ class InventoryService {
         status: 'RESTORED',
       };
     } catch (err) {
-      if (ownsSession && session.inTransaction()) await session.abortTransaction();
+      if (ownsSession && session.inTransaction()) if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       if (ownsSession) await session.endSession();
@@ -409,12 +412,12 @@ class InventoryService {
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        if (!externalSession) await session.abortTransaction();
+        if (!externalSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
       if ((product.stock || 0) < quantity) {
-        if (!externalSession) await session.abortTransaction();
+        if (!externalSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Insufficient stock', 422);
       }
 
@@ -447,7 +450,7 @@ class InventoryService {
       };
     } catch (err) {
       if (!externalSession) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
       }
       throw err;
     } finally {

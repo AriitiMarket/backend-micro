@@ -128,6 +128,13 @@ function stubClients() {
     status: 200, ok: true,
     body: { zones: [TEST_ZONE] },
   });
+  // The checkout prices the delivery through Delivery's fee quote. Without
+  // this stub the suite reached for a live Delivery Service and failed with
+  // ECONNREFUSED whenever it was not running next to the tests.
+  deliveryClient.quoteDeliveryFee = async () => ({
+    status: 200, ok: true,
+    body: { fee: 50, ruleId: 'rule-test', delivererShareRate: 80 },
+  });
 
   identityClient.getSellerStatus = async () => ({ status: 200, body: { sellerStatus: 'APPROVED' } });
   identityClient.linkShopId = async () => ({ status: 200, body: {} });

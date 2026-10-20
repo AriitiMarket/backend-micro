@@ -23,13 +23,14 @@
  * Run with: node --test src/modules/fulfillment/__tests__/payment-integration.test.js
  */
 
+const { testDbUri } = require('../../../shared/utils/testDb');
 const assert = require('assert');
 const crypto = require('crypto');
 const http = require('http');
 const mongoose = require('mongoose');
 const { describe, it, before, after, beforeEach } = require('node:test');
 
-const DB_URL = 'mongodb://localhost:27017/ariti_commerce_test_payment_integration';
+const DB_URL = testDbUri('ariti_commerce_test_payment_integration');
 const WEBHOOK_SECRET = 'test-webhook-secret-not-a-real-credential';
 
 process.env.PAYMENT_WEBHOOK_SECRET = WEBHOOK_SECRET;

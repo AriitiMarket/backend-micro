@@ -65,15 +65,6 @@ jobs:
             needs_postgres: false
             needs_redis: true
     services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand({ ping: 1 })' || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
       postgres:
         image: postgres:15-alpine
         env:
@@ -98,7 +89,7 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
-      MONGODB_URI: mongodb://localhost:27017/aritii
+      MONGODB_URI: mongodb://localhost:27017/aritii?replicaSet=rs0
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
       REDIS_URI: redis://localhost:6379
       JWT_SECRET: test-jwt-secret-do-not-use-in-production
@@ -134,6 +125,30 @@ jobs:
       - name: Generate ephemeral JWT signing keys
         if: ${{ matrix.service.dir == 'identity-service' }}
         run: node src/config/keys/generate.js
+      - name: Start MongoDB as a replica set
+        run: |
+          # The fulfillment services write inside transactions, and MongoDB only
+          # supports those on a replica set member: a standalone rejects every
+          # such write with "Transaction numbers are only allowed on a replica
+          # set member or mongos". The GitHub `services:` block cannot pass a
+          # command to the container, so the database is started here.
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 mongod --replSet rs0 --bind_ip_all
+          # The published port is 27017 on both sides, so the member's
+          # advertised host (127.0.0.1:27017) resolves inside the container and
+          # from the runner.
+          for i in $(seq 1 60); do
+            if docker exec mongo-rs mongosh --quiet --eval \
+              'try { rs.status().ok } catch (e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]}).ok }' \
+              2>/dev/null | grep -q 1; then
+              echo "MongoDB replica set rs0 is ready"
+              break
+            fi
+            sleep 2
+          done
+          # Fail loudly: without a primary every transactional test fails with
+          # a confusing "no primary exists" error.
+          docker exec mongo-rs mongosh --quiet --eval \
+            'if (db.hello().isWritablePrimary !== true) { throw "no primary elected" }'
       - name: Run service unit tests
         run: npm test
   test-integration:
@@ -143,15 +158,6 @@ jobs:
       run:
         working-directory: .
     services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand({ ping: 1 })' || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
       postgres:
         image: postgres:15-alpine
         env:
@@ -176,7 +182,7 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
-      MONGODB_URI: mongodb://localhost:27017/aritii
+      MONGODB_URI: mongodb://localhost:27017/aritii?replicaSet=rs0
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aritii_identity
       REDIS_URI: redis://localhost:6379
       JWT_SECRET: test-jwt-secret-do-not-use-in-production
@@ -211,5 +217,29 @@ jobs:
           npm --prefix identity-service install --no-audit --no-fund
           npm --prefix commerce-service install --no-audit --no-fund
           npm --prefix delivery-service install --no-audit --no-fund
+      - name: Start MongoDB as a replica set
+        run: |
+          # The fulfillment services write inside transactions, and MongoDB only
+          # supports those on a replica set member: a standalone rejects every
+          # such write with "Transaction numbers are only allowed on a replica
+          # set member or mongos". The GitHub `services:` block cannot pass a
+          # command to the container, so the database is started here.
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 mongod --replSet rs0 --bind_ip_all
+          # The published port is 27017 on both sides, so the member's
+          # advertised host (127.0.0.1:27017) resolves inside the container and
+          # from the runner.
+          for i in $(seq 1 60); do
+            if docker exec mongo-rs mongosh --quiet --eval \
+              'try { rs.status().ok } catch (e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]}).ok }' \
+              2>/dev/null | grep -q 1; then
+              echo "MongoDB replica set rs0 is ready"
+              break
+            fi
+            sleep 2
+          done
+          # Fail loudly: without a primary every transactional test fails with
+          # a confusing "no primary exists" error.
+          docker exec mongo-rs mongosh --quiet --eval \
+            'if (db.hello().isWritablePrimary !== true) { throw "no primary elected" }'
       - name: Run integration tests
         run: npm run test:integration

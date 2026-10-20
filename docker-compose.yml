@@ -24,6 +24,16 @@ services:
     image: mongo:7
     container_name: aritii-mongodb
     restart: unless-stopped
+    # A single-node replica set. The commerce and delivery services write
+    # inside transactions, and MongoDB only supports those on a replica set
+    # member — a standalone rejects them with "Transaction numbers are only
+    # allowed on a replica set member or mongos". The healthcheck initiates
+    # the set on first boot.
+    #
+    # The key file is the replica set's internal authentication key: MongoDB
+    # refuses to start an AUTHORIZED replica set without one. It is generated
+    # by the mongo-keyfile service below and never committed.
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/keyfile/mongo-keyfile"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-admin123}
@@ -31,15 +41,42 @@ services:
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
+      - mongo_keyfile:/keyfile:ro
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js
+    depends_on:
+      mongo-keyfile:
+        condition: service_completed_successfully
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test:
+        - "CMD-SHELL"
+        - >-
+          mongosh --quiet -u admin -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin
+          --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongodb:27017"}]}).ok }'
+          | grep -q 1
       interval: 10s
       timeout: 30s
       retries: 10
       start_period: 30s
+
+  # Writes the replica set's internal authentication key before MongoDB starts.
+  # It runs once and exits; MongoDB waits for it.
+  mongo-keyfile:
+    image: mongo:7
+    container_name: aritii-mongo-keyfile
+    restart: "no"
+    command:
+      - bash
+      - -c
+      - >-
+        printf '%s' "$$(head -c 756 /dev/urandom | base64 | tr -d '\n')" > /keyfile/mongo-keyfile &&
+        chmod 400 /keyfile/mongo-keyfile &&
+        chown 999:999 /keyfile/mongo-keyfile
+    volumes:
+      - mongo_keyfile:/keyfile
+    networks:
+      - aritii-network
 
   # Redis Cache
   redis:
@@ -73,7 +110,7 @@ services:
       INTERNAL_SERVICE_NAME: commerce
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
       GATEWAY_URL: http://api-gateway:3000
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       CLOUDINARY_URL: ${CLOUDINARY_URL:-}
@@ -117,7 +154,7 @@ services:
       INTERNAL_SERVICE_NAME: delivery
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
       GATEWAY_URL: http://api-gateway:3000
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       API_GATEWAY_URL: http://api-gateway:3000
@@ -159,7 +196,7 @@ services:
       INTERNAL_SERVICE_NAME: identity
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/aritii_identity
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       API_GATEWAY_URL: http://api-gateway:3000
@@ -207,7 +244,7 @@ services:
       SERVICE_NAME: api-gateway
       INTERNAL_SERVICE_NAME: gateway
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin
+      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       COMMERCE_SERVICE_URL: http://commerce-service:3001
@@ -246,6 +283,8 @@ volumes:
   mongodb_data:
     driver: local
   mongodb_config:
+    driver: local
+  mongo_keyfile:
     driver: local
   redis_data:
     driver: local

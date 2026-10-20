@@ -4,8 +4,9 @@
 const assert = require('assert');
 const mongoose = require('mongoose');
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
+const { testDbUri } = require('../../../shared/utils/testDb');
 
-const DB_URL = (process.env.MONGODB_URI || 'mongodb://localhost:27017/ariti_commerce_test_financial') + '?directConnection=true&retryWrites=false';
+const DB_URL = testDbUri('ariti_commerce_test_financial');
 
 let SellerWallet, WalletTransaction, SellerAllocation, Order, CommissionLedger;
 let walletsService, payoutsService, allocationService, commissionLedgerService;
@@ -245,15 +246,15 @@ describe('2. Multi-Seller Orders & Splits', () => {
     const s2 = allocs.find(a => a.sellerId === 'seller-2');
     assert.strictEqual(s1.grossSubtotal, 100);
     assert.strictEqual(s1.platformCommission, 10);
-    // The platform's default tax rate is 0%, so the seller is paid the gross
-    // minus the commission: 100 - 10 = 90.
+    // The seller is paid the gross AND the shipping the buyer paid, less the
+    // commission: (100 + 9) - 10 = 99.
     assert.strictEqual(s1.taxAmount, 0);
-    assert.strictEqual(s1.netPayable, 90);
+    assert.strictEqual(s1.netPayable, 99);
     assert.strictEqual(s1.commissionRate, 10);
     assert.strictEqual(s2.grossSubtotal, 200);
     assert.strictEqual(s2.platformCommission, 20);
     assert.strictEqual(s2.taxAmount, 0);
-    assert.strictEqual(s2.netPayable, 180);
+    assert.strictEqual(s2.netPayable, 189);
     assert.strictEqual(s2.commissionRate, 10);
     const totalCommission = s1.platformCommission + s2.platformCommission;
     assert.strictEqual(totalCommission, 30);
@@ -293,9 +294,8 @@ describe('2. Multi-Seller Orders & Splits', () => {
     }
     const w1 = await walletsService.getSellerWallet('seller-1');
     const w2 = await walletsService.getSellerWallet('seller-2');
-    // Gross minus commission (the platform's default tax rate is 0%).
-    assert.strictEqual(w1.pendingBalance, 90);
-    assert.strictEqual(w2.pendingBalance, 180);
+    assert.strictEqual(w1.pendingBalance, 99);
+    assert.strictEqual(w2.pendingBalance, 189);
   });
 });
 

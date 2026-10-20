@@ -136,7 +136,12 @@ function computeOrderAllocations(order, commissionRates = {}, commissionSettings
     const commissionBase = Math.max(0, _r2(grossSubtotal - discountAmount));
     const platformCommission = _r2(commissionLines.reduce((sum, line) => sum + line.commissionAmount, 0));
     const commissionRate = commissionBase > 0 ? _r2(platformCommission / commissionBase * 100) : 0;
-    const netPayable = _r2(grossSubtotal + taxAmount - discountAmount - platformCommission);
+    // What the seller is paid: the goods AND the shipping the buyer paid for
+    // that shipment, less the platform commission (and any discount the buyer
+    // was given). `netPayable + platformCommission` therefore reconciles to
+    // what the buyer was charged — the property the allocation ledger and the
+    // seller wallet are both built on.
+    const netPayable = _r2(grossSubtotal + shippingFee + taxAmount - discountAmount - platformCommission);
 
     allocations.push({
       orderId: String(order._id),

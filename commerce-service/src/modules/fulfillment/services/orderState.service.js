@@ -12,7 +12,7 @@ const inventoryService = require('./inventory.service');
 const notificationService = require('../../../shared/services/notification.service');
 const allocationService = require('./allocation.service');
 const walletsService = require('./wallets.service');
-const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
+const { ORDER_STATUSES, ALLOWED_TRANSITIONS, normalizeStatus } = require('../constants/orderStatuses');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -22,21 +22,12 @@ class ApiError extends Error {
 }
 
 /**
- * Valid state transitions - single source of truth
- * Prevents invalid transitions like SHIPPED -> CANCELLED
+ * Valid state transitions — the canonical table lives in
+ * ../constants/orderStatuses, which the admin console and the order API both
+ * read. A second copy here had already drifted from it (a rejected refund
+ * could not be requested again), so there is only one table now.
  */
-const VALID_TRANSITIONS = {
-  [ORDER_STATUSES.PROCESSING]: [ORDER_STATUSES.CONFIRMED, ORDER_STATUSES.CANCELLED],
-  [ORDER_STATUSES.CONFIRMED]: [ORDER_STATUSES.SHIPPED, ORDER_STATUSES.CANCELLED],
-  [ORDER_STATUSES.SHIPPED]: [ORDER_STATUSES.IN_TRANSIT],
-  [ORDER_STATUSES.IN_TRANSIT]: [ORDER_STATUSES.DELIVERED],
-  [ORDER_STATUSES.DELIVERED]: [ORDER_STATUSES.REFUND_REQUESTED],
-  [ORDER_STATUSES.REFUND_REQUESTED]: [ORDER_STATUSES.REFUND_APPROVED, ORDER_STATUSES.REFUND_REJECTED],
-  [ORDER_STATUSES.REFUND_APPROVED]: [ORDER_STATUSES.REFUND_SUCCESS],
-  [ORDER_STATUSES.REFUND_REJECTED]: [],
-  [ORDER_STATUSES.REFUND_SUCCESS]: [],
-  [ORDER_STATUSES.CANCELLED]: [],
-};
+const VALID_TRANSITIONS = ALLOWED_TRANSITIONS;
 
 class OrderStateService {
   /**
@@ -69,7 +60,7 @@ class OrderStateService {
       // Fetch with session
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -77,13 +68,13 @@ class OrderStateService {
 
       // FIX #10: Idempotency - if already confirmed, return success
       if (currentStatus === ORDER_STATUSES.CONFIRMED) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         return order; // Already confirmed, return as-is
       }
 
       // FIX #4: Validate state machine
       if (!this.validateTransition(currentStatus, ORDER_STATUSES.CONFIRMED)) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError(
           `Cannot transition from ${currentStatus} to ${ORDER_STATUSES.CONFIRMED}`,
           409
@@ -94,7 +85,7 @@ class OrderStateService {
       for (const item of (order.cart || [])) {
         const available = await inventoryService.getAvailableStock(item.productId);
         if (available < item.quantity) {
-          await session.abortTransaction();
+          if (session.inTransaction()) await session.abortTransaction();
           throw new ApiError(
             `Insufficient stock for ${item.name}: ${available} available, ${item.quantity} requested`,
             422
@@ -190,7 +181,7 @@ class OrderStateService {
     } catch (err) {
       // Only abort if transaction is still active
       if (session.inTransaction()) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
       }
       throw err;
     } finally {
@@ -214,18 +205,27 @@ class OrderStateService {
 
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        if (ownsSession) await session.abortTransaction();
+        if (ownsSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
       const currentStatus = normalizeStatus(order.status);
       const targetStatus = normalizeStatus(newStatus);
 
+      // A transition to the status the order already carries is a no-op, not a
+      // failure. The refund workflow is retried by the admin console and by
+      // the payment callbacks, and a repeated request must be accepted instead
+      // of rejected as an illegal transition.
+      if (currentStatus === targetStatus) {
+        if (ownsSession) if (session.inTransaction()) await session.abortTransaction();
+        return order;
+      }
+
       // FIX #4: Validate transition
       if (!this.validateTransition(currentStatus, targetStatus)) {
-        if (ownsSession) await session.abortTransaction();
+        if (ownsSession) if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError(
-          `Invalid transition: ${currentStatus} -> ${targetStatus}`,
+          `Cannot transition from ${currentStatus} to ${targetStatus}`,
           409
         );
       }
@@ -320,7 +320,7 @@ class OrderStateService {
     } catch (err) {
       // Only abort if transaction is still active
       if (ownsSession && session.inTransaction()) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
       }
       throw err;
     } finally {
@@ -342,7 +342,7 @@ class OrderStateService {
 
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -372,7 +372,7 @@ class OrderStateService {
     } catch (err) {
       // Only abort if transaction is still active
       if (session.inTransaction()) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
       }
       throw err;
     } finally {

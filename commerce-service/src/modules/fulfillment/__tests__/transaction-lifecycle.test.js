@@ -9,8 +9,9 @@
 const assert = require('assert');
 const mongoose = require('mongoose');
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
+const { testDbUri } = require('../../../shared/utils/testDb');
 
-const DB_URL = (process.env.MONGODB_URI || 'mongodb://localhost:27017/ariti_commerce_test_transactions') + '?directConnection=true&retryWrites=false';
+const DB_URL = testDbUri('ariti_commerce_test_transactions');
 
 let Order, Product, Payment, SellerWallet, WalletTransaction, SellerAllocation, CommissionLedger;
 let ORDER_STATUSES, normalizeStatus, canTransition;

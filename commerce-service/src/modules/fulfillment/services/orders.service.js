@@ -18,7 +18,7 @@ const notificationService = require('../../../shared/services/notification.servi
 const productRepository = require('../../catalog/repositories/products.repository');
 const { isProductPubliclyVisible } = require('../../../shared/utils/productVisibility');
 const promotionsService = require('../../promotions/services/promotions.service');
-const { ORDER_STATUSES } = require('../constants/orderStatuses');
+const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
 
 async function notifyOrderStatus(order, previousStatus, nextStatus) {
@@ -27,6 +27,18 @@ async function notifyOrderStatus(order, previousStatus, nextStatus) {
   } catch (err) {
     console.warn(`Notification failed for order ${order._id}: ${err.message}`);
   }
+}
+
+/**
+ * The platform's shipping rule for an order that is NOT priced by a delivery
+ * zone: 3% of the order value, to 2dp.
+ *
+ * A checkout order takes its shipping from the delivery zone's own fee rule
+ * (the Delivery Service prices it). An agreement order has no zone quote, so
+ * it uses this rule — the same one the checkout UI shows for an agreement.
+ */
+function computeShipping(subtotal) {
+  return Math.round((Number(subtotal) || 0) * 0.03 * 100) / 100;
 }
 
 class ApiError extends Error {
@@ -409,18 +421,29 @@ class OrdersService {
   /**
    * Transition order status
    * @param {string} orderId
-   * @param {string} newStatus
+   * @param {string|Object} newStatus — the target status, or the `{ status }`
+   *   body the admin routes pass
    * @param {Object} context
    * @returns {Promise<Object>}
    */
   async updateOrderStatus(orderId, newStatus, context = {}) {
+    // The admin routes pass the whole `{ status }` body while the public
+    // controller and the bulk actions pass the status itself. Accept both:
+    // forwarding the object as-is made every admin status change fail with
+    // "Cannot transition from X to [object Object]".
+    let targetStatus = newStatus;
+    if (newStatus && typeof newStatus === 'object') {
+      const { status, ...rest } = newStatus;
+      targetStatus = status;
+      context = { ...rest, ...context };
+    }
     if (context.userRole === 'SELLER') {
       const order = await orderRepository.findById(orderId);
       if (!order) throw new ApiError('Order not found', 404);
       const shop = await shopRepository.findById(order.shopId);
       if (!shop || String(shop.ownerId) !== String(context.userId)) throw new ApiError('You cannot update this order', 403);
     }
-    return orderStateService.transitionOrder(orderId, newStatus, context);
+    return orderStateService.transitionOrder(orderId, targetStatus, context);
   }
 
   async verifyPickup(orderId, suppliedCode, actorId) {
@@ -468,23 +491,42 @@ class OrdersService {
     try {
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
       if (context.userRole === 'BUYER' && String(order.buyerId) !== String(context.userId)) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('You cannot cancel this order', 403);
       }
       if (context.userRole === 'SELLER') {
         const shop = await shopRepository.findById(order.shopId);
         if (!shop || String(shop.ownerId) !== String(context.userId)) {
-          await session.abortTransaction();
+          if (session.inTransaction()) await session.abortTransaction();
           throw new ApiError('You cannot cancel this order', 403);
         }
       }
 
-      // Release all reservations with current session
+      // Only an order that has not left the warehouse can be cancelled. The
+      // state machine does not allow SHIPPED / DELIVERED / REFUND_REQUESTED
+      // -> CANCELLED, and cancelling one of those would contradict the
+      // shipment that is already on its way (or the refund already running).
+      if (!orderStateService.validateTransition(order.status, ORDER_STATUSES.CANCELLED)) {
+        if (session.inTransaction()) await session.abortTransaction();
+        throw new ApiError(`Cannot cancel an order in status ${order.status}`, 409);
+      }
+
+      // Stock handling depends on whether the money already moved.
+      //
+      // Payment still PENDING: the units were only RESERVED, so releasing the
+      // reservation gives them back to the available pool — `stock` is
+      // untouched.
+      //
+      // Payment CONFIRMED: the units were sold (the stock was deducted when
+      // the payment was confirmed), so cancelling has to RETURN them to stock
+      // and the order's payment status becomes REFUNDED.
+      const paymentWasConfirmed = String(order.paymentStatus || '').toUpperCase() === 'CONFIRMED';
+
       for (const item of (order.cart || [])) {
         await inventoryService.releaseReservation(
           item.productId,
@@ -492,6 +534,14 @@ class OrdersService {
           orderId,
           { session }
         );
+        if (paymentWasConfirmed) {
+          await inventoryService.restoreStock(
+            item.productId,
+            item.quantity,
+            orderId,
+            { session }
+          );
+        }
       }
 
       // Update status using the canonical spelling accepted by the model.
@@ -500,6 +550,7 @@ class OrdersService {
       order.cancelledAt = new Date();
       order.cancelledBy = context.userId;
       order.cancellationReason = context.reason;
+      if (paymentWasConfirmed) order.paymentStatus = 'REFUNDED';
 
       if (!order.timeline) order.timeline = [];
       order.timeline.push({
@@ -537,7 +588,7 @@ class OrdersService {
 
       return order;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -629,14 +680,25 @@ class OrdersService {
     try {
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
+      }
+
+      // A repeated refund is a no-op: the order is already refunded and the
+      // stock was returned once. Returning early keeps the ledger correct — a
+      // second release would either double-restock or fail on a product whose
+      // reservation was already released.
+      if (normalizeStatus(order.status) === ORDER_STATUSES.REFUND_SUCCESS) {
+        if (session.inTransaction()) await session.abortTransaction();
+        return order;
       }
 
       // Transition to Refund Success
       await orderStateService.transitionOrder(orderId, 'Refund Success', {}, { session, deferSideEffects: true });
 
-      // Restock items if not already restocked
+      // Restock items if not already restocked. The units were sold when the
+      // payment was confirmed, so they go back to stock (and their reservation
+      // is released) — the ledger's RETURN entry.
       if (!order.restocked) {
         for (const item of (order.cart || [])) {
           await inventoryService.releaseReservation(
@@ -645,7 +707,15 @@ class OrdersService {
             orderId,
             { session }
           );
+          await inventoryService.restoreStock(
+            item.productId,
+            item.quantity,
+            orderId,
+            { session }
+          );
         }
+        order.restocked = true;
+        await order.save({ session });
       }
 
       const updated = await orderRepository.findById(orderId, { session });
@@ -653,7 +723,7 @@ class OrdersService {
       await notifyOrderStatus(updated, order.status, updated.status);
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -665,35 +735,119 @@ class OrdersService {
    * @param {string} orderId
    * @returns {Promise<Object>}
    */
-  async deductInventoryOnPayment(orderId) {
+  async deductInventoryOnPayment(cartOrOrderId, maybeOrderId) {
+    // Called both as (orderId) and as (cart, orderId): a caller that just
+    // wrote the order can hand over the lines it wrote instead of reading the
+    // order back.
+    const orderId = Array.isArray(cartOrOrderId) ? maybeOrderId : cartOrOrderId;
+    const providedCart = Array.isArray(cartOrOrderId) ? cartOrOrderId : null;
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      const order = await orderRepository.findById(orderId, { session });
+      const order = providedCart
+        ? { cart: providedCart }
+        : await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
-      // Deduct from actual inventory
-      for (const item of (order.cart || [])) {
-        await inventoryService.deductFromInventory(
-          item.productId,
-          item.quantity,
-          { session }
-        );
+      // Deduct from actual inventory. Agreement lines have no product behind
+      // them, so they are skipped.
+      const movements = [];
+      for (const item of order.cart || []) {
+        if (!OrdersService.isStockManagedLine(item)) continue;
+        const productId = OrdersService.lineProductId(item);
+        const qty = OrdersService.lineQuantity(item);
+        movements.push(await inventoryService.deductFromInventory(productId, qty, { session }));
       }
 
-      const updated = await orderRepository.findById(orderId);
       await session.commitTransaction();
-      return updated;
+      return movements;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
     }
+  }
+
+  /**
+   * Is this cart line backed by a catalogue product (and therefore by stock)?
+   *
+   * An agreement order's negotiated lines have no product behind them — they
+   * are the deal itself — so every stock operation must skip them instead of
+   * trying to reserve a product that does not exist.
+   */
+  static isStockManagedLine(line) {
+    if (!line) return false;
+    if (line.stockManaged === false) return false;
+    return Boolean(line.productId || line._id || line.id);
+  }
+
+  /** The catalogue product id of a stock-managed line, or null. */
+  static lineProductId(line) {
+    if (!OrdersService.isStockManagedLine(line)) return null;
+    return String(line.productId || line._id || line.id);
+  }
+
+  /** The quantity of a cart line. */
+  static lineQuantity(line) {
+    return Number(line?.quantity ?? line?.qty ?? 0) || 0;
+  }
+
+  /**
+   * Check that every stock-managed line of a cart can still be supplied.
+   * Agreement lines are skipped — there is no stock behind them.
+   */
+  async validateInventoryAvailability(cart) {
+    const items = [];
+    for (const item of cart || []) {
+      if (!OrdersService.isStockManagedLine(item)) continue;
+      const productId = OrdersService.lineProductId(item);
+      const qty = OrdersService.lineQuantity(item);
+      const product = await productRepository.findById(productId);
+      if (!product) throw new ApiError(`Product not found: ${productId}`, 404);
+      const availableStock = (product.stock || 0) - (product.reserved || 0);
+      if (availableStock < qty) {
+        throw new ApiError(`Insufficient stock for "${product.name}". Available: ${availableStock}, requested: ${qty}`, 400);
+      }
+      items.push({ productId, product, qty, availableStock });
+    }
+    return { available: true, items };
+  }
+
+  /**
+   * Reserve the stock of every stock-managed line of a cart.
+   * @returns {Promise<Array>} one entry per reserved line (agreement lines are
+   *   skipped, so they produce no entry)
+   */
+  async reserveInventory(cart, orderId, tracker = null) {
+    const movements = [];
+    for (const item of cart || []) {
+      if (!OrdersService.isStockManagedLine(item)) continue;
+      const productId = OrdersService.lineProductId(item);
+      const qty = OrdersService.lineQuantity(item);
+      movements.push(await inventoryService.reserveStock(productId, qty, orderId, 'STANDARD'));
+    }
+    return movements;
+  }
+
+  /**
+   * Release the reservation of every stock-managed line of a cart.
+   * @returns {Promise<Array>} one entry per released line
+   */
+  async releaseInventory(cart, orderId, reason = '') {
+    const movements = [];
+    for (const item of cart || []) {
+      if (!OrdersService.isStockManagedLine(item)) continue;
+      const productId = OrdersService.lineProductId(item);
+      const qty = OrdersService.lineQuantity(item);
+      movements.push(await inventoryService.releaseReservation(productId, qty, orderId));
+    }
+    return movements;
   }
 
   /**
@@ -704,7 +858,7 @@ class OrdersService {
    * @param {string} type - 'AGREEMENT' | 'STANDARD'
    * @returns {Promise<Object>}
    */
-  async reserveInventory(productId, quantity, orderId, type = 'STANDARD') {
+  async reserveInventoryForOrder(productId, quantity, orderId, type = 'STANDARD') {
     return inventoryService.reserveStock(productId, quantity, orderId, type);
   }
 
@@ -721,16 +875,26 @@ class OrdersService {
       // Agreement orders use the same required core fields as checkout orders.
       // Keep the request service's descriptive `lines` input, but persist it as
       // the canonical cart and derive the amount from the accepted terms.
+      //
+      // The agreed lines are NOT catalogue products: there is no product id and
+      // no stock behind them, so every line is marked `stockManaged: false`
+      // and every stock operation skips it (see isStockManagedLine).
       const cart = (agreementData.lines || agreementData.cart || []).map((line) => ({
         ...line,
         quantity: Number(line.quantity || 0),
         price: Number(line.unitPrice ?? line.price ?? 0),
         unitPrice: Number(line.unitPrice ?? line.price ?? 0),
+        stockManaged: false,
       }));
       const subtotal = cart.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
       const buyerId = String(agreementData.buyerId || agreementData.user?.id || agreementData.user?._id || '');
       const sellerId = String(agreementData.sellerId || cart[0]?.sellerId || '');
       const shopId = String(agreementData.shopId || cart[0]?.shopId || '');
+      // Shipping on an agreement order: the platform's agreement rule (3% of
+      // the agreed value). A checkout order is priced by the delivery zone's
+      // own fee rule; an agreement has no zone quote, so it uses this rule —
+      // the same one the checkout UI shows for an agreement.
+      const shippingFee = Number(agreementData.shippingFee || computeShipping(subtotal));
       // Create order with agreement reference
       const order = await orderRepository.create(
         {
@@ -741,8 +905,8 @@ class OrdersService {
           sellerId,
           shopId,
           subtotal,
-          shippingFee: Number(agreementData.shippingFee || 0),
-          totalPrice: subtotal + Number(agreementData.shippingFee || 0),
+          shippingFee,
+          totalPrice: Math.round((subtotal + shippingFee) * 100) / 100,
           status: 'Processing',
           isAgreement: true,
           createdAt: new Date(),
@@ -753,7 +917,7 @@ class OrdersService {
       await session.commitTransaction();
       return order;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -802,7 +966,7 @@ class OrdersService {
     try {
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -826,7 +990,7 @@ class OrdersService {
       await notifyOrderStatus(updated, order.status, updated.status);
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
@@ -846,7 +1010,7 @@ class OrdersService {
     try {
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -858,7 +1022,7 @@ class OrdersService {
       await notifyOrderStatus(updated, order.status, updated.status);
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
       await session.endSession();
