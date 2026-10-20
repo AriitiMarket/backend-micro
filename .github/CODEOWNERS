@@ -1,0 +1,29 @@
+# Code owners for Aritii Market backend services.
+# GitHub automatically requests reviews from these owners when files change.
+
+# Global owners — review all changes, especially shared config
+*                                           @yihune1234 @Nedhi5376
+
+# Identity Service — auth, users, roles, sellers/providers (internal)
+identity-service/                           @yihune1234 @Nedhi5376
+
+# Commerce Service — shops, catalog, carts, orders, payments
+commerce-service/                           @yihune1234 @Nedhi5376
+
+# Delivery Service — geography, providers, deliveries, assignments, tracking
+delivery-service/                           @yihune1234 @Nedhi5376
+
+# API Gateway — routing, auth edge, shared packages, docker-compose
+api-gateway/                                @yihune1234 @Nedhi5376
+packages/                                   @yihune1234 @Nedhi5376
+
+# Shared repository configuration
+docker-compose.yml                          @yihune1234 @Nedhi5376
+.env.example                                @yihune1234 @Nedhi5376
+Makefile                                    @yihune1234 @Nedhi5376
+
+# Architecture guard — prevents regressions in service boundaries
+tests/architecture.test.js                  @yihune1234 @Nedhi5376
+
+# Documentation
+docs/                                       @yihune1234 @Nedhi5376
