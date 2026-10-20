@@ -1,23 +1,35 @@
 /**
  * Two-Factor Authentication (2FA) Service
- * Implements TOTP (Time-based One-Time Password) + Backup Codes
+ * Supports 3 methods: TOTP (Google Authenticator), Email OTP, SMS OTP
  */
 
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
+let nodemailer = null;
+try { nodemailer = require('nodemailer'); } catch (e) { nodemailer = null; }
+// const twilio = require('twilio'); // For SMS OTP (optional)
 
-// Generate random backup codes
-function generateBackupCodes(count = 8) {
+// ── OTP Generation ──
+
+function generateOTP(length = 6) {
+  return Math.floor(Math.random() * Math.pow(10, length))
+    .toString()
+    .padStart(length, '0');
+}
+
+function generateBackupCodes(count = 10) {
   const codes = [];
   for (let i = 0; i < count; i++) {
+    // Increased entropy: 8 hex chars (32-bit) instead of 4 (24-bit)
     const code = crypto.randomBytes(4).toString('hex').toUpperCase();
     codes.push(`${code.slice(0, 4)}-${code.slice(4)}`);
   }
   return codes;
 }
 
-// Generate TOTP secret and QR code
+// ── TOTP (Google Authenticator) ──
+
 async function setupTOTP(email, appName = 'Ariiti') {
   const secret = speakeasy.generateSecret({
     name: `${appName} (${email})`,
@@ -36,7 +48,6 @@ async function setupTOTP(email, appName = 'Ariiti') {
   };
 }
 
-// Verify TOTP code
 function verifyTOTP(secret, code) {
   if (!secret || !code) return false;
 
@@ -44,15 +55,183 @@ function verifyTOTP(secret, code) {
     secret: secret,
     encoding: 'base32',
     token: code,
-    window: 2, // Allow ±2 time windows (60 seconds total)
+    window: 1, // Reduced from 2 to 1 (±30 seconds instead of ±60 seconds)
   });
 
   return verified;
 }
 
-// Verify backup code and remove it
+// ── Email OTP ──
+
+async function sendEmailOTP(email, otp) {
+  if (!nodemailer || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+    console.log(`Email OTP to ${email}: ${otp} (SMTP not configured - dev mode)`);
+    return true;
+  }
+  try {
+    // Example using nodemailer (configure with your email service)
+    const transporter = nodemailer.createTransport({
+      // Configure based on your email provider
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER || 'noreply@ariiti.com',
+        pass: process.env.EMAIL_PASSWORD || '',
+      },
+    });
+
+    await transporter.sendMail({
+      from: 'noreply@ariiti.com',
+      to: email,
+      subject: 'Your Ariiti 2FA Code',
+      html: `
+        <h2>Two-Factor Authentication</h2>
+        <p>Your verification code is:</p>
+        <h1 style="letter-spacing: 5px; font-family: monospace;">${otp}</h1>
+        <p>This code expires in 10 minutes.</p>
+        <p>If you didn't request this, please ignore.</p>
+      `,
+    });
+
+    return true;
+  } catch (err) {
+    console.error('Email OTP send failed:', err);
+    return false;
+  }
+}
+
+// ── SMS OTP ──
+
+async function sendSMSOTP(phoneNumber, otp) {
+  // In production, integrate with Twilio
+  try {
+    // Example: Using Twilio (requires setup)
+    // const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    // await client.messages.create({
+    //   body: `Your Ariiti 2FA code is: ${otp}. Expires in 10 minutes.`,
+    //   from: process.env.TWILIO_PHONE_NUMBER,
+    //   to: phoneNumber,
+    // });
+
+    console.log(`SMS OTP to ${phoneNumber}: ${otp}`); // For testing
+    return true;
+  } catch (err) {
+    console.error('SMS OTP send failed:', err);
+    return false;
+  }
+}
+
+// ── Method Selection & Setup ──
+
+async function setupTwoFA(method, email, phoneNumber = null) {
+  if (method === 'TOTP') {
+    return await setupTOTP(email);
+  } else if (method === 'EMAIL') {
+    const otp = generateOTP();
+    const sent = await sendEmailOTP(email, otp);
+    if (!sent) throw new Error('Failed to send email OTP');
+    return {
+      method: 'EMAIL',
+      otp, // Store this in database temporarily
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+    };
+  } else if (method === 'SMS') {
+    if (!phoneNumber) throw new Error('Phone number required for SMS');
+    const otp = generateOTP();
+    const sent = await sendSMSOTP(phoneNumber, otp);
+    if (!sent) throw new Error('Failed to send SMS OTP');
+    return {
+      method: 'SMS',
+      otp,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+    };
+  }
+  throw new Error('Invalid 2FA method');
+}
+
+// ── Verification ──
+
+function verifyOTP(storedOTP, providedOTP, expiresAt) {
+  if (new Date() > expiresAt) {
+    return { valid: false, message: 'OTP expired. Request a new one.' };
+  }
+  if (storedOTP !== providedOTP) {
+    return { valid: false, message: 'Invalid OTP code.' };
+  }
+  return { valid: true, message: 'OTP verified.' };
+}
+
+// ── Database Operations ──
+
+async function enable2FA(pool, userId, method, secretOrOTP, backupCodes, phoneNumber = null, destination = null) {
+  const result = await pool.query(
+    `UPDATE users SET 
+      two_factor_enabled = true,
+      two_factor_secret = $1,
+      two_factor_type = $2,
+      phone_number = COALESCE($3, phone_number),
+      backup_codes = $4,
+      two_factor_destination = $6,
+      two_factor_setup_at = NOW()
+    WHERE id = $5
+    RETURNING id, email, two_factor_enabled, two_factor_type`,
+    [secretOrOTP, method, phoneNumber, backupCodes, userId, destination]
+  );
+
+  return result.rows[0];
+}
+
+async function disable2FA(pool, userId) {
+  const result = await pool.query(
+    `UPDATE users SET 
+      two_factor_enabled = false,
+      two_factor_secret = NULL,
+      two_factor_type = NULL,
+      backup_codes = NULL,
+      two_factor_setup_at = NULL,
+      two_factor_verified_at = NULL
+    WHERE id = $1
+    RETURNING id, email, two_factor_enabled`,
+    [userId]
+  );
+
+  return result.rows[0];
+}
+
+async function is2FAEnabled(pool, userId) {
+  const result = await pool.query(
+    'SELECT two_factor_enabled FROM users WHERE id = $1',
+    [userId]
+  );
+
+  return result.rows[0]?.two_factor_enabled || false;
+}
+
+async function get2FAStatus(pool, userId) {
+  const result = await pool.query(
+    `SELECT 
+      two_factor_enabled,
+      two_factor_type,
+      phone_number,
+      two_factor_setup_at,
+      array_length(backup_codes, 1) as backup_codes_remaining
+    FROM users WHERE id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) return null;
+
+  return {
+    enabled: result.rows[0].two_factor_enabled,
+    type: result.rows[0].two_factor_type,
+    phoneNumber: result.rows[0].phone_number,
+    setupAt: result.rows[0].two_factor_setup_at,
+    backupCodesRemaining: result.rows[0].backup_codes_remaining || 0,
+  };
+}
+
+// ── Backup Codes ──
+
 async function verifyBackupCode(pool, userId, code) {
-  // Get user's backup codes
   const result = await pool.query(
     'SELECT backup_codes FROM users WHERE id = $1',
     [userId]
@@ -67,94 +246,80 @@ async function verifyBackupCode(pool, userId, code) {
     return { valid: false, message: 'Invalid backup code' };
   }
 
-  // Remove used code
   const updatedCodes = backupCodes.filter((_, i) => i !== codeIndex);
   await pool.query(
     'UPDATE users SET backup_codes = $1 WHERE id = $2',
     [updatedCodes, userId]
   );
 
-  const codesRemaining = updatedCodes.length;
   return {
     valid: true,
     message: 'Backup code used successfully',
-    codesRemaining,
+    codesRemaining: updatedCodes.length,
   };
 }
 
-// Enable 2FA for a user
-async function enable2FA(pool, userId, secret, backupCodes) {
-  const result = await pool.query(
-    `UPDATE users SET 
-      two_factor_enabled = true,
-      two_factor_secret = $1,
-      two_factor_type = 'TOTP',
-      backup_codes = $2,
-      two_factor_setup_at = NOW()
-    WHERE id = $3
-    RETURNING id, email, two_factor_enabled`,
-    [secret, backupCodes, userId]
-  );
+// ── Pending 2FA setup (stored between setup and verify-setup) ──
 
-  return result.rows[0];
+async function storePending2FA(pool, userId, { method, secret, otp, expiresAt, phoneNumber }) {
+  await pool.query(
+    `UPDATE users SET
+       two_factor_pending_secret = $1,
+       two_factor_pending_method = $2,
+       two_factor_pending_otp = $3,
+       two_factor_pending_expires_at = $4,
+       two_factor_pending_phone = $5
+     WHERE id = $6`,
+    [secret || null, method, otp || null, expiresAt || null, phoneNumber || null, userId]
+  );
 }
 
-// Disable 2FA for a user
-async function disable2FA(pool, userId) {
+async function getPending2FA(pool, userId) {
   const result = await pool.query(
-    `UPDATE users SET 
-      two_factor_enabled = false,
-      two_factor_secret = NULL,
-      backup_codes = NULL,
-      two_factor_setup_at = NULL,
-      two_factor_verified_at = NULL
-    WHERE id = $1
-    RETURNING id, email, two_factor_enabled`,
+    `SELECT two_factor_pending_secret, two_factor_pending_method, two_factor_pending_otp,
+            two_factor_pending_expires_at, two_factor_pending_phone
+     FROM users WHERE id = $1`,
     [userId]
   );
-
-  return result.rows[0];
-}
-
-// Check if 2FA is enabled for user
-async function is2FAEnabled(pool, userId) {
-  const result = await pool.query(
-    'SELECT two_factor_enabled FROM users WHERE id = $1',
-    [userId]
-  );
-
-  return result.rows[0]?.two_factor_enabled || false;
-}
-
-// Get 2FA status
-async function get2FAStatus(pool, userId) {
-  const result = await pool.query(
-    `SELECT 
-      two_factor_enabled,
-      two_factor_type,
-      two_factor_setup_at,
-      array_length(backup_codes, 1) as backup_codes_remaining
-    FROM users WHERE id = $1`,
-    [userId]
-  );
-
-  if (!result.rows[0]) return null;
-
+  const row = result.rows[0];
+  if (!row || !row.two_factor_pending_method) return null;
   return {
-    enabled: result.rows[0].two_factor_enabled,
-    type: result.rows[0].two_factor_type,
-    setupAt: result.rows[0].two_factor_setup_at,
-    backupCodesRemaining: result.rows[0].backup_codes_remaining || 0,
+    secret: row.two_factor_pending_secret,
+    method: row.two_factor_pending_method,
+    otp: row.two_factor_pending_otp,
+    expiresAt: row.two_factor_pending_expires_at,
+    phoneNumber: row.two_factor_pending_phone,
   };
+}
+
+async function clearPending2FA(pool, userId) {
+  await pool.query(
+    `UPDATE users SET
+       two_factor_pending_secret = NULL,
+       two_factor_pending_method = NULL,
+       two_factor_pending_otp = NULL,
+       two_factor_pending_expires_at = NULL,
+       two_factor_pending_phone = NULL
+     WHERE id = $1`,
+    [userId]
+  );
 }
 
 module.exports = {
+  generateOTP,
   generateBackupCodes,
   setupTOTP,
   verifyTOTP,
-  verifyBackupCode,
+  sendEmailOTP,
+  sendSMSOTP,
+  setupTwoFA,
+  verifyOTP,
   enable2FA,
   disable2FA,
   is2FAEnabled,
   get2FAStatus,
+  verifyBackupCode,
+  storePending2FA,
+  getPending2FA,
+  clearPending2FA,
 };

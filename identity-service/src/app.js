@@ -14,6 +14,7 @@ const addressesRoutes = require('./routes/addresses.routes');
 const adminRoutes = require('./routes/admin.routes');
 const adminRolesRoutes = require('./routes/admin-roles.routes');
 const auditRoutes = require('./routes/audit.routes');
+const twoFactorRoutes = require('./routes/twoFactor.routes');
 const gatewayOnly = require('./middleware/gatewayOnly');
 const { requestId } = require('./shared/request-context');
 const { errorHandler } = require('./middleware/errorHandler');
@@ -109,6 +110,7 @@ app.use(addressesRoutes);
 app.use(adminRoutes);
 app.use(adminRolesRoutes);
 app.use(auditRoutes);
+app.use(twoFactorRoutes);
 app.use(errorHandler);
 
 module.exports = app;

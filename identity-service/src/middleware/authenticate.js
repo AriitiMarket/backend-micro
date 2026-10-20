@@ -18,6 +18,29 @@ async function authenticate(req, res, next) {
       err.statusCode = 401;
       return next(err);
     }
+
+    // Check if this is a restricted 2FA temporary token
+    if (decoded.type === '2fa-temp' && decoded.scope === 'verify-2fa-only') {
+      // Restricted token: only allow 2FA verification endpoints
+      const allowedPaths = ['/auth/verify-2fa', '/auth/resend-2fa-code'];
+      const requestPath = req.path || req.url;
+
+      if (!allowedPaths.some(path => requestPath.includes(path))) {
+        const err = new Error('Temporary 2FA token can only be used for 2FA verification');
+        err.statusCode = 403;
+        return next(err);
+      }
+
+      // Minimal claims for 2FA verification
+      req.user = {
+        id: decoded.sub,
+        sub: decoded.sub,
+        is2FATempToken: true,
+      };
+      return next();
+    }
+
+    // Regular access token: attach full user context
     req.user = {
       id: decoded.sub,
       sub: decoded.sub,
