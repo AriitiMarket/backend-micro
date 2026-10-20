@@ -574,6 +574,23 @@ async function initSchema(p) {
     END;
     $$ LANGUAGE plpgsql;
   `);
+
+  // ── 2FA columns (migrations 003, 004, 005) — idempotent on every boot ──────
+  await p.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(255);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_type VARCHAR(50);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS backup_codes TEXT[];
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_setup_at TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_verified_at TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_pending_secret VARCHAR(255);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_pending_method VARCHAR(50);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_pending_otp VARCHAR(255);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_pending_expires_at TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_pending_phone VARCHAR(50);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_destination VARCHAR(255);
+  `);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_users_2fa_enabled ON users(two_factor_enabled);`);
 }
 
 async function getPool() {

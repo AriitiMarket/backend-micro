@@ -426,9 +426,20 @@ function verify(token) {
   return verifyAccessToken(token);
 }
 
+async function completeLoginAfter2FA(userId) {
+  const user = await usersRepository.findById(userId);
+  if (!user || user.status !== 'active') {
+    const err = new Error('User not found or inactive');
+    err.statusCode = 401;
+    throw err;
+  }
+  const tokens = await createTokenPair(user);
+  const sessionUser = withActiveRole(user);
+  const authorization = await resolveAdminAuthorization(sessionUser);
+  return { tokens, user: sessionUser, authorization };
+}
+
 module.exports = {
-  // Legacy alias: the buyer registration entry point keeps its old name for
-  // callers that already import it.
   registerBuyer,
   registerCustomer: registerBuyer,
   registerWithRole,
@@ -442,5 +453,6 @@ module.exports = {
   switchRole,
   withActiveRole,
   verify,
+  completeLoginAfter2FA,
   ACCESS_TOKEN_EXPIRES_IN_SEC,
 };

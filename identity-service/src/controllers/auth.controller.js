@@ -117,15 +117,15 @@ async function registerWithRole(req, res, next) {
       code: code.code,
       state: req.body.state || null,
       expires_in: code.expiresIn,
-      user: { 
-        id: user.id, 
-        email: user.email, 
-        name: user.name, 
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
         role: user.role,
-        registrationType 
+        registrationType
       },
-      message: registrationType === 'BUYER' 
-        ? 'Buyer account created successfully' 
+      message: registrationType === 'BUYER'
+        ? 'Buyer account created successfully'
         : `${registrationType} application submitted and pending approval`,
     }, 'Registration successful');
   } catch (err) {
@@ -142,10 +142,43 @@ async function authorizeWithCredentials(req, res, next) {
     const { user, loginRole } = await authService.authenticateCredentials({
       email: req.body.email,
       password: req.body.password,
-      // Which role the visitor signed in as (Buyer / Seller / Provider). The
-      // account must have registered for that role — see resolveLoginRole.
       role: req.body.role,
     });
+
+    // 2FA challenge: if enabled, do not issue an auth code yet.
+    if (user.twoFactorEnabled) {
+      const { sign2FAToken } = require('../utils/jwt');
+      const twoFactorService = require('../services/twoFactor.service');
+      const { audit2FA } = require('../services/auditLog.service');
+
+      // Use RESTRICTED temporary token for 2FA only (not full access token)
+      const tempToken = sign2FAToken(user.id);
+
+      const method = user.twoFactorType || 'TOTP';
+      if (method === 'EMAIL' || method === 'SMS') {
+        const otp = twoFactorService.generateOTP();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        if (method === 'EMAIL') await twoFactorService.sendEmailOTP(user.twoFactorDestination || user.email, otp);
+        else await twoFactorService.sendSMSOTP(user.twoFactorDestination || user.phoneNumber, otp);
+        const pool = await require('../config/database').getPool();
+        await twoFactorService.storePending2FA(pool, user.id, {
+          method,
+          otp,
+          expiresAt,
+          phoneNumber: user.phoneNumber,
+        });
+      }
+
+      audit2FA.setupInitiated(user.id, method);
+
+      return ok(res, {
+        requires2fa: true,
+        method,
+        tempToken,
+        message: 'Two-factor authentication required',
+      });
+    }
+
     const pkce = readPkce(req.body, null);
     const code = await authService.createAuthorizationCode({
       userId: user.id,
@@ -361,7 +394,7 @@ async function checkRoleAccessStatus(req, res, next) {
     const { checkRoleAccess } = require('../middleware/roleAccess');
     const userId = req.user.sub || req.user.id;
     const role = req.params.role || req.query.role;
-    
+
     if (!role) {
       return res.status(400).json({
         success: false,

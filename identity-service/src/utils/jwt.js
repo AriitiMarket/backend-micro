@@ -79,6 +79,23 @@ function signIdToken(user) {
   });
 }
 
+// 2FA temporary token — highly restricted, short-lived (5 min), 2FA-only.
+// Only includes user ID, not full user context. Can ONLY be used for /auth/verify-2fa.
+function sign2FAToken(userId) {
+  const payload = {
+    sub: userId,
+    type: '2fa-temp',
+    scope: 'verify-2fa-only',
+  };
+  return jwt.sign(payload, privateKey, {
+    algorithm: 'RS256',
+    expiresIn: '5m', // 5 minutes, separate from access token expiry
+    issuer: env.issuer,
+    audience: env.audience,
+    keyid: KID,
+  });
+}
+
 // Verify (RS256 only, issuer/audience checked).
 function verifyAccessToken(token) {
   return jwt.verify(token, publicKey, {
@@ -133,6 +150,7 @@ module.exports = {
   KID,
   signAccessToken,
   signIdToken,
+  sign2FAToken,
   verifyAccessToken,
   generateRefreshToken,
   hashToken,

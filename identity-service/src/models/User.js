@@ -122,8 +122,11 @@ function toUser(row) {
     status: row.status,
     isVerified: row.is_verified,
     sellerStatus: row.seller_status || 'INACTIVE',
-    adminScope: row.admin_scope || {},
-    createdAt: row.created_at,
+    twoFactorEnabled: row.two_factor_enabled || false,
+    twoFactorType: row.two_factor_type || null,
+    twoFactorSecret: row.two_factor_secret || null,
+    twoFactorDestination: row.two_factor_destination || null,
+    backupCodes: row.backup_codes || [],
     updatedAt: row.updated_at,
   };
 }
