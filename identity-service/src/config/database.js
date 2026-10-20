@@ -404,6 +404,23 @@ async function initSchema(p) {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_admin_user_roles_user ON admin_user_roles(user_id);`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_admin_user_roles_role ON admin_user_roles(role_id);`);
 
+  // Role → permission links. The RBAC queries read a role's permissions through
+  // this junction table, so without it every admin token fails to resolve
+  // (ADMIN_AUTHORIZATION_UNAVAILABLE) and no admin can sign in.
+  //
+  // The roles' JSONB `permissions` column stays the write path (the console
+  // edits it); this table is the projection those queries read. Both are kept
+  // in step by the backfill below and by the repository on every role change.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS admin_role_permissions (
+      role_id UUID NOT NULL REFERENCES admin_roles(id) ON DELETE CASCADE,
+      permission_id UUID NOT NULL REFERENCES admin_permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_id)
+    );
+  `);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_admin_role_permissions_role ON admin_role_permissions(role_id);`);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_admin_role_permissions_permission ON admin_role_permissions(permission_id);`);
+
   // Seed default permissions.
   const defaultPermissions = [
     { key: 'dashboard.view', name: 'View Dashboard', module: 'dashboard', description: 'View the admin dashboard and overview stats' },
@@ -469,6 +486,27 @@ async function initSchema(p) {
       is_system: true,
     },
     {
+      name: 'OPERATIONS_ADMIN',
+      display_name: 'Operations Admin',
+      description: 'Runs daily orders, delivery, and dispute operations without access to RBAC, platform settings, or financial configuration',
+      permissions: [
+        'dashboard.view',
+        'users.view',
+        'businesses.view',
+        'shops.view',
+        'locations.view',
+        'orders.view',
+        'orders.manage',
+        'delivery.view',
+        'delivery.manage',
+        'disputes.view',
+        'disputes.manage',
+        'reports.view',
+        'audit.view',
+      ],
+      is_system: true,
+    },
+    {
       name: 'SELLER_ADMIN',
       display_name: 'Seller Admin',
       description: 'Manages sellers, businesses, shops, and commerce',
@@ -503,6 +541,29 @@ async function initSchema(p) {
       [role.name, role.display_name, role.description, JSON.stringify(role.permissions), role.is_system]
     );
   }
+
+  // Project each role's permission list into the junction table the RBAC
+  // queries read, so the two never disagree. A role that lists the wildcard is
+  // linked to every permission key.
+  await p.query(`
+    INSERT INTO admin_role_permissions (role_id, permission_id)
+    SELECT r.id, ap.id
+    FROM admin_roles r
+    CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(r.permissions, '[]'::jsonb)) AS key
+    JOIN admin_permissions ap ON ap.key = key
+    ON CONFLICT DO NOTHING;
+  `);
+  await p.query(`
+    INSERT INTO admin_role_permissions (role_id, permission_id)
+    SELECT r.id, ap.id
+    FROM admin_roles r
+    CROSS JOIN admin_permissions ap
+    WHERE EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(COALESCE(r.permissions, '[]'::jsonb)) AS key
+      WHERE key = '*'
+    )
+    ON CONFLICT DO NOTHING;
+  `);
 
   // Clean up expired refresh tokens and auth codes periodically.
   await p.query(`

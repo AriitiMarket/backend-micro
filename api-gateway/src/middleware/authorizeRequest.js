@@ -285,4 +285,6 @@ module.exports.ROUTE_PERMISSIONS = ROUTE_PERMISSIONS;
 module.exports.ACTOR_SHARED_PREFIXES = ACTOR_SHARED_PREFIXES;
 module.exports.isActorSharedPath = isActorSharedPath;
 module.exports.requiredPermission = requiredPermission;
+module.exports.isPublicRead = isPublicRead;
+module.exports.PUBLIC_READ_PREFIXES = PUBLIC_READ_PREFIXES;
 module.exports.ALLOW_LEGACY_ADMIN_TOKENS = ALLOW_LEGACY_ADMIN_TOKENS;

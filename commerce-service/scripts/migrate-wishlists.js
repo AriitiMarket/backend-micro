@@ -38,7 +38,22 @@ async function main() {
     mergedCount += docs.length - 1;
   }
 
-  if (APPLY) await collection.createIndex({ userId: 1 }, { unique: true, name: 'userId_unique' });
+  if (APPLY) {
+    // The legacy indexes are replaced by the single unique userId index the
+    // model declares. They must go first: MongoDB refuses to create an index
+    // whose name already exists with other options (IndexKeySpecsConflict) and
+    // refuses a second index on the same key pattern with other options
+    // (IndexOptionsConflict).
+    for (const legacy of ['userId_1', 'userId_1_items.productId_1']) {
+      try {
+        await collection.dropIndex(legacy);
+        console.log(`dropped legacy index ${legacy}`);
+      } catch (err) {
+        if (err.codeName !== 'IndexNotFound' && err.code !== 27) throw err;
+      }
+    }
+    await collection.createIndex({ userId: 1 }, { unique: true, name: 'userId_unique' });
+  }
   console.log(JSON.stringify({ mode: APPLY ? 'apply' : 'dry-run', duplicateUsers: duplicates.length, duplicateDocumentsToMerge: mergedCount }, null, 2));
   await mongoose.disconnect();
 }

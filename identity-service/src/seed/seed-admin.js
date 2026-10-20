@@ -1,8 +1,10 @@
 // Seed admin users for the Aritii Market admin panel (2-role system).
-// Usage: 
+// Usage:
 //   docker compose exec identity-service node src/seed/seed-admin.js
 //
 // Environment variables (optional):
+//   ADMIN_EMAIL (default: admin@aritii.com) — the platform's canonical admin
+//   ADMIN_PASSWORD (default: Admin@12345)
 //   SUPER_ADMIN_EMAIL (default: superadmin@aritii.com)
 //   SUPER_ADMIN_PASSWORD (default: SuperAdmin@123)
 //   OPERATIONS_ADMIN_EMAIL (default: opsadmin@aritii.com)
@@ -13,6 +15,14 @@ const { hashPassword } = require('../utils/password');
 const crypto = require('crypto');
 
 const TEST_ADMINS = [
+  {
+    // The canonical admin of the platform (README + the E2E suites use it).
+    // It carries the unrestricted SUPER_ADMIN role.
+    email: process.env.ADMIN_EMAIL || 'admin@aritii.com',
+    password: process.env.ADMIN_PASSWORD || 'Admin@12345',
+    name: 'Aritii Admin',
+    role: 'SUPER_ADMIN',
+  },
   {
     email: process.env.SUPER_ADMIN_EMAIL || 'superadmin@aritii.com',
     password: process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin@123',

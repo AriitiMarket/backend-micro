@@ -105,10 +105,12 @@ describe('Wishlist Model Schema', () => {
     assert.ok(w.createdAt instanceof Date);
   });
 
-  it('has unique index on userId + items.productId', () => {
-    const idx = Wishlist.schema.indexes().find((i) => i[0] && i[0]['userId'] && i[0]['items.productId']);
-    assert.ok(idx, 'compound index missing');
+  it('has a unique index on userId', () => {
+    const idx = Wishlist.schema.indexes().find((i) => i[0] && i[0].userId && !i[0]['items.productId']);
+    assert.ok(idx, 'single-field unique index on userId missing');
     assert.strictEqual(idx[1].unique, true);
+    // The name is fixed so the migration and the model never disagree.
+    assert.strictEqual(idx[1].name, 'userId_unique');
   });
 });
 

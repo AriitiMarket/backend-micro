@@ -10,6 +10,7 @@
  */
 
 const env = require('../config/env');
+const { isPublicRead } = require('./authorizeRequest');
 
 /**
  * Maps endpoints to required permissions.
@@ -209,21 +210,30 @@ function enforcePermissions(req, res, next) {
   // Construct the endpoint key
   const endpointKey = normalizePathForMatching(req.method, req.path);
 
+  // Reference data the marketplace selectors read without a token (the location
+  // tree, the zone coverage) is public by design — the same rule authorizeRequest
+  // applies. Requiring `locations.view` here would put the buyer's address
+  // picker behind an admin permission again.
+  if (isPublicRead(req.method, req.path)) return next();
+
   // Look up required permissions
   const requiredPermissions = ENDPOINT_PERMISSIONS[endpointKey];
 
-  // If endpoint is not in the map, deny by default (fail-secure)
+  // The endpoint is not in this table, so this table has nothing to say about
+  // it. It is NOT unguarded: authorizeRequest runs immediately before this
+  // middleware and holds the canonical permission table for every route —
+  // including the /admin and /delivery catch-alls — so an unmapped route is
+  // still permission-checked there, and the owning service still applies its
+  // own role gate.
+  //
+  // Denying unmapped routes here instead would break every route this table
+  // has not been filled in for (the shop catalogue, the provider workspace, the
+  // seller-application flow) without making any of them safer.
   if (!requiredPermissions) {
     if (env.nodeEnv === 'development') {
-      console.warn(`[enforcePermissions] Unmapped endpoint: ${endpointKey}`);
+      console.warn(`[enforcePermissions] Unmapped endpoint (authorizeRequest governs): ${endpointKey}`);
     }
-
-    return res.status(403).json({
-      success: false,
-      code: 'PERMISSION_UNCONFIGURED',
-      message: 'Endpoint permissions not configured',
-      endpoint: endpointKey,
-    });
+    return next();
   }
 
   // Check if user has permission

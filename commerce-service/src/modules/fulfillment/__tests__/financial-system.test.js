@@ -245,11 +245,15 @@ describe('2. Multi-Seller Orders & Splits', () => {
     const s2 = allocs.find(a => a.sellerId === 'seller-2');
     assert.strictEqual(s1.grossSubtotal, 100);
     assert.strictEqual(s1.platformCommission, 10);
-    assert.strictEqual(s1.netPayable, 99);
+    // The platform's default tax rate is 0%, so the seller is paid the gross
+    // minus the commission: 100 - 10 = 90.
+    assert.strictEqual(s1.taxAmount, 0);
+    assert.strictEqual(s1.netPayable, 90);
     assert.strictEqual(s1.commissionRate, 10);
     assert.strictEqual(s2.grossSubtotal, 200);
     assert.strictEqual(s2.platformCommission, 20);
-    assert.strictEqual(s2.netPayable, 189);
+    assert.strictEqual(s2.taxAmount, 0);
+    assert.strictEqual(s2.netPayable, 180);
     assert.strictEqual(s2.commissionRate, 10);
     const totalCommission = s1.platformCommission + s2.platformCommission;
     assert.strictEqual(totalCommission, 30);
@@ -289,8 +293,9 @@ describe('2. Multi-Seller Orders & Splits', () => {
     }
     const w1 = await walletsService.getSellerWallet('seller-1');
     const w2 = await walletsService.getSellerWallet('seller-2');
-    assert.strictEqual(w1.pendingBalance, 99);
-    assert.strictEqual(w2.pendingBalance, 189);
+    // Gross minus commission (the platform's default tax rate is 0%).
+    assert.strictEqual(w1.pendingBalance, 90);
+    assert.strictEqual(w2.pendingBalance, 180);
   });
 });
 

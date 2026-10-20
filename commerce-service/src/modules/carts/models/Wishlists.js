@@ -22,10 +22,18 @@ const wishlistItemSchema = new mongoose.Schema({
 const wishlistSchema = new mongoose.Schema({
   // A buyer has exactly one wishlist document. This unique key is what makes
   // atomic first-item upserts safe across concurrent API workers.
-  userId: { type: String, required: true, unique: true },
+  //
+  // The index is declared explicitly (instead of `unique: true` on the field)
+  // so it always carries the SAME name — mongoose would name a field-level
+  // unique index `userId_1`, which collides with the legacy non-unique index
+  // of that name and with the migration that prepares it (see
+  // commerce-service/scripts/migrate-wishlists.js).
+  userId: { type: String, required: true },
   items: [wishlistItemSchema],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
+
+wishlistSchema.index({ userId: 1 }, { unique: true, name: 'userId_unique' });
 
 module.exports = mongoose.model('Wishlist', wishlistSchema);

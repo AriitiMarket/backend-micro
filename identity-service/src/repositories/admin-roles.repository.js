@@ -58,12 +58,39 @@ async function getRoleByName(name) {
   return { ...role, permissions: role.permissions || [] };
 }
 
+/**
+ * Replace a role's permission links with the given key list.
+ *
+ * The role's JSONB `permissions` column is the write path (the console edits
+ * it); the junction table is what the RBAC queries read. Both are kept in step
+ * here, so a role created or edited in the console takes effect on the very
+ * next admin token. A role that lists the wildcard is linked to every key.
+ */
+async function syncRolePermissions(roleId, permissions) {
+  const pool = await getPool();
+  const keys = Array.isArray(permissions) ? permissions.map(String) : [];
+
+  await pool.query('DELETE FROM admin_role_permissions WHERE role_id = $1;', [roleId]);
+  if (keys.length === 0) return [];
+
+  const result = await pool.query(
+    `INSERT INTO admin_role_permissions (role_id, permission_id)
+     SELECT $1, ap.id FROM admin_permissions ap
+     WHERE $2 OR ap.key = ANY($3::text[])
+     ON CONFLICT DO NOTHING
+     RETURNING permission_id;`,
+    [roleId, keys.includes('*'), keys]
+  );
+  return result.rows;
+}
+
 async function createRole({ name, displayName, description, permissions }) {
   const pool = await getPool();
   const result = await pool.query(
     `INSERT INTO admin_roles (name, display_name, description, permissions) VALUES ($1, $2, $3, $4) RETURNING *;`,
     [name, displayName, description || null, JSON.stringify(permissions || [])]
   );
+  await syncRolePermissions(result.rows[0].id, permissions || []);
   return { ...result.rows[0], permissions: result.rows[0].permissions || [] };
 }
 
@@ -79,6 +106,7 @@ async function updateRole(id, { displayName, description, permissions }) {
   fields.push('updated_at = NOW()');
   values.push(id);
   await pool.query(`UPDATE admin_roles SET ${fields.join(', ')} WHERE id = $${idx};`, values);
+  if (permissions !== undefined) await syncRolePermissions(id, permissions);
   return getRoleById(id);
 }
 
