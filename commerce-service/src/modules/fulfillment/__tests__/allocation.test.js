@@ -226,12 +226,16 @@ describe('settleAllocation + refundAllocation', () => {
     assert.strictEqual(row.settledAmount, 0);
   });
 
-  it('refund reduces net payable and pending', async () => {
+  it('refund reduces net payable and pending (with commission reversal)', async () => {
     const order = await moneyOrder();
     const [alloc] = await allocationService.allocateOrder(order);
     const updated = await allocationService.refundAllocation(alloc._id, { amount: 50, reason: 'partial', actor: { id: 'admin-1', role: 'ADMIN' } });
-    assert.strictEqual(updated.netPayable, 136);
-    assert.strictEqual(updated.pendingAmount, 136);
+    // netPayable = 200 + 6 - 20(commission) = 186
+    // Commission reversed on refund: 50 * 10% = 5, new commission = 15
+    // netPayable = 200 + 6 - 15 - 50(refund) = 141
+    assert.strictEqual(updated.netPayable, 141);
+    assert.strictEqual(updated.pendingAmount, 141);
+    assert.strictEqual(updated.platformCommission, 15); // Commission was reversed
   });
 
   it('settlement reference cannot be reused for a second payout', async () => {

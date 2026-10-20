@@ -130,3 +130,30 @@ test('the location tree and zone coverage are public reads, not admin-only surfa
   }
 });
 
+// Regression: a delivery provider's own wallet and payout requests are
+// provider-facing (Delivery gates them with authorize('PROVIDER')). The
+// /delivery catch-all in the permission table needs `delivery.view`, so without
+// a shared entry the provider portal's wallet screen answered
+// `403 Missing permission: delivery.view` for a perfectly valid provider token.
+test('a provider reaches its own wallet, while the wallet admin review stays gated', () => {
+  const authorizeRequest = require('../middleware/authorizeRequest');
+
+  for (const path of [
+    '/delivery/provider-wallet/me',
+    '/delivery/provider-wallet/me/payout-account',
+    '/delivery/provider-wallet/me/payouts',
+  ]) {
+    assert.equal(authorizeRequest.isActorSharedPath(path), true, `${path} must reach Delivery`);
+    assert.ok(
+      authorizeRequest.requiredPermission('GET', path),
+      `${path} is still permission-mapped for an ADMIN token`
+    );
+  }
+
+  // The admin review half of the same router stays behind the admin permission.
+  for (const path of ['/delivery/provider-wallet/admin', '/delivery/provider-wallet/admin/x/payout-account']) {
+    assert.equal(authorizeRequest.isActorSharedPath(path), false, `${path} must stay admin-gated at the edge`);
+    assert.ok(authorizeRequest.requiredPermission('GET', path), `${path} must stay gated`);
+  }
+});
+

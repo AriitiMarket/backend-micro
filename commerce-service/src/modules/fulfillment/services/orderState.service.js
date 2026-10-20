@@ -10,6 +10,8 @@ const mongoose = require('mongoose');
 const orderRepository = require('../repositories/orders.repository');
 const inventoryService = require('./inventory.service');
 const notificationService = require('../../../shared/services/notification.service');
+const allocationService = require('./allocation.service');
+const walletsService = require('./wallets.service');
 const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
 
 class ApiError extends Error {
@@ -128,6 +130,62 @@ class OrderStateService {
         console.warn(`Notification failed for order ${orderId}: ${err.message}`);
       }
 
+      // Pickup orders are collected at the shop and must never enter Delivery
+      // Service or create a deliverer wallet earning.
+      if (order.fulfilmentType === 'pickup') return order;
+
+      // Trigger delivery handoff asynchronously (fire-and-forget)
+      // This ensures the order gets sent to Delivery Service promptly
+      try {
+        const { deliveryClient } = require('../../app/clients/delivery.client');
+        const orderDeliveryService = require('./orderDelivery.service');
+
+        const shipment = order.sellerShipments?.[0] || {};
+        const destination = order.destination || {};
+
+        const handoffData = {
+          orderId,
+          orderGroupId: order.orderGroupId,
+          sellerId: order.sellerId || shipment.sellerId,
+          buyerId: order.buyerId,
+          shopId: order.shopId || shipment.shopId,
+          paymentMethod: order.paymentInfo?.method || 'COD',
+          paymentAmount: order.totalPrice,
+          deliveryFee: Number(order.shippingFee) || 0,
+          deliveryFeeRuleId: order.deliveryFeeRuleId || null,
+          delivererShareRate: Number(order.delivererShareRate ?? 80),
+          items: (order.cart || []).map(item => ({
+            productId: item.productId,
+            name: item.name,
+            quantity: item.quantity,
+            value: item.discountPrice || item.price || 0,
+          })),
+          origin: shipment.origin || {},
+          destination: destination,
+          idempotencyKey: `order:${orderId}`,
+        };
+
+        // Mark as pending handoff
+        await orderDeliveryService.queueHandoff(orderId);
+
+        // Send to Delivery Service (idempotent)
+        const result = await deliveryClient.createDeliveryRequest(handoffData);
+
+        if (result.ok && result.body?.deliveryRequestId) {
+          await orderDeliveryService.attachRequest(orderId, result.body.deliveryRequestId);
+        } else if (result.status >= 400 && result.status < 500) {
+          await orderDeliveryService.markHandoffAbandoned(orderId);
+          console.warn(`[confirmOrder] Order ${orderId} handoff abandoned: ${result.body?.message || 'Delivery service rejected'}`);
+        } else {
+          await orderDeliveryService.waitForOrderApproval(orderId);
+        }
+      } catch (err) {
+        // Log but don't fail the order confirmation
+        console.error(`[confirmOrder] Delivery handoff failed for order ${orderId}:`, err.message);
+        const orderDeliveryService = require('./orderDelivery.service');
+        await orderDeliveryService.waitForOrderApproval(orderId);
+      }
+
       return order;
     } catch (err) {
       // Only abort if transaction is still active
@@ -147,15 +205,16 @@ class OrderStateService {
    * @param {Object} context - { userId, userRole, reason }
    * @returns {Promise<Object>} updated order
    */
-  async transitionOrder(orderId, newStatus, context = {}) {
-    const session = await mongoose.startSession();
+  async transitionOrder(orderId, newStatus, context = {}, options = {}) {
+    const session = options.session || await mongoose.startSession();
+    const ownsSession = !options.session;
     
     try {
-      session.startTransaction();
+      if (ownsSession) session.startTransaction();
 
       const order = await orderRepository.findById(orderId, { session });
       if (!order) {
-        await session.abortTransaction();
+        if (ownsSession) await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -164,7 +223,7 @@ class OrderStateService {
 
       // FIX #4: Validate transition
       if (!this.validateTransition(currentStatus, targetStatus)) {
-        await session.abortTransaction();
+        if (ownsSession) await session.abortTransaction();
         throw new ApiError(
           `Invalid transition: ${currentStatus} -> ${targetStatus}`,
           409
@@ -177,6 +236,10 @@ class OrderStateService {
       // Update timestamp based on status
       if (targetStatus === ORDER_STATUSES.SHIPPED) {
         order.shippedAt = new Date();
+        if (order.fulfilmentType === 'pickup') {
+          order.pickupReadyAt = order.shippedAt;
+          order.pickupExpiresAt = new Date(order.shippedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+        }
       } else if (targetStatus === ORDER_STATUSES.DELIVERED) {
         order.deliveredAt = new Date();
       } else if (targetStatus === ORDER_STATUSES.CANCELLED) {
@@ -195,7 +258,56 @@ class OrderStateService {
       });
 
       await order.save({ session });
-      await session.commitTransaction();
+      if (ownsSession) await session.commitTransaction();
+
+      // A caller-owned transaction has not committed yet. Let that caller run
+      // post-commit effects after its related writes are safely persisted.
+      if (!ownsSession || options.deferSideEffects) return order;
+
+      // --- Multi-seller allocation + wallet crediting (after payment confirmed) ---
+      // Compute per-seller allocations, persist them idempotently, and credit
+      // seller wallets (pending balance) with commission deducted.
+      // This runs outside the order transaction but is guarded by idempotency:
+      // allocateOrder uses upsert on (orderId, sellerId), and creditFromAllocation
+      // rejects duplicate ORDER_ALLOCATION transactions.
+      try {
+        const savedAllocations = targetStatus === ORDER_STATUSES.CONFIRMED
+          ? await allocationService.allocateOrder(order, {
+            id: context.userId,
+            role: context.userRole,
+          })
+          : [];
+
+        for (const alloc of savedAllocations) {
+          await walletsService.creditFromAllocation(
+            String(order._id),
+            String(alloc.sellerId),
+            {
+              grossSubtotal: alloc.grossSubtotal,
+              shippingFee: alloc.shippingFee,
+              taxAmount: alloc.taxAmount,
+              discountAmount: alloc.discountAmount,
+              platformCommission: alloc.platformCommission,
+              commissionRate: alloc.commissionRate,
+              netPayable: alloc.netPayable,
+              allocationId: String(alloc._id),
+              reason: 'ORDER_CONFIRMED',
+              metadata: { orderGroupId: order.orderGroupId, shopId: alloc.shopId },
+            },
+            {
+              actor: context.userId,
+              actorType: context.userRole || 'SYSTEM',
+            }
+          );
+        }
+      } catch (allocErr) {
+        // Allocation/wallet errors must not roll back a confirmed order.
+        // They are retried via the allocation idempotency guard on next call.
+        console.error(
+          `Allocation/wallet credit failed for order ${order._id}:`,
+          allocErr.message
+        );
+      }
 
       // Notifications outside transaction (after session commit)
       try {
@@ -207,12 +319,12 @@ class OrderStateService {
       return order;
     } catch (err) {
       // Only abort if transaction is still active
-      if (session.inTransaction()) {
+      if (ownsSession && session.inTransaction()) {
         await session.abortTransaction();
       }
       throw err;
     } finally {
-      await session.endSession();
+      if (ownsSession) await session.endSession();
     }
   }
 

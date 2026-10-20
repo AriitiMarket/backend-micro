@@ -28,6 +28,17 @@ const deliverySchema = new mongoose.Schema({
   shipmentId: { type: String, default: null },
   paymentMethod: { type: String, enum: ['COD', 'PREPAID'], default: 'COD' },
   paymentAmount: { type: Number, min: 0, default: 0 },
+  // Parcel snapshot taken at handoff: how many items the delivery carries and
+  // what they are declared to be worth. Immutable, like the fee snapshot —
+  // the order may change afterwards, the parcel that is on the road does not.
+  itemCount: { type: Number, min: 0, default: 0 },
+  totalValue: { type: Number, min: 0, default: 0 },
+  // Checkout fee and provider revenue share are immutable order snapshots.
+  deliveryFee: { type: Number, min: 0, default: 0 },
+  deliveryFeeRuleId: { type: String, default: null },
+  delivererShareRate: { type: Number, min: 0, max: 100, default: 80 },
+  delivererEarning: { type: Number, min: 0, default: 0 },
+  platformDeliveryShare: { type: Number, min: 0, default: 0 },
   stopId: { type: String, default: null },
 
   // Idempotency key: first write creates the delivery, later duplicates return

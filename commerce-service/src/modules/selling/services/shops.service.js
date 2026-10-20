@@ -37,6 +37,11 @@ function calculateShopRating(products) {
 }
 
 class ShopService {
+  /** Resolve a shop for ownership middleware without applying public visibility rules. */
+  async getShopById(id) {
+    return shopRepository.findById(id);
+  }
+
   /**
    * Create a shop for the CALLER's business.
    *
@@ -499,7 +504,7 @@ class ShopService {
    */
   async updateInfo(shop, data) {
     const editable = [
-      'name', 'description', 'email', 'address', 'phoneNumber', 'zipCode', 'category',
+      'name', 'description', 'email', 'address', 'phoneNumber', 'zipCode', 'category', 'pickupEnabled', 'pickupHours',
     ];
     const update = {};
     for (const key of editable) {
@@ -508,6 +513,10 @@ class ShopService {
     if (update.name !== undefined) update.name = String(update.name).trim();
     if (update.phoneNumber !== undefined) update.phoneNumber = String(update.phoneNumber).trim();
     if (update.zipCode !== undefined) update.zipCode = String(update.zipCode).trim();
+    if (update.pickupEnabled !== undefined && typeof update.pickupEnabled !== 'boolean') {
+      throw Object.assign(new Error('pickupEnabled must be a boolean'), { statusCode: 422, code: 'VALIDATION_ERROR' });
+    }
+    if (update.pickupHours !== undefined) update.pickupHours = String(update.pickupHours).trim();
     if (update.category !== undefined) {
       update.category = String(update.category).trim();
       // A SENT category must exist as an active business category; empty clears it.

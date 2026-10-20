@@ -2,6 +2,7 @@ const svc = require('../services/providers.service');
 const zonesService = require('../../locations-expansion/services/zones.service');
 const routesService = require('../../locations-expansion/services/routes.service');
 const locationsService = require('../../locations-expansion/services/locations.service');
+const portsService = require('../../operations/services/ports.service');
 const assignmentsRepo = require('../../operations/repositories/assignmentBatches.repository');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const { ok, created } = require('../../../shared/utils/response');
@@ -39,6 +40,31 @@ async function getMyProvider(req, res, next) {
       return next(notFound('This account has no delivery provider record yet'));
     }
     return ok(res, { provider });
+  } catch (err) { return next(err); }
+}
+
+/** Resolve the caller's assigned Zone, Port and City documents for the provider portal. */
+async function getMyCoverage(req, res, next) {
+  try {
+    const userId = req.user && req.user.id;
+    if (!userId) return next(forbidden('No identity for this request'));
+    const provider = await providersRepository.findByIdentityUserId(String(userId));
+    if (!provider) return next(notFound('This account has no delivery provider record yet'));
+
+    const zoneIds = [...new Set([...(provider.zoneIds || []), provider.zoneId].filter(Boolean).map(String))];
+    const [zones, port, city] = await Promise.all([
+      zoneIds.length ? zonesService.getZones({ _id: { $in: zoneIds } }) : Promise.resolve([]),
+      provider.portId ? portsService.getPort(provider.portId).catch(() => null) : Promise.resolve(null),
+      provider.cityId ? locationsService.getLocation(provider.cityId).catch(() => null) : Promise.resolve(null),
+    ]);
+
+    return ok(res, {
+      coverage: {
+        zones: zones.map((zone) => ({ id: String(zone._id), name: zone.name, status: zone.status })),
+        port: port ? { id: String(port._id), name: port.name, status: port.status } : null,
+        city: city ? { id: String(city._id), name: city.name, type: city.type } : null,
+      },
+    });
   } catch (err) { return next(err); }
 }
 
@@ -304,7 +330,7 @@ async function assignRoutes(req, res, next) {
 }
 
 module.exports = {
-  createProvider, getProvider, getMyProvider, updateProvider, getProviders, getAvailableProviders,
+  createProvider, getProvider, getMyProvider, getMyCoverage, updateProvider, getProviders, getAvailableProviders,
   setProviderStatus, setOnline, updateLocation, approveProvider,
   rejectProvider, getProviderDetail, assignZones, assignRoutes,
 };

@@ -103,6 +103,51 @@ const PAYMENT_STATUSES = {
 
 const PAYMENT_STATUS_VALUES = Object.values(PAYMENT_STATUSES);
 
+/**
+ * The Payment DOCUMENT vocabulary (models/Payments.js `status` enum).
+ *
+ * Payment settlement is tracked in two places with two different words, and
+ * mixing them up silently breaks the money path:
+ *
+ *   * `Payment.status`  -> PENDING | COMPLETED | FAILED | REFUNDED
+ *   * `Order.paymentStatus` -> PENDING | SETTLING | CONFIRMED | FAILED | REFUNDED
+ *
+ * The provider callback speaks the DOCUMENT vocabulary (a provider says the
+ * payment "completed"), while the order records the SETTLEMENT vocabulary
+ * ("confirmed"). `paymentWebhook.service.js` used to validate the provider
+ * status against the ORDER vocabulary, where the value `COMPLETED` does not
+ * exist — so every confirmation was rejected with "Unknown payment status:
+ * COMPLETED" and no payment could ever be settled. `PAYMENT_STATUSES.COMPLETED`
+ * was `undefined`, which also meant the "already completed?" idempotency guard
+ * compared against `undefined` and never matched.
+ *
+ * These two tables are the single source of truth for that translation.
+ */
+const PAYMENT_RECORD_STATUSES = {
+  PENDING: 'PENDING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  REFUNDED: 'REFUNDED',
+};
+
+const PAYMENT_RECORD_STATUS_VALUES = Object.values(PAYMENT_RECORD_STATUSES);
+
+/** Payment document status -> Order.paymentStatus. */
+const PAYMENT_TO_ORDER_STATUS = {
+  PENDING: PAYMENT_STATUSES.PENDING,
+  COMPLETED: PAYMENT_STATUSES.CONFIRMED,
+  FAILED: PAYMENT_STATUSES.FAILED,
+  REFUNDED: PAYMENT_STATUSES.REFUNDED,
+};
+
+/** Order.paymentStatus -> Payment document status. */
+const ORDER_TO_PAYMENT_STATUS = {
+  PENDING: PAYMENT_RECORD_STATUSES.PENDING,
+  CONFIRMED: PAYMENT_RECORD_STATUSES.COMPLETED,
+  FAILED: PAYMENT_RECORD_STATUSES.FAILED,
+  REFUNDED: PAYMENT_RECORD_STATUSES.REFUNDED,
+};
+
 module.exports = {
   ORDER_STATUSES,
   // The canonical values as a plain array — for the Mongoose enum, for
@@ -111,6 +156,12 @@ module.exports = {
   ORDER_STATUS_VALUES: CANONICAL_VALUES,
   PAYMENT_STATUSES,
   PAYMENT_STATUS_VALUES,
+  // The Payment document vocabulary + the two translation tables between it
+  // and the order's settlement vocabulary (see the comment above).
+  PAYMENT_RECORD_STATUSES,
+  PAYMENT_RECORD_STATUS_VALUES,
+  PAYMENT_TO_ORDER_STATUS,
+  ORDER_TO_PAYMENT_STATUS,
   ALLOWED_TRANSITIONS,
   STATUS_ALIASES,
   normalizeStatus,

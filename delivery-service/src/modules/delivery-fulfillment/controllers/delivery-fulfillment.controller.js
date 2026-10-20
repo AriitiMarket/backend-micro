@@ -184,6 +184,14 @@ async function buildDeliveryFilter(query, user) {
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
     if (dateTo) filter.createdAt.$lte = new Date(dateTo);
   }
+  // Completion metrics use the delivery's last transition timestamp, not its
+  // creation date. These filters are only meaningful for delivered records.
+  const { completedFrom, completedTo } = query;
+  if ((completedFrom || completedTo) && filter.status === 'delivered') {
+    filter.updatedAt = {};
+    if (completedFrom) filter.updatedAt.$gte = new Date(completedFrom);
+    if (completedTo) filter.updatedAt.$lte = new Date(completedTo);
+  }
 
   return { filter, page: safePage, limit: safeLimit };
 }

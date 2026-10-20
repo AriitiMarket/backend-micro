@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const {
   ORDER_STATUSES,
   ORDER_STATUS_VALUES,
@@ -61,6 +62,17 @@ const orderSchema = new mongoose.Schema({
   // the buyer's history).
   subtotal: { type: Number, default: 0 },
   shippingFee: { type: Number, default: 0 },
+  fulfilmentType: { type: String, enum: ['delivery', 'pickup'], default: 'delivery', index: true },
+  // Pickup code is never stored in plaintext. The raw six digit code is only
+  // returned once at checkout so the buyer can present it at collection.
+  pickupCodeHash: { type: String, default: null, select: false },
+  pickupCodeAttempts: { type: Number, default: 0 },
+  pickupReadyAt: { type: Date, default: null },
+  pickupCompletedAt: { type: Date, default: null },
+  pickupExpiresAt: { type: Date, default: null },
+  // Delivery quote and deliverer-share contract captured at checkout.
+  deliveryFeeRuleId: { type: String, default: null },
+  delivererShareRate: { type: Number, min: 0, max: 100, default: 80 },
   discountAmount: { type: Number, default: 0 }, // Applied promotion discount
   currency: { type: String, default: 'ETB' },
   totalPrice: { type: Number, required: true },
@@ -131,6 +143,10 @@ const orderSchema = new mongoose.Schema({
   // --- Legacy fields (kept for backward compatibility) ---
   shippingAddress: { type: Object, default: {} },
   sellerId: { type: String, index: true },
+  // Present on seller-split checkout rows. `sellerShipments.shopId` remains
+  // authoritative for multi-shop reads, while this keeps single-shop legacy
+  // queries and exports compatible.
+  shopId: { type: String, index: true, default: null },
 
   // Location & Sector tracking for admin scope filtering
   sectorId: {
@@ -162,8 +178,11 @@ orderSchema.pre('save', function assignUpdatedAt(next) {
 // shop id — without this index both are collection scans.
 orderSchema.index({ 'sellerShipments.shopId': 1 });
 orderSchema.index({ requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: 'string' } } });
-orderSchema.index({ orderGroupId: 1 });
 // Index for best-seller aggregation: status + paymentStatus + createdAt
 orderSchema.index({ status: 1, paymentStatus: 1, createdAt: 1 });
+
+orderSchema.methods.setPickupCode = function setPickupCode(code) {
+  this.pickupCodeHash = crypto.createHash('sha256').update(String(code)).digest('hex');
+};
 
 module.exports = mongoose.model('Order', orderSchema);

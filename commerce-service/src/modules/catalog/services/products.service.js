@@ -1129,7 +1129,11 @@ class ProductService {
       // otherwise any buyer could flip `isReviewed` on someone else's cart line.
       const ownsOrder = await orderRepository.ownsOrderContaining(orderId, reviewerId, productId);
       if (ownsOrder) {
-        await orderRepository.findByIdAndUpdate(orderId, { $set: { 'cart.$[elem].isReviewed': true } }, { arrayFilters: [{ 'elem._id': productId }] });
+        await orderRepository.findByIdAndUpdate(orderId, {
+          $set: { 'cart.$[elem].isReviewed': true },
+        }, {
+          arrayFilters: [{ $or: [{ 'elem._id': productId }, { 'elem.productId': productId }] }],
+        });
       }
     }
     return { message: 'Review submitted for moderation' };
@@ -1202,7 +1206,15 @@ class ProductService {
    * Approves or rejects one review and recomputes the product's public rating
    * from APPROVED reviews only, so moderation actually controls what is shown.
    */
-  async moderateReview(reviewId, { action, reason, adminId }) {
+  async moderateReview(productId, reviewId, options) {
+    // Backward compatibility for the existing `/order/admin/reviews/:id/*`
+    // endpoint. New `/review/admin/:productId/:reviewId/*` calls are scoped.
+    if (options === undefined && reviewId && typeof reviewId === 'object') {
+      options = reviewId;
+      reviewId = productId;
+      productId = undefined;
+    }
+    const { action, reason, adminId } = options || {};
     if (!['approve', 'reject'].includes(action)) {
       throw new ApiError('action must be "approve" or "reject"', 400);
     }
@@ -1211,6 +1223,7 @@ class ProductService {
     }
 
     const product = await productRepository.updateReviewModeration(reviewId, {
+      productId,
       status: action === 'approve' ? 'approved' : 'rejected',
       moderatedBy: adminId,
       reason,

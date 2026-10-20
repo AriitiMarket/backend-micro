@@ -27,6 +27,12 @@ const DEFAULT_PLATFORM_SETTINGS = {
   defaultDeliveryZone: '',
   maxDeliveryDistanceKm: 50,
   expressDeliveryMultiplier: 1.5,
+  minPayoutAmount: 500,
+  payoutProcessingFeePercent: 1,
+  settlementWindowDays: 7,
+  payoutMethods: ['BANK_TRANSFER', 'MOBILE_MONEY', 'WALLET', 'CHECK'],
+  categoryCommissions: [],
+  sellerCommissionVariations: [],
   features: {
     wishlistEnabled: true,
     reviewsEnabled: true,
@@ -102,14 +108,94 @@ class SettingsService {
     try {
       const current = await this.getPlatformSettings();
       const merged = { ...current, ...data };
+
+      // Validate commission rate
+      if (data.commissionRate !== undefined) {
+        merged.commissionRate = this._validateCommissionRate(data.commissionRate, 'commissionRate');
+      }
+
+      // Validate every configured override so malformed entries cannot
+      // silently fall through to a different rate during order creation.
+      for (const field of ['categoryCommissions', 'sellerCommissionVariations']) {
+        if (data[field] === undefined) continue;
+        if (!Array.isArray(data[field])) {
+          const err = new Error(`${field} must be an array`); err.statusCode = 422; throw err;
+        }
+        merged[field] = data[field].map((entry, index) => {
+          const hasScope = field === 'categoryCommissions'
+            ? Boolean(entry?.categoryId || entry?.category)
+            : Boolean(entry?.sellerId || entry?.sellerType);
+          if (!hasScope) {
+            const err = new Error(`${field}[${index}] requires a category or seller scope`); err.statusCode = 422; throw err;
+          }
+          return { ...entry, commission: this._validateCommissionRate(entry?.commission, `${field}[${index}].commission`) };
+        });
+      }
+      if (data.sellerCommissionRates !== undefined) {
+        if (!data.sellerCommissionRates || typeof data.sellerCommissionRates !== 'object' || Array.isArray(data.sellerCommissionRates)) {
+          const err = new Error('sellerCommissionRates must be an object'); err.statusCode = 422; throw err;
+        }
+        merged.sellerCommissionRates = Object.fromEntries(Object.entries(data.sellerCommissionRates).map(([sellerId, rate]) => [
+          sellerId, this._validateCommissionRate(rate, `sellerCommissionRates.${sellerId}`),
+        ]));
+      }
+
+      // Validate min payout amount
+      if (data.minPayoutAmount !== undefined) {
+        const min = Number(data.minPayoutAmount);
+        if (isNaN(min) || min < 0) {
+          throw new Error('Minimum payout amount must be a positive number');
+        }
+        merged.minPayoutAmount = min;
+      }
+
+      // Validate payout processing fee percent
+      if (data.payoutProcessingFeePercent !== undefined) {
+        const fee = Number(data.payoutProcessingFeePercent);
+        if (isNaN(fee) || fee < 0 || fee > 100) {
+          throw new Error('Payout processing fee must be between 0 and 100');
+        }
+        merged.payoutProcessingFeePercent = fee;
+      }
+
+      // Validate settlement window days
+      if (data.settlementWindowDays !== undefined) {
+        const days = Number(data.settlementWindowDays);
+        if (isNaN(days) || days < 0) {
+          throw new Error('Settlement window days must be a positive number');
+        }
+        merged.settlementWindowDays = days;
+      }
+
+      // Validate payout methods
+      if (data.payoutMethods !== undefined) {
+        const allowed = ['BANK_TRANSFER', 'MOBILE_MONEY', 'WALLET', 'CHECK'];
+        const invalid = data.payoutMethods.filter((m) => !allowed.includes(m));
+        if (invalid.length > 0) {
+          throw new Error(`Invalid payout methods: ${invalid.join(', ')}`);
+        }
+        merged.payoutMethods = data.payoutMethods;
+      }
+
       if (data.features) {
         merged.features = { ...current.features, ...data.features };
       }
+
       return await settingsRepository.updateOrCreate('platform', merged);
     } catch (err) {
       console.error('Settings updatePlatformSettings error:', err);
       throw err;
     }
+  }
+
+  _validateCommissionRate(value, field) {
+    const rate = typeof value === 'number' ? value : (typeof value === 'string' && value.trim() ? Number(value) : NaN);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100 || Math.round(rate * 100) !== rate * 100) {
+      const err = new Error(`${field} must be a number from 0 to 100 with at most 2 decimal places`);
+      err.statusCode = 422;
+      throw err;
+    }
+    return rate;
   }
 
   async getNotificationSettings() {

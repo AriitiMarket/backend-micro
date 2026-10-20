@@ -132,7 +132,7 @@ class OrderHoldService {
    * @param {string} sellerId
    * @returns {Promise<Array>}
    */
-  async getHeldOrdersByS eller(sellerId) {
+  async getHeldOrdersBySeller(sellerId) {
     // Get held orders for this seller
     const holds = await orderHoldRepository.findByRole('SELLER', {
       filter: { releasedAt: null },

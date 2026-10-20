@@ -12,6 +12,8 @@ const authorize = require('../../../app/middleware/authorize');
 router.post('/', authenticate, authorize(['ADMIN', 'PROVIDER']), ctrl.recordEvent);
 // Nearby events expose raw tracking coordinates — admin operational view only.
 router.get('/nearby', authenticate, authorize('ADMIN'), ctrl.findNearby);
+// The batch read of the current positions — must stay above `/:deliveryId`.
+router.get('/latest', authenticate, ctrl.getLatestLocations);
 router.get('/:deliveryId', authenticate, ctrl.getDeliveryHistory);
 router.get('/:deliveryId/latest', authenticate, ctrl.getLatestLocation);
 

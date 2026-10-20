@@ -27,6 +27,15 @@ const zoneSchema = new mongoose.Schema({
   deliveryRules: {
     serviceable: { type: Boolean, default: true },
     deliveryFee: { type: Number, default: 0 },
+    // Quantity bands are the authoritative checkout fee schedule for this zone.
+    // An empty list preserves the legacy flat `deliveryFee` behavior.
+    quantityFees: [{
+      minQty: { type: Number, required: true, min: 1 },
+      maxQty: { type: Number, default: null, min: 1 },
+      fee: { type: Number, required: true, min: 0 },
+      enabled: { type: Boolean, default: true },
+      label: { type: String, default: '' },
+    }],
     freeDeliveryThreshold: { type: Number, default: null },
     estimatedDeliveryTime: { type: String, default: '30-45 min' },
     minimumOrder: { type: Number, default: null },
@@ -36,8 +45,9 @@ const zoneSchema = new mongoose.Schema({
   // Operational rules
   operationalRules: {
     allowedProviders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Provider' }],
-    allowedRiders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Rider' }],
-    portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+    // The port is a `Port` document (a known point inside the zone), never a
+    // `Location` — a `ref: 'Location'` here resolved to the wrong collection.
+    portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
     priority: { type: Number, default: 5, min: 1, max: 10 },
     operatingHours: {
       open: { type: String, default: null },
@@ -46,7 +56,7 @@ const zoneSchema = new mongoose.Schema({
     },
   },
   priority: { type: Number, default: 5, min: 1, max: 10 },
-  portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+  portId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
 }, { timestamps: true });
 
 zoneSchema.index({ status: 1 });

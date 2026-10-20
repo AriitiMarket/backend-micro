@@ -141,6 +141,10 @@ async function getZonesForLocation(locationId) {
   return get('/internal/delivery/zone/location/' + encodeURIComponent(String(locationId)));
 }
 
+async function quoteDeliveryFee(zoneId, quantity, locationId) {
+  return get('/internal/delivery/zone/fee-quote', { query: { zoneId: zoneId || undefined, locationId: locationId || undefined, quantity } });
+}
+
 module.exports = {
   deliveryClient: {
     createDeliveryRequest,
@@ -156,6 +160,7 @@ module.exports = {
     getZoneSummary,
     getZoneSummaries,
     getZonesForLocation,
+    quoteDeliveryFee,
   },
   // Exposed for health checks and diagnostics.
   deliveryClientInternals: client,

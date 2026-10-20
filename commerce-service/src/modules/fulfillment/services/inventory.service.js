@@ -27,6 +27,44 @@ class InventoryService {
    * @returns {Promise<Object>} reservation details
    */
   async reserveStock(productId, quantity, orderId, type = 'STANDARD') {
+    // Standard checkout reservations are one conditional product update. This
+    // is atomic across workers and also works on standalone MongoDB, where a
+    // multi-document transaction cannot be started.
+    if (type === 'STANDARD') {
+      const product = await productRepository.reserveAvailable(productId, quantity);
+      if (!product) {
+        const current = await productRepository.findById(productId);
+        if (!current) throw new ApiError('Product not found', 404);
+        const available = Math.max(0, (Number(current.stock) || 0) - (Number(current.reserved) || 0));
+        throw new ApiError(`Insufficient stock: ${available} available, ${quantity} requested`, 422);
+      }
+
+      try {
+        const ledgerEntry = await inventoryLedgerRepository.create({
+          productId: String(productId),
+          orderId: String(orderId),
+          type: 'RESERVE',
+          quantity,
+          reservationType: type,
+          timestamp: new Date(),
+        });
+        return {
+          reservationId: ledgerEntry._id,
+          productId: String(productId),
+          quantity,
+          type,
+          reserved: product.reserved,
+          status: 'RESERVED',
+        };
+      } catch (err) {
+        try { await productRepository.releaseReserved(productId, quantity); }
+        catch (compensationError) {
+          console.error(`Failed to compensate reservation for ${productId}:`, compensationError.message);
+        }
+        throw err;
+      }
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -182,6 +220,37 @@ class InventoryService {
   async releaseReservation(productId, quantity, orderId, options = {}) {
     // If session provided, use it; otherwise create new one
     const externalSession = options.session;
+    if (!externalSession) {
+      const product = await productRepository.releaseReservedExact(productId, quantity);
+      if (!product) {
+        const current = await productRepository.findById(productId);
+        if (!current) throw new ApiError('Product not found', 404);
+        throw new ApiError('Cannot release more than reserved', 422);
+      }
+
+      try {
+        await inventoryLedgerRepository.create({
+          productId: String(productId),
+          orderId: String(orderId),
+          type: 'RELEASE',
+          quantity,
+          timestamp: new Date(),
+        });
+        return {
+          productId: String(productId),
+          quantity,
+          reserved: product.reserved,
+          status: 'RELEASED',
+        };
+      } catch (err) {
+        try { await productRepository.findByIdAndUpdate(productId, { $inc: { reserved: quantity } }); }
+        catch (compensationError) {
+          console.error(`Failed to compensate reservation release for ${productId}:`, compensationError.message);
+        }
+        throw err;
+      }
+    }
+
     const session = externalSession || (await mongoose.startSession());
     
     if (!externalSession) {
@@ -243,14 +312,15 @@ class InventoryService {
    * @param {string} returnId
    * @returns {Promise<Object>}
    */
-  async restoreStock(productId, quantity, returnId) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+  async restoreStock(productId, quantity, returnId, options = {}) {
+    const session = options.session || await mongoose.startSession();
+    const ownsSession = !options.session;
+    if (ownsSession) session.startTransaction();
 
     try {
       const product = await productRepository.findById(productId, { session });
       if (!product) {
-        await session.abortTransaction();
+        if (ownsSession) await session.abortTransaction();
         throw new ApiError('Product not found', 404);
       }
 
@@ -270,7 +340,7 @@ class InventoryService {
         { session }
       );
 
-      await session.commitTransaction();
+      if (ownsSession) await session.commitTransaction();
 
       return {
         productId,
@@ -279,10 +349,10 @@ class InventoryService {
         status: 'RESTORED',
       };
     } catch (err) {
-      await session.abortTransaction();
+      if (ownsSession && session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
-      await session.endSession();
+      if (ownsSession) await session.endSession();
     }
   }
 

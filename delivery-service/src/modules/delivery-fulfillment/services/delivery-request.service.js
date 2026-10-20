@@ -27,6 +27,12 @@ async function createRequest(data) {
   // never be picked up and whose capacity/weight numbers were meaningless.
   validators.validateRequestHandoffInput(data);
   const paymentMethod = validators.normalizePaymentMethod(data.paymentMethod) || 'COD';
+  const deliveryFee = Math.round((Number(data.deliveryFee) || 0) * 100) / 100;
+  const delivererShareRate = Number(data.delivererShareRate ?? 80);
+  if (deliveryFee < 0 || !Number.isFinite(deliveryFee) || !Number.isFinite(delivererShareRate) || delivererShareRate < 0 || delivererShareRate > 100) {
+    throw Object.assign(new Error('Delivery fee or deliverer share snapshot is invalid'), { status: 422, code: 'INVALID_DELIVERY_FEE' });
+  }
+  const delivererEarning = Math.round(deliveryFee * delivererShareRate) / 100;
 
   // Idempotency (MVP §10): one order hands over to Delivery exactly once.
   // Commerce retries must not create a second request or a second Delivery.
@@ -91,6 +97,11 @@ async function createRequest(data) {
     const existing = await deliveriesRepo.findByOrderId(data.orderId);
     if (!existing) {
       const pickupAddr = data.pickupAddress || {};
+      // The parcel snapshot comes from the request's own items, so the buyer,
+      // the rider and the admin all see the same count and declared value.
+      const requestItems = Array.isArray(request.items) ? request.items : [];
+      const itemCount = requestItems.reduce((sum, item) => sum + (Number(item?.quantity) || 0), 0);
+      const totalValue = Number(request.totalValue) || 0;
       const deliveryData = {
         idempotencyKey: `order:${data.orderId}`,
         orderId: data.orderId,
@@ -98,6 +109,13 @@ async function createRequest(data) {
         buyerId: data.buyerId,
         paymentMethod,
         paymentAmount: Number(data.paymentAmount) || 0,
+        itemCount,
+        totalValue,
+        deliveryFee,
+        deliveryFeeRuleId: data.deliveryFeeRuleId || null,
+        delivererShareRate,
+        delivererEarning,
+        platformDeliveryShare: Math.round((deliveryFee - delivererEarning) * 100) / 100,
         proofRules: { requireCodConfirmation: paymentMethod === 'COD' },
         status: 'pending',
         origin: {

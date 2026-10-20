@@ -3,7 +3,7 @@
  * Handles CRUD operations for returns collection
  */
 
-const mongoose = require('mongoose');
+const Return = require('../models/Returns');
 
 class ReturnsRepository {
   constructor(returnsModel) {
@@ -40,13 +40,12 @@ class ReturnsRepository {
    * Find with filters
    */
   async find(query = {}, options = {}) {
-    const {
-      filter = {},
-      limit = 50,
-      offset = 0,
-      sort = { createdAt: -1 },
-      session,
-    } = query;
+    const hasWrappedFilter = Object.prototype.hasOwnProperty.call(query, 'filter');
+    const filter = hasWrappedFilter ? (query.filter || {}) : query;
+    const limit = query.limit ?? options.limit ?? 50;
+    const offset = query.offset ?? query.skip ?? options.offset ?? options.skip ?? 0;
+    const sort = query.sort || options.sort || { createdAt: -1 };
+    const session = query.session || options.session;
 
     let q = this.model.find(filter);
     if (session) {
@@ -94,6 +93,10 @@ class ReturnsRepository {
     return query.exec();
   }
 
+  count(filter = {}, options = {}) {
+    return this.countByFilter(filter, options);
+  }
+
   /**
    * Aggregate returns
    */
@@ -105,6 +108,15 @@ class ReturnsRepository {
     }
     return agg.exec();
   }
+
+  /** Sum refund amounts by filter */
+  async sumRefundAmount(filter = {}) {
+    const result = await this.model.aggregate([
+      { $match: filter },
+      { $group: { _id: null, totalRefunded: { $sum: '$totalRefundRequested' } } }
+    ]);
+    return result.length > 0 ? result[0].totalRefunded : 0;
+  }
 }
 
-module.exports = ReturnsRepository;
+module.exports = new ReturnsRepository(Return);

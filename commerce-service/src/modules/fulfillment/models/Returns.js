@@ -14,9 +14,10 @@ const returnSchema = new mongoose.Schema({
   reason: {
     type: String,
     enum: ['DAMAGED', 'WRONG_ITEM', 'NOT_AS_DESCRIBED', 'DEFECTIVE', 'OTHER'],
-    required: true
+    default: 'OTHER'
   },
   description: { type: String, required: true, maxlength: 1000 },
+  comments: { type: String, default: '' },
   images: [{ type: String }], // S3/upload URLs for evidence photos
   
   // Return items (may be partial return)
@@ -25,13 +26,19 @@ const returnSchema = new mongoose.Schema({
     productId: { type: String, required: true },
     productName: { type: String },
     quantity: { type: Number, required: true, min: 1 },
-    unitPrice: { type: Number, required: true },
-    subtotal: { type: Number, required: true }
+    unitPrice: { type: Number, default: 0 },
+    subtotal: { type: Number, default: 0 }
   }],
   
   // Return amount
   returnAmount: { type: Number, required: true }, // Total refund amount
   originalOrderAmount: { type: Number, required: true },
+  totalRefundRequested: { type: Number, default: 0 },
+  refundAmount: { type: Number, default: 0 },
+  refundMethod: { type: String, default: null },
+  refundNotes: { type: String, default: '' },
+  approvedBy: { type: String, default: null },
+  rejectedBy: { type: String, default: null },
   
   // Pickup arrangement
   pickupRequired: { type: Boolean, default: true },
@@ -42,7 +49,7 @@ const returnSchema = new mongoose.Schema({
   // Status flow: REQUESTED → APPROVED → PICKED_UP → RETURNED → REFUNDED
   status: {
     type: String,
-    enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED', 'PICKED_UP', 'RETURNED', 'REFUNDED'],
+    enum: ['REQUESTED', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'PICKED_UP', 'RETURNED', 'REFUNDED', 'COMPLETED'],
     default: 'REQUESTED',
     index: true
   },

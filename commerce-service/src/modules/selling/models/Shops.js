@@ -90,6 +90,10 @@ const shopSchema = new mongoose.Schema({
     verifiedAt: { type: Date, default: null },
     updatedAt: { type: Date, default: null },
   },
+  // Buyer collection is enabled explicitly per shop. Missing values on legacy
+  // shops remain disabled until the seller/admin opts in.
+  pickupEnabled: { type: Boolean, default: false, index: true },
+  pickupHours: { type: String, default: '' },
   
   // NEW: Status tracking (separate from role which is always 'Seller')
   status: {

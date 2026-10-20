@@ -11,7 +11,10 @@ const orderRepository = require('../repositories/orders.repository');
 const returnsRepository = require('../repositories/returns.repository');
 const inventoryService = require('./inventory.service');
 const orderStateService = require('./orderState.service');
-const { ORDER_STATUSES } = require('../constants/orderStatuses');
+const walletsService = require('./wallets.service');
+const walletsRepository = require('../repositories/wallets.repository');
+const allocationRepository = require('../repositories/sellerAllocation.repository');
+const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -20,7 +23,51 @@ class ApiError extends Error {
   }
 }
 
+function orderSellerIds(order) {
+  return [...new Set([
+    order && order.sellerId,
+    ...((order && order.sellerShipments) || []).map((shipment) => shipment.sellerId || shipment.shopId),
+  ].filter(Boolean).map(String))];
+}
+
+function assertReturnManager(order, context = {}) {
+  if (String(context.role || '').toUpperCase() === 'ADMIN') return;
+  if (!context.sellerId || !orderSellerIds(order).includes(String(context.sellerId))) {
+    throw new ApiError('You do not manage this order', 403);
+  }
+}
+
 class ReturnsService {
+  async getSellerReturnsDashboard(shopId) {
+    const rows = await returnsRepository.find(
+      { shopId: String(shopId) },
+      { limit: 100, sort: { createdAt: -1 } }
+    );
+    const countStatus = (...statuses) => rows.filter((row) => statuses.includes(String(row.status || '').toUpperCase())).length;
+    return {
+      returns: rows.map((row) => ({
+        id: String(row._id),
+        orderId: row.orderId,
+        customerName: row.buyerName || row.buyerId,
+        buyerId: row.buyerId,
+        reason: row.reason || row.description || 'Return requested',
+        items: Array.isArray(row.items) ? row.items : [],
+        amount: Number(row.totalRefundRequested || row.returnAmount || 0),
+        currency: 'ETB',
+        status: String(row.status || 'PENDING').toUpperCase(),
+        requestedAt: row.requestedAt || row.createdAt,
+        rejectionReason: row.rejectionReason || '',
+      })),
+      dashboard: {
+        pending: countStatus('PENDING', 'REQUESTED'),
+        approved: countStatus('APPROVED'),
+        inspecting: countStatus('PICKED_UP', 'RETURNED'),
+        completed: countStatus('COMPLETED', 'REFUNDED'),
+        totalValue: rows.reduce((sum, row) => sum + Number(row.totalRefundRequested || row.returnAmount || 0), 0),
+      },
+    };
+  }
+
   /**
    * Submit return request
    * @param {string} orderId
@@ -38,8 +85,14 @@ class ReturnsService {
         throw new ApiError('Order not found', 404);
       }
 
+      const orderBuyerId = String(order.buyerId || order.user?.id || order.user?._id || '');
+      if (String(returnData.role || '').toUpperCase() !== 'ADMIN'
+        && String(returnData.buyerId || '') !== orderBuyerId) {
+        throw new ApiError('You can only request a return for your own order', 403);
+      }
+
       // Only delivered orders can be returned
-      const currentStatus = order.status.toUpperCase().replace(/-/g, '_');
+      const currentStatus = normalizeStatus(order.status);
       if (currentStatus !== ORDER_STATUSES.DELIVERED) {
         await session.abortTransaction();
         throw new ApiError(
@@ -50,9 +103,11 @@ class ReturnsService {
 
       // Validate items in return request exist in order
       const returnItems = returnData.items || [];
+      if (!returnItems.length) throw new ApiError('At least one return item is required', 400);
+      const normalizedItems = [];
       for (const item of returnItems) {
         const cartItem = order.cart?.find(
-          c => String(c.productId) === String(item.productId)
+          c => String(c.productId || c._id) === String(item.productId || item._id)
         );
         if (!cartItem) {
           await session.abortTransaction();
@@ -68,35 +123,50 @@ class ReturnsService {
             422
           );
         }
+        normalizedItems.push({
+          productId: String(cartItem.productId || cartItem._id),
+          productName: cartItem.name || cartItem.productName || '',
+          quantity: Number(item.quantity),
+          unitPrice: Number(cartItem.price || cartItem.discountPrice || 0),
+          subtotal: Number(cartItem.price || cartItem.discountPrice || 0) * Number(item.quantity),
+        });
       }
+
+      const totalRefundRequested = normalizedItems.reduce((sum, item) => sum + item.subtotal, 0);
+      const sellerId = order.sellerId || orderSellerIds(order)[0];
+      if (!sellerId) throw new ApiError('Order seller could not be determined', 422);
+      const validReasons = ['DAMAGED', 'WRONG_ITEM', 'NOT_AS_DESCRIBED', 'DEFECTIVE', 'OTHER'];
+      const reason = String(returnData.reason || 'OTHER').toUpperCase();
+      const normalizedReason = validReasons.includes(reason) ? reason : 'OTHER';
 
       // Create return record
       const returnRecord = await returnsRepository.create(
         {
           orderId,
-          buyerId: returnData.buyerId || order.buyerId,
-          items: returnItems,
-          reason: returnData.reason,
+          buyerId: orderBuyerId,
+          sellerId,
+          shopId: order.shopId || order.sellerShipments?.[0]?.shopId || null,
+          items: normalizedItems,
+          reason: normalizedReason,
+          description: String(returnData.comments || returnData.reason || '').slice(0, 1000),
           comments: returnData.comments,
           status: 'PENDING',
           requestedAt: new Date(),
-          totalRefundRequested: returnItems.reduce((sum, item) => {
-            const cartItem = order.cart.find(
-              c => String(c.productId) === String(item.productId)
-            );
-            return sum + (cartItem?.price || 0) * item.quantity;
-          }, 0),
+          totalRefundRequested,
+          returnAmount: totalRefundRequested,
+          originalOrderAmount: Number(order.totalPrice || order.total || 0),
         },
         { session }
       );
 
       // Update order status to indicate return requested
+      const previousStatus = order.status;
       order.status = ORDER_STATUSES.REFUND_REQUESTED;
       order.returnId = returnRecord._id;
       if (!order.timeline) order.timeline = [];
       order.timeline.push({
         status: ORDER_STATUSES.REFUND_REQUESTED,
-        previousStatus: order.status,
+        previousStatus,
         timestamp: new Date(),
         reason: 'Return requested by buyer',
       });
@@ -130,6 +200,10 @@ class ReturnsService {
         throw new ApiError('Return not found', 404);
       }
 
+      const orderForAuthorization = await orderRepository.findById(returnRecord.orderId, { session });
+      if (!orderForAuthorization) throw new ApiError('Order not found', 404);
+      assertReturnManager(orderForAuthorization, context);
+
       if (returnRecord.status !== 'PENDING') {
         await session.abortTransaction();
         throw new ApiError(
@@ -153,16 +227,18 @@ class ReturnsService {
           await inventoryService.restoreStock(
             item.productId,
             item.quantity,
-            returnId
+            returnId,
+            { session }
           );
         }
 
+        const previousStatus = order.status;
         order.status = ORDER_STATUSES.REFUND_APPROVED;
         order.refundApprovedAt = new Date();
         if (!order.timeline) order.timeline = [];
         order.timeline.push({
           status: ORDER_STATUSES.REFUND_APPROVED,
-          previousStatus: order.status,
+          previousStatus,
           timestamp: new Date(),
           reason: 'Return approved by seller',
         });
@@ -187,7 +263,7 @@ class ReturnsService {
    * @param {Object} refundData - { amount, method, notes }
    * @returns {Promise<Object>}
    */
-  async processRefund(returnId, refundData = {}) {
+  async processRefund(returnId, refundData = {}, context = {}) {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -211,10 +287,14 @@ class ReturnsService {
         await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
+      assertReturnManager(order, context);
 
       // FIX #6: Validate refund amount does not exceed order total
-      const orderTotal = order.total || 0;
-      const refundAmount = refundData.amount || returnRecord.totalRefundRequested;
+      const orderTotal = Number(order.totalPrice || order.total || 0);
+      const refundAmount = Number(refundData.amount ?? returnRecord.totalRefundRequested);
+      if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+        throw new ApiError('Refund amount must be greater than zero', 400);
+      }
 
       // Check sum of all previous refunds for this order
       const previousRefunds = await returnsRepository.find(
@@ -252,18 +332,68 @@ class ReturnsService {
       await returnRecord.save({ session });
 
       // Update order status to completed return
+      const previousStatus = order.status;
       order.status = ORDER_STATUSES.REFUND_SUCCESS;
       order.refundProcessedAt = new Date();
       order.refundAmount = refundAmount;
       if (!order.timeline) order.timeline = [];
       order.timeline.push({
         status: ORDER_STATUSES.REFUND_SUCCESS,
-        previousStatus: order.status,
+        previousStatus,
         timestamp: new Date(),
         reason: `Refund of ${refundAmount} processed`,
       });
 
       await order.save({ session });
+
+      // NEW: Reverse seller wallet credits for this refund
+      try {
+        const allocations = await allocationRepository.findByOrder(order._id);
+        if (allocations && allocations.length > 0) {
+          // Calculate refund per seller proportionally
+          const totalGross = allocations.reduce((sum, a) => sum + Number(a.grossSubtotal || 0), 0);
+
+          for (const allocation of allocations) {
+            try {
+              // Calculate seller's share of refund
+              const sellerShare = totalGross > 0
+                ? (Number(allocation.grossSubtotal || 0) / totalGross) * refundAmount
+                : 0;
+
+              if (sellerShare <= 0) continue;
+
+              // Get seller's wallet
+              const wallet = await walletsRepository.getWalletBySellerId(allocation.sellerId);
+              if (!wallet) continue;
+
+              // Credit refund back to wallet (reduces both pending and available proportionally)
+              await walletsService.creditRefund(
+                wallet._id,
+                sellerShare,
+                order._id,
+                {
+                  actor: context.userId,
+                  actorType: context.actorType || 'ADMIN',
+                  reason: `Refund: ${refundData.notes || refundData.reason || 'Return processed'}`
+                }
+              );
+
+              console.log(
+                `Refund credited to seller ${allocation.sellerId}: -${sellerShare}`
+              );
+            } catch (walletErr) {
+              console.error(
+                `Failed to credit refund for seller ${allocation.sellerId}:`,
+                walletErr
+              );
+              // Don't throw - refund is already processed in main logic
+            }
+          }
+        }
+      } catch (walletErr) {
+        console.error('Failed to process wallet refunds:', walletErr);
+      }
+
       await session.commitTransaction();
 
       return {
@@ -299,6 +429,10 @@ class ReturnsService {
         throw new ApiError('Return not found', 404);
       }
 
+      const orderForAuthorization = await orderRepository.findById(returnRecord.orderId, { session });
+      if (!orderForAuthorization) throw new ApiError('Order not found', 404);
+      assertReturnManager(orderForAuthorization, context);
+
       if (returnRecord.status !== 'PENDING') {
         await session.abortTransaction();
         throw new ApiError(
@@ -317,11 +451,12 @@ class ReturnsService {
       // Update order status
       const order = await orderRepository.findById(returnRecord.orderId, { session });
       if (order) {
+        const previousStatus = order.status;
         order.status = ORDER_STATUSES.REFUND_REJECTED;
         if (!order.timeline) order.timeline = [];
         order.timeline.push({
           status: ORDER_STATUSES.REFUND_REJECTED,
-          previousStatus: order.status,
+          previousStatus,
           timestamp: new Date(),
           reason: `Return rejected: ${context.reason}`,
         });
@@ -344,12 +479,78 @@ class ReturnsService {
    * @param {string} returnId
    * @returns {Promise<Object>}
    */
-  async getReturn(returnId) {
+  async getReturn(returnId, context = {}) {
     const returnRecord = await returnsRepository.findById(returnId);
     if (!returnRecord) {
       throw new ApiError('Return not found', 404);
     }
+    if (String(context.role || '').toUpperCase() !== 'ADMIN'
+      && String(returnRecord.buyerId) !== String(context.userId || '')
+      && !orderSellerIds(await orderRepository.findById(returnRecord.orderId)).includes(String(context.userId || ''))) {
+      throw new ApiError('You do not have access to this return', 403);
+    }
     return returnRecord;
+  }
+/**
+   * List all returns with pagination and filters (admin)
+   * @param {Object} options - { page, limit, status, buyerId, sellerId }
+   * @returns {Promise<Object>} { returns, total, page, limit, totalPages }
+   */
+  async listReturns(options = {}) {
+    const { page = 1, limit = 20, status, buyerId, sellerId } = options;
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+    if (status) filter.status = status;
+    if (buyerId) filter.buyerId = buyerId;
+    if (sellerId) filter.sellerId = sellerId;
+
+    const [returns, total] = await Promise.all([
+      returnsRepository.find(filter, { limit, skip, sort: { createdAt: -1 } }),
+      returnsRepository.count(filter)
+    ]);
+
+    return {
+      returns,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  }
+
+  /**
+   * Get returns statistics (admin)
+   * @param {Object} options - { startDate, endDate }
+   * @returns {Promise<Object>}
+   */
+  async getStats(options = {}) {
+    const { startDate, endDate } = options;
+
+    const dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter.createdAt = {};
+      if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+      if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+    }
+
+    const [total, pending, approved, rejected, completed, totalRefunded] = await Promise.all([
+      returnsRepository.count(dateFilter),
+      returnsRepository.count({ ...dateFilter, status: 'PENDING' }),
+      returnsRepository.count({ ...dateFilter, status: 'APPROVED' }),
+      returnsRepository.count({ ...dateFilter, status: 'REJECTED' }),
+      returnsRepository.count({ ...dateFilter, status: 'COMPLETED' }),
+      returnsRepository.sumRefundAmount(dateFilter)
+    ]);
+
+    return {
+      total,
+      pending,
+      approved,
+      rejected,
+      completed,
+      totalRefunded: totalRefunded || 0
+    };
   }
 }
 

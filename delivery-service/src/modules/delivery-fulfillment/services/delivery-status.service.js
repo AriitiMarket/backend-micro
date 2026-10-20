@@ -37,6 +37,9 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
   // A repeated terminal command is also the retry path for a downstream
   // Commerce notification that may have failed after this status was stored.
   if (delivery.status === newStatus) {
+    if (newStatus === 'delivered' && delivery.providerId) {
+      await require('../../provider-wallet/services/provider-wallet.service').creditDelivery(delivery);
+    }
     const commerceStatus = lifecycle.toCommerceStatus(newStatus);
     if (delivery.orderId && commerceStatus) await deliveryOutbox.enqueueStatusEvent(
       delivery, commerceStatus, additionalData.note || '', additionalData.proofOfDelivery || delivery.proofOfDelivery || null,
@@ -147,6 +150,13 @@ async function transitionDeliveryStatus(id, newStatus, actor, additionalData = {
 
   // Save changes
   await deliveriesRepo.updateFields(id, updateFields);
+
+  // Ledger credit is keyed by delivery id, so terminal retries can safely
+  // repair a credit interrupted after the delivery status was stored.
+  if (newStatus === 'delivered' && delivery.providerId) {
+    const deliverySnapshot = typeof delivery.toObject === 'function' ? delivery.toObject() : { ...delivery };
+    await require('../../provider-wallet/services/provider-wallet.service').creditDelivery({ ...deliverySnapshot, ...updateFields });
+  }
 
   // Tracking event — history is the delivery's audit trail, so a failure to
   // record it is logged (it used to be swallowed silently, which made missing

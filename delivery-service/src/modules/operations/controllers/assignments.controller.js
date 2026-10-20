@@ -260,4 +260,31 @@ async function eligibleProviders(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign, getAssignments, eligibleProviders };
+/**
+ * Let the holder of a SINGLE assignment move their delivery forward
+ * (pickup → in_transit → delivered). The batch flow already offered this; a
+ * rider holding one delivery had no equivalent, so their parcel could not be
+ * progressed without an admin doing it by hand.
+ */
+async function advanceAssignment(req, res, next) {
+  try {
+    const provider = await providersRepo.findByIdentityUserId(req.user && req.user.id);
+    const actor = {
+      id: (req.user && req.user.id) || null,
+      name: (req.user && (req.user.name || req.user.email)) || null,
+      providerId: provider ? provider._id : null,
+      isAdmin: isAdmin(req.user),
+    };
+    const targetStatus = req.body.status || req.body.targetStatus;
+    const delivery = await svc.advanceAssignment(req.params.id, targetStatus, actor, {
+      note: req.body.note || '',
+      proofOfDelivery: req.body.proofOfDelivery || req.body.proof || null,
+    });
+    return ok(res, { delivery }, 'Delivery updated');
+  } catch (err) { return next(err); }
+}
+
+module.exports = {
+  createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign,
+  getAssignments, eligibleProviders, advanceAssignment,
+};

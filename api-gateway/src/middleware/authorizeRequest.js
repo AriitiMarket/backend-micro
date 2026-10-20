@@ -146,6 +146,10 @@ function matches(path, prefix) {
  * without an identity, so the service — not this table — is what governs writes.
  */
 const ACTOR_SHARED_PREFIXES = [
+  // Seller report data shares the /analytics namespace with the admin console.
+  // Non-admin sellers are authorized by Commerce's SELLER route guard; admin
+  // requests still require reports.view above.
+  '/analytics',
   '/delivery/assignment',
   '/delivery/dispatch',
   '/delivery/delivery',
@@ -162,6 +166,12 @@ const ACTOR_SHARED_PREFIXES = [
   // still requires ADMIN for every location/zone write, so this entry does not
   // widen what a non-admin can change.
   '/delivery/location',
+  // A delivery provider's own wallet and payout requests live on the
+  // /delivery/provider-wallet router, whose /me paths are provider-facing
+  // (Delivery gates them with authorize('PROVIDER')). The router also carries
+  // the /admin review paths, so only the /me subtree is shared — the match is
+  // segment-aware, so '/delivery/provider-wallet/admin' stays admin-gated.
+  '/delivery/provider-wallet/me',
 ];
 
 /** Is this path also part of an actor (non-admin) workspace? */
@@ -188,6 +198,7 @@ const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
  */
 const PUBLIC_READ_PREFIXES = [
   '/delivery/zone/public',
+  '/delivery/zone/fee-quote',
   '/delivery/zone/location/',
   '/delivery/location',
   '/delivery/location/',

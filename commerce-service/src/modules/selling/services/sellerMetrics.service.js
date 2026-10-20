@@ -5,6 +5,12 @@
 
 const orderRepository = require('../../fulfillment/repositories/orders.repository');
 const returnsRepository = require('../../fulfillment/repositories/returns.repository');
+const Product = require('../../catalog/models/Products');
+const SellerAllocation = require('../../fulfillment/models/SellerAllocation');
+
+function normalizedStatus(value) {
+  return String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+}
 
 class SellerMetricsService {
   /**
@@ -37,7 +43,7 @@ class SellerMetricsService {
     const [orders, returns, reviewStats] = await Promise.all([
       orderRepository.find({
         filter: {
-          shopId,
+          $or: [{ shopId }, { 'sellerShipments.shopId': shopId }, { sellerId: shopId }],
           createdAt: { $gte: start, $lte: end },
         },
       }),
@@ -46,22 +52,38 @@ class SellerMetricsService {
           shopId,
           createdAt: { $gte: start, $lte: end },
         },
+        limit: 0,
       }),
       this._getReviewStats(shopId, start, end),
     ]);
 
     // Calculate metrics
-    const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, o) => sum + (o.total || 0), 0);
-    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-
     const completedOrders = orders.filter(
-      o => o.status === 'DELIVERED' || o.status === 'COMPLETED'
+      o => ['DELIVERED', 'COMPLETED'].includes(normalizedStatus(o.status))
     ).length;
+    const completed = orders.filter(o => ['DELIVERED', 'COMPLETED'].includes(normalizedStatus(o.status)));
+    const totalOrders = orders.length;
+    // Reports describe sales of goods, excluding delivery. Only completed
+    // orders contribute; cancelled/refunded orders remain in status counts.
+    const grossSales = completed.reduce((sum, o) => sum + Number(o.subtotal ?? Math.max(0, Number(o.totalPrice ?? o.total ?? 0) - Number(o.shippingFee || 0))), 0);
+    const completedIds = completed.map((order) => String(order._id));
+    const allocations = completedIds.length
+      ? await SellerAllocation.find({ shopId: String(shopId), orderId: { $in: completedIds } }).lean()
+      : [];
+    const commissionByOrder = new Map(allocations.map((row) => [String(row.orderId), Number(row.platformCommission) || 0]));
+    const commission = completed.reduce((sum, order) => sum + (commissionByOrder.get(String(order._id)) ?? Number(order.commissionAmount || (order.cart || []).reduce((lineSum, item) => lineSum + Number(item.commissionAmount || 0), 0))), 0);
+    const netEarnings = Math.round((grossSales - commission) * 100) / 100;
+    const averageOrderValue = completedOrders > 0 ? grossSales / completedOrders : 0;
+    const statusCounts = orders.reduce((counts, order) => {
+      const status = normalizedStatus(order.status);
+      counts[status] = (counts[status] || 0) + 1;
+      return counts;
+    }, {});
+    const unitsSold = completed.reduce((sum, order) => sum + (order.cart || []).reduce((lineSum, item) => lineSum + Number(item.quantity ?? item.qty ?? 0), 0), 0);
     const fulfillmentRate = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
 
     const totalReturns = returns.length;
-    const approvedReturns = returns.filter(r => r.status === 'APPROVED').length;
+    const approvedReturns = returns.filter(r => normalizedStatus(r.status) === 'APPROVED').length;
     const returnRate = totalOrders > 0 ? (totalReturns / totalOrders) * 100 : 0;
 
     const averageRating =
@@ -75,11 +97,19 @@ class SellerMetricsService {
       orders: {
         total: totalOrders,
         completed: completedOrders,
-        cancelled: orders.filter(o => o.status === 'CANCELLED').length,
-        pending: orders.filter(o => o.status === 'PROCESSING').length,
+        cancelled: orders.filter(o => ['CANCELLED', 'CANCELED'].includes(normalizedStatus(o.status))).length,
+        refunded: orders.filter(o => ['REFUNDED', 'REFUND_SUCCESS'].includes(normalizedStatus(o.status)) || o.paymentStatus === 'REFUNDED').length,
+        pending: orders.filter(o => ['PROCESSING', 'PENDING', 'NEW'].includes(normalizedStatus(o.status))).length,
+        byStatus: statusCounts,
       },
       revenue: {
-        total: totalRevenue,
+        total: grossSales,
+        grossSales,
+        commission,
+        netEarnings,
+        unitsSold,
+        deliveryOrders: completed.filter(o => o.fulfilmentType !== 'pickup').length,
+        pickupOrders: completed.filter(o => o.fulfilmentType === 'pickup').length,
         average: averageOrderValue,
       },
       fulfillment: {
@@ -101,7 +131,7 @@ class SellerMetricsService {
           Math.round((totalOrders / this._getDaysDifference(start, end)) * 100) /
           100,
         revenuePerDay:
-          Math.round((totalRevenue / this._getDaysDifference(start, end)) * 100) /
+          Math.round((grossSales / this._getDaysDifference(start, end)) * 100) /
           100,
       },
     };
@@ -133,8 +163,8 @@ class SellerMetricsService {
         },
         {
           title: 'Revenue',
-          value: `$${metrics.revenue.total.toFixed(2)}`,
-          subtext: `Avg: $${metrics.revenue.average.toFixed(2)}`,
+          value: `${metrics.revenue.total.toFixed(2)} ETB`,
+          subtext: `Avg: ${metrics.revenue.average.toFixed(2)} ETB`,
           trend: '+8%',
         },
         {
@@ -159,15 +189,16 @@ class SellerMetricsService {
    * @returns {number}
    */
   _calculateOnTimePercentage(orders) {
-    const deliveredOrders = orders.filter(o => o.status === 'DELIVERED');
+    const deliveredOrders = orders.filter(o => ['DELIVERED', 'COMPLETED'].includes(normalizedStatus(o.status)));
     if (deliveredOrders.length === 0) return 0;
 
     const onTime = deliveredOrders.filter(o => {
       // Estimate: delivered within 10 days of creation
       const createdAt = new Date(o.createdAt);
       const deliveredAt = new Date(o.deliveredAt);
+      if (!Number.isFinite(createdAt.getTime()) || !Number.isFinite(deliveredAt.getTime())) return false;
       const daysDiff = (deliveredAt - createdAt) / (1000 * 60 * 60 * 24);
-      return daysDiff <= 10;
+      return daysDiff >= 0 && daysDiff <= 10;
     }).length;
 
     return (onTime / deliveredOrders.length) * 100;
@@ -181,12 +212,37 @@ class SellerMetricsService {
    * @returns {Promise<Object>}
    */
   async _getReviewStats(shopId, startDate, endDate) {
-    // Placeholder - integrate with reviews service
-    // For now return empty stats
+    const dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter['reviews.createdAt'] = {};
+      if (startDate) dateFilter['reviews.createdAt'].$gte = startDate;
+      if (endDate) dateFilter['reviews.createdAt'].$lte = endDate;
+    }
+    const rows = await Product.aggregate([
+      { $match: { shopId: String(shopId), 'reviews.moderationStatus': 'approved' } },
+      { $unwind: '$reviews' },
+      { $match: { 'reviews.moderationStatus': 'approved', ...dateFilter } },
+      {
+        $group: {
+          _id: '$reviews.rating',
+          count: { $sum: 1 },
+          totalRating: { $sum: '$reviews.rating' },
+        },
+      },
+    ]);
+    const byRating = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    let totalReviews = 0;
+    let totalRating = 0;
+    for (const row of rows) {
+      const rating = Number(row._id);
+      if (byRating[rating] !== undefined) byRating[rating] = row.count;
+      totalReviews += row.count;
+      totalRating += row.totalRating;
+    }
     return {
-      totalReviews: 0,
-      totalRating: 0,
-      byRating: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+      totalReviews,
+      totalRating,
+      byRating,
     };
   }
 

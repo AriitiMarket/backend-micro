@@ -5,7 +5,7 @@ class CommissionLedgerController {
     try {
       const { orderId, sellerId, grossSubtotal, shippingFee, taxAmount, discountAmount, commissionRate, platformCommission, netPayable, allocationId, reason, metadata } = req.body;
 
-      if (!orderId || !sellerId || !platformCommission) {
+      if (!orderId || !sellerId || platformCommission === undefined || platformCommission === null) {
         return res.status(400).json({ error: 'orderId, sellerId, platformCommission required' });
       }
 

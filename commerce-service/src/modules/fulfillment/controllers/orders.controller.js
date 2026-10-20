@@ -7,6 +7,7 @@
 const ordersService = require('../services/orders.service');
 const orderStateService = require('../services/orderState.service');
 const returnsService = require('../services/returns.service');
+const { isSeller, isAdmin } = require('../../../shared/utils/roles');
 
 class OrdersController {
   /**
@@ -93,6 +94,14 @@ class OrdersController {
     }
   }
 
+  async verifyPickup(req, res, next) {
+    try {
+      const actorId = req.user?.id || req.user?._id;
+      const order = await ordersService.verifyPickup(req.params.orderId, req.body?.code, actorId);
+      res.json({ message: 'Pickup verified', order });
+    } catch (err) { next(err); }
+  }
+
   /**
    * Get order timeline (FIX #8)
    */
@@ -156,6 +165,7 @@ class OrdersController {
 
       const order = await ordersService.cancelOrder(orderId, {
         userId,
+        userRole: req.user?.role,
         reason: req.body.reason || 'Cancelled by system',
       });
 
@@ -179,6 +189,203 @@ class OrdersController {
       res.json({
         productId,
         available,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+/**
+   * Create order (buyer)
+   * POST /order/create-order
+   */
+  async createOrder(req, res, next) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const {
+        cart, promoCode, shippingAddress, destination, deliveryZoneId,
+        deliveryZoneName, sectorId, locationId, user, paymentInfo,
+        fulfilmentType,
+      } = req.body;
+
+      if (!cart || !Array.isArray(cart) || cart.length === 0) {
+        return res.status(400).json({ error: 'Cart is required' });
+      }
+
+      const orders = await ordersService.createOrder({
+        // Only pass checkout fields; body-supplied totals, buyer ids, statuses,
+        // and reservation data are never accepted as order authority.
+        userId,
+        cart,
+        promoCode,
+        shippingAddress,
+        destination,
+        deliveryZoneId,
+        deliveryZoneName,
+        sectorId,
+        locationId,
+        user,
+        paymentInfo,
+        fulfilmentType,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Order created successfully',
+        // Mongoose omits the transient one-time code because it is not a
+        // persisted schema field. Add it only to this authenticated response.
+        orders: orders.map((order) => ({
+          ...(typeof order.toObject === 'function' ? order.toObject() : order),
+          ...(order.pickupCode ? { pickupCode: order.pickupCode } : {}),
+        }))
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get all orders for a buyer
+   * GET /order/get-all-orders/user/:userId
+   */
+  async getBuyerOrders(req, res, next) {
+    try {
+      const { userId } = req.params;
+      const { id: actorId, role } = req.user || {};
+
+      // Authorization: buyer can only see own orders, admin sees all
+      if (role === 'BUYER' && String(actorId) !== String(userId)) {
+        return res.status(403).json({ error: 'You can only view your own orders', code: 'ORDER_ACCESS_DENIED' });
+      }
+
+      if (!['BUYER', 'ADMIN'].includes(role)) {
+        return res.status(403).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+      }
+
+      const orders = await ordersService.getBuyerOrders(userId);
+
+      res.json({
+        success: true,
+        orders
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get all orders for a seller's shop
+   * GET /order/get-all-orders/seller/:sellerId
+   */
+  async getSellerOrders(req, res, next) {
+    try {
+      const { id: actorId } = req.user || {};
+      const sellerStatus = String(req.user?.roleStatuses?.SELLER || '').toUpperCase();
+      const sellerActor = isSeller(req.user) || sellerStatus === 'ACTIVE';
+      const adminActor = isAdmin(req.user);
+
+      if (!sellerActor && !adminActor) {
+        return res.status(403).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+      }
+
+      // Seller capabilities are valid actor roles even when BUYER remains the
+      // token's primary role. Always scope seller results to the verified
+      // gateway identity; never trust a profile/shop id supplied by the client.
+      const sellerId = adminActor ? (req.params.sellerId || actorId) : actorId;
+
+      const orders = await ordersService.getSellerOrders(sellerId);
+
+      res.json({
+        success: true,
+        orders
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get detailed information about a specific order
+   * GET /order/order/:orderId
+   */
+  async getOrderDetails(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const { id: actorId, role } = req.user || {};
+
+      const order = await ordersService.getOrderById(orderId);
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found', code: 'ORDER_NOT_FOUND' });
+      }
+
+      // Authorization: buyer/seller/admin can view order if they own it
+      const isBuyer = String(order.buyerId) === String(actorId);
+      const isSeller = String(order.sellerId) === String(actorId);
+      const isAdminRole = role === 'ADMIN';
+
+      if (!isBuyer && !isSeller && !isAdminRole) {
+        return res.status(403).json({ error: 'You can only view your own orders', code: 'ORDER_ACCESS_DENIED' });
+      }
+
+      res.json({
+        success: true,
+        order
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Approve refund for order (seller/business)
+   * PUT /order/order-refund-success/:orderId
+   */
+  async approveRefund(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const { id: actorId, role } = req.user || {};
+      const payload = req.body || {};
+
+      const order = await ordersService.approveRefund(orderId, {
+        userId: actorId,
+        userRole: role,
+        ...payload
+      });
+
+      res.json({
+        success: true,
+        message: 'Refund approved successfully',
+        order
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Request refund for order (buyer)
+   * PUT /order/refund-order/:orderId
+   */
+  async refundOrder(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const { id: actorId, role } = req.user || {};
+      const payload = req.body || {};
+
+      if (role !== 'BUYER' && role !== 'ADMIN') {
+        return res.status(403).json({ error: 'Only buyers can request refunds', code: 'BUYER_ONLY' });
+      }
+
+      const order = await ordersService.requestRefund(orderId, {
+        userId: actorId,
+        userRole: role,
+        ...payload
+      });
+
+      res.json({
+        success: true,
+        message: 'Refund requested successfully',
+        order
       });
     } catch (err) {
       next(err);

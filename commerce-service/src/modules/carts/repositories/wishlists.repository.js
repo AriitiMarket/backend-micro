@@ -29,41 +29,56 @@ class WishlistRepository {
       updatedAt: new Date(),
     };
 
-    const wishlist = await Wishlist.findOne({ userId });
-    if (!wishlist) {
-      return Wishlist.create({ userId, items: [normalized], createdAt: new Date(), updatedAt: new Date() });
-    }
+    const now = new Date();
+    const snapshot = {
+      'items.$.shopId': normalized.shopId,
+      'items.$.name': normalized.name,
+      'items.$.price': normalized.price,
+      'items.$.originalPrice': normalized.originalPrice,
+      'items.$.image': normalized.image,
+      'items.$.shopName': normalized.shopName,
+      'items.$.ratings': normalized.ratings,
+      'items.$.stock': normalized.stock,
+      'items.$.updatedAt': now,
+      updatedAt: now,
+    };
 
-    const idx = wishlist.items.findIndex((i) => String(i.productId) === normalized.productId);
-    if (idx >= 0) {
-      // Already wishlisted — refresh the display snapshot, never duplicate.
-      const existing = wishlist.items[idx];
-      existing.name = normalized.name;
-      existing.price = normalized.price;
-      existing.originalPrice = normalized.originalPrice;
-      existing.image = normalized.image;
-      existing.shopName = normalized.shopName;
-      existing.ratings = normalized.ratings;
-      existing.stock = normalized.stock;
-      existing.updatedAt = new Date();
-    } else {
-      wishlist.items.push(normalized);
+    // First update an existing line. The productId predicate makes the update
+    // atomic, so simultaneous requests cannot overwrite a stale wishlist.
+    const existing = await Wishlist.findOneAndUpdate(
+      { userId, 'items.productId': normalized.productId },
+      { $set: snapshot },
+      { new: true }
+    );
+    if (existing) return existing;
+
+    // The unique userId index arbitrates concurrent first writes. The `$ne`
+    // predicate also prevents duplicate lines when two requests race.
+    try {
+      return await Wishlist.findOneAndUpdate(
+        { userId, 'items.productId': { $ne: normalized.productId } },
+        {
+          $setOnInsert: { userId, createdAt: now },
+          $push: { items: normalized },
+          $set: { updatedAt: now },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+    } catch (err) {
+      if (err.code !== 11000) throw err;
+      // A parallel first write created the user's wishlist. Retry against the
+      // now-existing row, either refreshing the same line or appending it.
+      return this.addItem(userId, item);
     }
-    wishlist.updatedAt = new Date();
-    return wishlist.save();
   }
 
   async removeItem(userId, productId) {
     if (!isValidObjectId(productId)) return null;
-    const wishlist = await Wishlist.findOne({ userId });
-    if (!wishlist) return null;
-
-    const idx = wishlist.items.findIndex((i) => String(i.productId) === String(productId));
-    if (idx < 0) return null;
-
-    wishlist.items.splice(idx, 1);
-    wishlist.updatedAt = new Date();
-    return wishlist.save();
+    return Wishlist.findOneAndUpdate(
+      { userId, 'items.productId': String(productId) },
+      { $pull: { items: { productId: String(productId) } }, $set: { updatedAt: new Date() } },
+      { new: true }
+    );
   }
 
   async clear(userId) {

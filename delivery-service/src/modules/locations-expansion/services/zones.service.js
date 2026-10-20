@@ -1,8 +1,29 @@
 const zonesRepo = require('../repositories/zones.repository');
 const locationsService = require('./locations.service');
 const portsRepo = require('../../operations/repositories/ports.repository');
+const DeliveryFeeSettings = require('../models/DeliveryFeeSettings');
+
+function validateQuantityFees(quantityFees) {
+  if (quantityFees === undefined) return;
+  if (!Array.isArray(quantityFees)) throw Object.assign(new Error('Quantity fees must be a list'), { status: 422 });
+  const normalized = quantityFees.map((band, index) => {
+    const minQty = Number(band.minQty);
+    const maxQty = band.maxQty == null || band.maxQty === '' ? null : Number(band.maxQty);
+    const fee = Number(band.fee);
+    if (!Number.isSafeInteger(minQty) || minQty < 1) throw Object.assign(new Error(`Rule ${index + 1}: minimum quantity must be a positive whole number`), { status: 422 });
+    if (maxQty !== null && (!Number.isSafeInteger(maxQty) || maxQty < minQty)) throw Object.assign(new Error(`Rule ${index + 1}: maximum quantity must be greater than or equal to minimum`), { status: 422 });
+    if (!Number.isFinite(fee) || fee < 0 || Math.round(fee * 100) !== fee * 100) throw Object.assign(new Error(`Rule ${index + 1}: fee must be nonnegative with at most 2 decimals`), { status: 422 });
+    return { ...band, minQty, maxQty, fee };
+  });
+  const active = normalized.filter((band) => band.enabled !== false).sort((a, b) => a.minQty - b.minQty);
+  for (let i = 1; i < active.length; i += 1) {
+    const previousEnd = active[i - 1].maxQty ?? Infinity;
+    if (active[i].minQty <= previousEnd) throw Object.assign(new Error(`Quantity fee rules overlap at quantity ${active[i].minQty}`), { status: 409, code: 'FEE_RULE_OVERLAP' });
+  }
+}
 
 async function createZone(data) {
+  validateQuantityFees(data.deliveryRules?.quantityFees);
   if (data.code) {
     const existing = await zonesRepo.findByCode(data.code);
     if (existing) throw Object.assign(new Error('Zone code already exists'), { status: 409 });
@@ -23,6 +44,7 @@ async function getZone(id) {
 }
 
 async function updateZone(id, fields) { 
+  validateQuantityFees(fields.deliveryRules?.quantityFees);
   await getZone(id); 
   return zonesRepo.updateFields(id, fields); 
 }
@@ -160,6 +182,11 @@ async function getPublicZones({ cityId } = {}) {
       locationIds: (z.locationIds || []).map(String),
       deliveryFee: z.deliveryRules ? (z.deliveryRules.deliveryFee ?? 0) : 0,
       estimatedDeliveryTime: z.deliveryRules ? z.deliveryRules.estimatedDeliveryTime : null,
+      // The buyer's delivery/pickup/COD promises must come from the zone's own
+      // rules, never from a hardcoded panel in the storefront.
+      codAvailable: z.deliveryRules ? z.deliveryRules.codAvailable !== false : false,
+      pickupAvailable: z.deliveryRules ? Boolean(z.deliveryRules.pickupAvailable) : false,
+      freeDeliveryThreshold: z.deliveryRules ? (z.deliveryRules.freeDeliveryThreshold ?? null) : null,
     }));
 }
 
@@ -195,6 +222,80 @@ async function getZoneSummaries(ids = []) {
     lifecycle: zone.lifecycle || 'LIVE',
     serviceable: Boolean(zone.deliveryRules && zone.deliveryRules.serviceable !== false),
   }));
+}
+
+/** Quote the server-owned zone schedule. Missing bands use the configured
+ * platform default; zones without bands retain their legacy flat fee. */
+async function quoteDeliveryFee({ zoneId, locationId, quantity } = {}) {
+  const qty = Number(quantity);
+  if (!Number.isSafeInteger(qty) || qty < 1) {
+    throw Object.assign(new Error('Quantity must be a positive whole number'), { status: 422, code: 'INVALID_QUANTITY' });
+  }
+  const settings = await DeliveryFeeSettings.findOneAndUpdate(
+    { key: 'platform' },
+    { $setOnInsert: { defaultFee: Number(process.env.DELIVERY_DEFAULT_FEE_ETB ?? 150), delivererShareRate: Number(process.env.DELIVERER_SHARE_PERCENT ?? 80) } },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  );
+  const defaultFee = Number(settings.defaultFee);
+  if (!Number.isFinite(defaultFee) || defaultFee < 0) throw new Error('Invalid configured delivery default fee');
+  let zone = zoneId ? await zonesRepo.findById(zoneId).catch(() => null) : null;
+  if (locationId) {
+    const covering = await findZoneForLocation(locationId);
+    if (zoneId && !covering.some((candidate) => String(candidate._id) === String(zoneId))) {
+      throw Object.assign(new Error('Selected delivery zone does not cover this address'), { status: 422, code: 'ZONE_ADDRESS_MISMATCH' });
+    }
+    if (!zone && covering.length) zone = covering[0];
+  }
+  if (zoneId && (!zone || zone.status !== 'active' || zone.deliveryRules?.serviceable === false)) {
+    throw Object.assign(new Error('Delivery is not available in this zone'), { status: 422, code: 'ZONE_NOT_SERVICEABLE' });
+  }
+  const bands = (zone?.deliveryRules?.quantityFees || []).filter((band) => band.enabled !== false);
+  const match = bands.find((band) => qty >= band.minQty && (band.maxQty == null || qty <= band.maxQty));
+  const fee = match
+    ? Number(match.fee)
+    : (bands.length ? defaultFee : (zone ? Number(zone.deliveryRules?.deliveryFee || 0) : defaultFee));
+  const shareRate = Number(settings.delivererShareRate);
+  if (!Number.isFinite(shareRate) || shareRate < 0 || shareRate > 100) throw new Error('Invalid DELIVERER_SHARE_PERCENT configuration');
+  return {
+    fee: Math.round(fee * 100) / 100,
+    ruleId: match ? String(match._id) : (zone && !bands.length ? String(zone._id) : null),
+    zoneId: zone ? String(zone._id) : null,
+    quantity: qty,
+    source: match ? 'quantity_band' : (zone && !bands.length ? 'zone_flat' : 'default'),
+    delivererShareRate: shareRate,
+    // The zone's own promises travel with the quote, so the storefront shows
+    // the SAME delivery time / COD / pickup facts the checkout was priced
+    // against — one server-owned answer instead of a second hardcoded one.
+    estimatedDeliveryTime: zone?.deliveryRules?.estimatedDeliveryTime ?? null,
+    codAvailable: zone?.deliveryRules ? zone.deliveryRules.codAvailable !== false : false,
+    pickupAvailable: zone?.deliveryRules ? Boolean(zone.deliveryRules.pickupAvailable) : false,
+  };
+}
+
+async function getDeliveryFeeSettings() {
+  return DeliveryFeeSettings.findOneAndUpdate(
+    { key: 'platform' },
+    { $setOnInsert: { defaultFee: Number(process.env.DELIVERY_DEFAULT_FEE_ETB ?? 150), delivererShareRate: Number(process.env.DELIVERER_SHARE_PERCENT ?? 80) } },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  );
+}
+
+async function updateDeliveryFeeSettings(fields = {}) {
+  const update = {};
+  for (const key of ['defaultFee', 'delivererShareRate', 'minimumPayout', 'holdHours']) {
+    if (fields[key] === undefined) continue;
+    const value = Number(fields[key]);
+    if (!Number.isFinite(value) || value < 0 || (key === 'delivererShareRate' && value > 100) || ((key === 'minimumPayout' || key === 'holdHours') && Math.round(value * 100) !== value * 100)) {
+      throw Object.assign(new Error(`${key} is invalid`), { status: 422, code: 'INVALID_FEE_SETTING' });
+    }
+    update[key] = value;
+  }
+  if (!Object.keys(update).length) throw Object.assign(new Error('At least one setting is required'), { status: 422 });
+  return DeliveryFeeSettings.findOneAndUpdate(
+    { key: 'platform' },
+    { $set: update, $setOnInsert: { key: 'platform' } },
+    { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true },
+  );
 }
 
 async function getZoneStats() {
@@ -272,5 +373,5 @@ module.exports = {
   createZone, getZone, updateZone, deleteZone, getZones, countZones, getActiveZones, getZoneStats,
   addLocationToZone, removeLocationFromZone, findZoneForLocation, checkCoverage,
   resolveDeliveryArea, getZoneRequestability, assertZoneRequestable, resolveZonePort,
-  getPublicZones, getZoneSummary, getZoneSummaries, descendantLocationIds, locationScopeIds,
+  getPublicZones, getZoneSummary, getZoneSummaries, quoteDeliveryFee, getDeliveryFeeSettings, updateDeliveryFeeSettings, descendantLocationIds, locationScopeIds,
 };

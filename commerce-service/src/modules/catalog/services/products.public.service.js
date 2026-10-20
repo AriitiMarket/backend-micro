@@ -1,4 +1,4 @@
-const { findPublicAll, findPublicById, findBestSelling } = require('../repositories/products.public.repository');
+const { findPublicAll, findPublicById, findBestSelling, findDeals } = require('../repositories/products.public.repository');
 
 class ApiError extends Error {
   constructor(message, statusCode) {

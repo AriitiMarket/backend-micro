@@ -1,13 +1,13 @@
 const express = require('express');
 const orderPriorityController = require('../controllers/orderPriority.controller');
-const { requireAuth } = require('../../middleware/auth');
+const { authenticate } = require('../../../app/middleware/authenticate');
 
 const router = express.Router();
 
-router.post('/', requireAuth, orderPriorityController.setPriority);
-router.get('/:orderId', requireAuth, orderPriorityController.getPriority);
-router.get('/vip/list', requireAuth, orderPriorityController.getVIPOrders);
-router.post('/:orderId/reset', requireAuth, orderPriorityController.resetPriority);
-router.get('/stats/summary', requireAuth, orderPriorityController.getPriorityStats);
+router.post('/', authenticate, orderPriorityController.setPriority);
+router.get('/:orderId', authenticate, orderPriorityController.getPriority);
+router.get('/vip/list', authenticate, orderPriorityController.getVIPOrders);
+router.post('/:orderId/reset', authenticate, orderPriorityController.resetPriority);
+router.get('/stats/summary', authenticate, orderPriorityController.getPriorityStats);
 
 module.exports = router;

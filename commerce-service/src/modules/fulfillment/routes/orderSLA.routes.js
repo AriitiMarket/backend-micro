@@ -1,12 +1,12 @@
 const express = require('express');
 const orderSLAController = require('../controllers/orderSLA.controller');
-const { requireAuth } = require('../../middleware/auth');
+const { authenticate } = require('../../../app/middleware/authenticate');
 
 const router = express.Router();
 
-router.post('/', requireAuth, orderSLAController.setSLA);
-router.get('/:orderId/compliance', requireAuth, orderSLAController.checkCompliance);
-router.get('/:orderId/status', requireAuth, orderSLAController.getStatus);
-router.get('/seller/breaches', requireAuth, orderSLAController.getBreaches);
+router.post('/', authenticate, orderSLAController.setSLA);
+router.get('/:orderId/compliance', authenticate, orderSLAController.checkCompliance);
+router.get('/:orderId/status', authenticate, orderSLAController.getStatus);
+router.get('/seller/breaches', authenticate, orderSLAController.getBreaches);
 
 module.exports = router;

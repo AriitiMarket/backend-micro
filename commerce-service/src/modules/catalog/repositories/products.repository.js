@@ -115,6 +115,15 @@ class ProductRepository {
     );
   }
 
+  /** Release exactly this reservation only when enough units are reserved. */
+  releaseReservedExact(productId, quantity) {
+    return Product.findOneAndUpdate(
+      { _id: productId, reserved: { $gte: quantity } },
+      { $inc: { reserved: -quantity } },
+      { new: true }
+    );
+  }
+
   // --- Review moderation --------------------------------------------------
   // Reviews live INSIDE the product document (see models/Products.js), so
   // moderation is an embedded-subdocument update keyed by the review's own _id.
@@ -125,9 +134,14 @@ class ProductRepository {
   }
 
   /** Sets the moderation state of one embedded review. Null when not found. */
-  updateReviewModeration(reviewId, { status, moderatedBy, reason = null }) {
+  updateReviewModeration(reviewId, { productId, status, moderatedBy, reason = null }) {
+    const filter = { 'reviews._id': reviewId };
+    // New review routes always scope moderation to the product in the URL.
+    // Keep the productId optional for the older order-admin endpoint, which
+    // predates product-scoped review URLs and is still used by the admin UI.
+    if (productId) filter._id = productId;
     return Product.findOneAndUpdate(
-      { 'reviews._id': reviewId },
+      filter,
       {
         $set: {
           'reviews.$.moderationStatus': status,
