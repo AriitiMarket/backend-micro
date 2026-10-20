@@ -12,6 +12,8 @@ const deliveryRouteRoutes = require('../../modules/locations-expansion/routes/de
 const deliveryServicesRoutes = require('../../modules/locations-expansion/routes/deliveryServices.routes');
 const providerRoutes = require('../../modules/providers/routes/providers.routes');
 const providerApplicationRoutes = require('../../modules/providers/routes/providerApplications.routes');
+const providerWalletRoutes = require('../../modules/provider-wallet/routes/provider-wallet.routes');
+const providerPayoutRoutes = require('../../modules/provider-wallet/routes/provider-payouts.routes');
 const deliveryRoutes = require('../../modules/delivery-fulfillment/routes/delivery-fulfillment.routes');
 const deliveryRequestRoutes = require('../../modules/delivery-fulfillment/routes/delivery-request.routes');
 const assignmentRoutes = require('../../modules/operations/routes/assignments.routes');
@@ -88,6 +90,8 @@ app.use('/delivery/route', deliveryRouteRoutes);
 // Delivery service catalog (read + admin CRUD) — powers the Delivery Services page.
 app.use('/delivery/service', deliveryServicesRoutes);
 app.use('/delivery/provider', providerRoutes);
+app.use('/delivery/provider-wallet', providerWalletRoutes);
+app.use('/delivery/provider-payouts', providerPayoutRoutes);
 // Legacy alias — this router used to be mounted at /delivery/partner, before
 // the delivery actor was renamed to "provider". Same router, old prefix, so an
 // already-deployed client keeps working while it is being redeployed.

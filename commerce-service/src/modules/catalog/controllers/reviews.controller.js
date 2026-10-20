@@ -62,7 +62,7 @@ async function getProductAllReviews(req, res, next) {
 async function approveReview(req, res, next) {
   try {
     const { productId, reviewId } = req.params;
-    const result = await reviewsService.approveReview(productId, reviewId);
+    const result = await reviewsService.approveReview(productId, reviewId, req.user?.id);
     return ok(res, { success: true, review: result });
   } catch (err) { return next(err); }
 }
@@ -72,7 +72,12 @@ async function rejectReview(req, res, next) {
   try {
     const { productId, reviewId } = req.params;
     const { reason } = req.body || {};
-    const result = await reviewsService.rejectReview(productId, reviewId, reason || 'Rejected by moderation');
+    const result = await reviewsService.rejectReview(
+      productId,
+      reviewId,
+      reason || 'Rejected by moderation',
+      req.user?.id
+    );
     return ok(res, { success: true, review: result });
   } catch (err) { return next(err); }
 }

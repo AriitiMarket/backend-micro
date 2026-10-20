@@ -95,6 +95,9 @@ async function getDeliveriesForOrders(orderIds = []) {
   return deliveries.map((d) => ({
     orderId: d.orderId, deliveryId: d._id, status: d.status, providerId: d.providerId,
     origin: d.origin, destination: d.destination,
+    deliveryFee: d.deliveryFee, deliveryFeeRuleId: d.deliveryFeeRuleId,
+    delivererShareRate: d.delivererShareRate, delivererEarning: d.delivererEarning,
+    platformDeliveryShare: d.platformDeliveryShare,
     pickedUpAt: d.pickedUpAt, deliveredAt: d.deliveredAt, failedAt: d.failedAt, cancelledAt: d.cancelledAt,
     failureReason: d.failureReason, cancellationReason: d.cancellationReason,
     createdAt: d.createdAt, updatedAt: d.updatedAt,

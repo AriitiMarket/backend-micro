@@ -3,7 +3,7 @@
  * Handles CRUD operations for inventory movements (immutable audit trail)
  */
 
-const mongoose = require('mongoose');
+const InventoryLedger = require('../models/InventoryLedger');
 
 class InventoryLedgerRepository {
   constructor(ledgerModel) {
@@ -94,9 +94,7 @@ class InventoryLedgerRepository {
     const pipeline = [
       {
         $match: {
-          productId: mongoose.Types.ObjectId.isValid(productId)
-            ? mongoose.Types.ObjectId(productId)
-            : productId,
+          productId: String(productId),
           ...(startDate || endDate ? {
             timestamp: {
               ...(startDate && { $gte: startDate }),
@@ -130,10 +128,8 @@ class InventoryLedgerRepository {
     
     let calculatedStock = 0;
     stats.forEach(stat => {
-      if (stat._id === 'RESTOCK') calculatedStock += stat.totalQuantity;
-      if (stat._id === 'ADJUST') calculatedStock += stat.totalQuantity; // Can be negative
-      if (stat._id === 'ORDER_DEDUCT') calculatedStock -= stat.totalQuantity;
-      if (stat._id === 'RETURN_RESTORE') calculatedStock += stat.totalQuantity;
+      if (stat._id === 'RESTORE') calculatedStock += stat.totalQuantity;
+      if (stat._id === 'SELL' || stat._id === 'DEDUCT') calculatedStock -= stat.totalQuantity;
     });
 
     return {
@@ -147,4 +143,4 @@ class InventoryLedgerRepository {
   }
 }
 
-module.exports = InventoryLedgerRepository;
+module.exports = new InventoryLedgerRepository(InventoryLedger);

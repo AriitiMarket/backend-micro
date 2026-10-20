@@ -291,7 +291,18 @@ async function provisionProviderAccount(provider) {
     return { granted: false, blocking: false, reason: 'Provider has no linked account' };
   }
   const result = await identityClient.grantProviderRole(provider.identityUserId);
-  return { ...result, blocking: !result.granted };
+  // Only a FAILED call blocks the approval. The grant is idempotent: an account
+  // that already holds the PROVIDER membership is the desired end state, not a
+  // provisioning error, so re-approving a provider (or approving one who
+  // registered with the PROVIDER role up front) must not be reported as a
+  // failure. `granted` still says whether THIS call was the one that granted it.
+  const callFailed = !(result.status >= 200 && result.status < 300);
+  return {
+    ...result,
+    granted: callFailed ? false : result.granted,
+    blocking: callFailed,
+    reason: callFailed ? (result.reason || `Identity Service returned ${result.status}`) : result.reason,
+  };
 }
 
 async function setOnline(id, isOnline, actor) {

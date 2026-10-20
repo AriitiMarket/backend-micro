@@ -71,7 +71,10 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note,
 
   if (deliveryStatus === 'delivered' && String(order.paymentInfo?.method || '').toUpperCase() === 'COD') {
     const collected = Number(proofOfDelivery?.codCollectedAmount);
-    if (proofOfDelivery?.codConfirmed !== true || !Number.isFinite(collected) || collected !== Number(order.totalPrice)) {
+    // Delivery accepts the exact collected amount as COD evidence even when a
+    // client omits the redundant boolean. Commerce still requires the amount
+    // to match exactly before it records payment or advances the order.
+    if (!Number.isFinite(collected) || collected !== Number(order.totalPrice)) {
       const err = new Error('COD delivery requires confirmation of the exact order total');
       err.statusCode = 400;
       throw err;

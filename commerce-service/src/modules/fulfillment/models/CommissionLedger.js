@@ -19,11 +19,24 @@ const commissionLedgerSchema = new mongoose.Schema({
   
   // Commission calculation
   commissionRate: { type: Number, required: true }, // e.g., 10 for 10%
+  commissionRateApplied: { type: Number, required: true }, // Rate actually applied (from settings)
   platformCommission: { type: Number, required: true }, // Calculated amount
-  
+
   // Result
   netPayable: { type: Number, required: true }, // Gross - Commission
-  
+
+  // Effective dating for audit
+  effectiveFrom: { type: Date, default: Date.now, index: true }, // When this rate was in force
+
+  // Actor audit trail (who, why, when)
+  //
+  // `actorId` is the identity-service user id, which is a STRING (a UUID) —
+  // not a Mongo ObjectId. It used to be typed as ObjectId, so
+  // `logCommission()` threw "Cast to ObjectId failed for value \"admin-1\""
+  // on every call and the commission ledger — the audit trail of every
+  // commission calculation — never recorded a single row.
+  actorId: { type: String, default: null, index: true },
+  actorRole: { type: String, enum: ['SYSTEM', 'ADMIN', 'SELLER', 'BUYER'], default: 'SYSTEM' },
   // Metadata
   reason: { type: String, default: 'ORDER_CONFIRMED', index: true },
   metadata: mongoose.Schema.Types.Mixed,

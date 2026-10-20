@@ -1,4 +1,6 @@
 const promotionsService = require('../services/promotions.service');
+const orderRepository = require('../../fulfillment/repositories/orders.repository');
+const { ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
 const { ok, created } = require('../../../shared/utils/response');
 
 /**
@@ -77,13 +79,20 @@ async function deletePromotion(req, res, next) {
  */
 async function validatePromoCode(req, res, next) {
   try {
-    const { code, cartItems, subtotal, buyerId, isFirstOrder } = req.body;
+    const { code, cartItems, subtotal } = req.body;
+    const buyerId = caller(req).userId;
+    const priorOrders = buyerId
+      ? await orderRepository.count({
+        buyerId: String(buyerId),
+        status: { $nin: [ORDER_STATUSES.CANCELLED, 'CANCELLED', 'CANCELED'] },
+      })
+      : 0;
     const result = await promotionsService.validateCode(
       code,
       cartItems,
       subtotal,
-      buyerId || caller(req).userId,
-      isFirstOrder || false
+      buyerId,
+      priorOrders === 0
     );
     return ok(res, result);
   } catch (err) { return next(err); }

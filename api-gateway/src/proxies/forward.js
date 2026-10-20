@@ -66,13 +66,29 @@ function forward(req, res, targetUrl) {
   const query = req.url.includes('?') ? req.url.split('?')[1] : '';
   const targetPath = query ? rewrittenPath + '?' + query : rewrittenPath;
 
-  // Use parsed body if available (express.json()), otherwise read from stream
-  const hasParsedBody = req.body && Object.keys(req.body).length > 0;
+  // Use the body express.json() already parsed (the raw bytes are captured by
+  // the parser's `verify` hook), otherwise read it from the stream.
+  //
+  // The raw buffer matters: a JSON body of `{}` parses to an empty object, and
+  // `Object.keys({}).length` is 0 — reading the body by its parsed size would
+  // fall through to the stream branch, but the stream was ALREADY drained by
+  // express.json(), so the 'end' event never fired again and the request hung
+  // forever. Every admin action that posts `{}` (approve a provider, approve a
+  // seller application, …) hung exactly that way.
+  const captured = req.rawBody && req.rawBody.length > 0 ? req.rawBody : null;
+  const parsedBody = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)
+    ? req.body
+    : null;
+  const hasParsedBody = parsedBody !== null && Object.keys(parsedBody).length > 0;
+
   let body;
   let bodyPromise;
 
-  if (hasParsedBody) {
-    body = Buffer.from(JSON.stringify(req.body));
+  if (captured) {
+    body = captured;
+    bodyPromise = Promise.resolve(body);
+  } else if (hasParsedBody) {
+    body = Buffer.from(JSON.stringify(parsedBody));
     bodyPromise = Promise.resolve(body);
   } else {
     // Buffer the request body so we can forward it after async JWT verification.
@@ -81,6 +97,14 @@ function forward(req, res, targetUrl) {
     let aborted = false;
 
     bodyPromise = new Promise((resolve, reject) => {
+      // The stream may already have been drained (e.g. a body express.json()
+      // skipped). 'end' will never fire again in that case, so resolve now
+      // instead of waiting forever.
+      if (req.readableEnded) {
+        resolve(Buffer.alloc(0));
+        return;
+      }
+
       req.on('data', (chunk) => {
         if (aborted) return;
         received += chunk.length;

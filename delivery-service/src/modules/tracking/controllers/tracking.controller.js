@@ -2,7 +2,7 @@ const svc = require('../services/tracking.service');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
 const { ok } = require('../../../shared/utils/response');
 const { validationError, notFound, forbidden, conflict } = require('../../../shared/errors');
-const { assertCanReadDelivery, isAdmin, isOperator, resolveProviderForUser } = require('../../../shared/utils/access');
+const { assertCanReadDelivery, isAdmin, isSeller, isBuyer, isOperator, resolveProviderForUser } = require('../../../shared/utils/access');
 const { tryNormalizeDeliveryStatus, TERMINAL_DELIVERY_STATUSES } = require('../../../shared/constants');
 const { isValidObjectId } = require('../../../shared/utils/mongoId');
 
@@ -113,6 +113,46 @@ async function getLatestLocation(req, res, next) {
   try {
     await canReadDeliveryOrMissing(req.params.deliveryId, req.user);
     return ok(res, { location: await svc.getLatestLocation(req.params.deliveryId) });
+  }
+  catch (err) { return next(err); }
+}
+
+/**
+ * The latest known position of MANY deliveries, in one request.
+ *
+ * A tracking list shows the current position of every row it renders. Asking
+ * for them one delivery at a time turned a 25-row page into 25 round trips
+ * (and 25 chances for one slow read to blank the list). This answers them all
+ * at once, with the same per-delivery authorization: a caller only ever sees
+ * the positions of deliveries it may read, and the ids it may not read are
+ * simply absent from the answer.
+ */
+async function getLatestLocations(req, res, next) {
+  try {
+    const raw = req.query.deliveryIds || req.query.ids || '';
+    const ids = [...new Set(String(raw).split(',').map((id) => id.trim()).filter(Boolean))];
+    if (!ids.length) return ok(res, { locations: {} });
+    if (ids.length > 200) {
+      throw validationError(['"deliveryIds" may contain at most 200 identifiers']);
+    }
+
+    // Authorize in one pass: an admin may read anything, everyone else only
+    // the deliveries they own. An id the caller may not read is dropped
+    // rather than failing the whole list. The provider document is resolved
+    // ONCE, not once per delivery.
+    const deliveries = await deliveriesRepo.findAll({ _id: { $in: ids } }, { limit: ids.length });
+    const provider = isAdmin(req.user) ? null : await resolveProviderForUser(req.user);
+    const readable = [];
+    for (const delivery of deliveries || []) {
+      const owned = isAdmin(req.user)
+        || (isSeller(req.user) && String(delivery.sellerId) === String(req.user.id))
+        || (isBuyer(req.user) && String(delivery.buyerId) === String(req.user.id))
+        || (provider && String(delivery.providerId || '') === String(provider._id));
+      if (owned) readable.push(String(delivery._id));
+    }
+
+    const locations = await svc.getLatestLocations(readable);
+    return ok(res, { locations, count: Object.keys(locations).length });
   } catch (err) { return next(err); }
 }
 
@@ -133,4 +173,4 @@ async function findNearby(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { recordEvent, getDeliveryHistory, getLatestLocation, findNearby };
+module.exports = { recordEvent, getDeliveryHistory, getLatestLocation, getLatestLocations, findNearby };

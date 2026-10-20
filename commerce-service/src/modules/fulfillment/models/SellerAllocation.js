@@ -51,6 +51,12 @@ const sellerAllocationSchema = new mongoose.Schema({
   refundAmount: { type: Number, default: 0 },
   adjustmentAmount: { type: Number, default: 0 },
 
+  // --- Commission snapshot (immutable — rate used at time of computation) ---
+  commissionRate: { type: Number, required: true, default: 10, description: 'Commission rate % used for this allocation (snapshot)' },
+  // Per-item snapshots preserve category and seller rates in mixed-category
+  // seller shipments; commissionRate above is the weighted effective rate.
+  commissionLines: { type: [mongoose.Schema.Types.Mixed], default: [] },
+
   // --- Settlement tracking ---
   settledAmount: { type: Number, default: 0 },
   pendingAmount: { type: Number, default: 0 },

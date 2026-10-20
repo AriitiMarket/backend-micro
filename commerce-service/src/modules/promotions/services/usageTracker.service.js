@@ -93,33 +93,35 @@ class UsageTrackerService {
       throw new Error('Promotion not found');
     }
 
-    // Check total limit before recording
-    if (promotion.totalUsageLimit && promotion.usedCount >= promotion.totalUsageLimit) {
-      throw new Error('Promotion has reached its total usage limit');
-    }
+    // A retry for the same order is idempotent. The repository update enforces
+    // total and per-buyer caps in the same atomic write as the usage record.
+    const existingUse = (promotion.usageHistory || []).find(
+      (entry) => String(entry.orderId) === String(orderId)
+    );
+    if (existingUse) return promotion;
 
-    // Check per-buyer limit before recording
-    if (promotion.perBuyerUsageLimit) {
-      const buyerUsage = promotion.usageHistory
-        ? promotion.usageHistory.filter(entry => String(entry.buyerId) === String(buyerId)).length
+    const updated = await promotionRepository.recordUsageAtomic(
+      promotionId,
+      buyerId,
+      orderId,
+      discountAmount,
+      promotion
+    );
+    if (!updated) {
+      const latest = await promotionRepository.findById(promotionId);
+      if (!latest) throw new Error('Promotion not found');
+      if ((latest.usageHistory || []).some((entry) => String(entry.orderId) === String(orderId))) return latest;
+      const buyerUsage = buyerId
+        ? (latest.usageHistory || []).filter((entry) => String(entry.buyerId) === String(buyerId)).length
         : 0;
-      if (buyerUsage >= promotion.perBuyerUsageLimit) {
+      if (latest.totalUsageLimit > 0 && latest.usedCount >= latest.totalUsageLimit) {
+        throw new Error('Promotion has reached its total usage limit');
+      }
+      if (buyerId && latest.perBuyerUsageLimit > 0 && buyerUsage >= latest.perBuyerUsageLimit) {
         throw new Error('Buyer has reached their usage limit for this promotion');
       }
+      throw new Error('Promotion usage could not be recorded');
     }
-
-    // Atomic increment of usedCount and push to usageHistory
-    const updated = await promotionRepository.findByIdAndUpdate(promotionId, {
-      $inc: { usedCount: 1 },
-      $push: {
-        usageHistory: {
-          buyerId,
-          orderId,
-          usedAt: new Date(),
-          discountAmount,
-        },
-      },
-    }, { new: true });
 
     // Auto-update status to exhausted if limit reached
     if (updated.totalUsageLimit && updated.usedCount >= updated.totalUsageLimit) {
@@ -178,22 +180,8 @@ class UsageTrackerService {
       throw new Error('Promotion not found');
     }
 
-    // Find the usage entry for this order
-    const usageEntry = promotion.usageHistory
-      ? promotion.usageHistory.find(entry => String(entry.orderId) === String(orderId))
-      : null;
-
-    if (!usageEntry) {
-      throw new Error('Usage entry not found for this order');
-    }
-
-    // Decrement usedCount and remove from history
-    const updated = await promotionRepository.findByIdAndUpdate(promotionId, {
-      $inc: { usedCount: -1 },
-      $pull: {
-        usageHistory: { orderId },
-      },
-    }, { new: true });
+    const updated = await promotionRepository.rollbackUsageAtomic(promotionId, orderId);
+    if (!updated) throw new Error('Usage entry not found for this order');
 
     // Restore status from exhausted if applicable
     if (promotion.status === 'exhausted') {

@@ -11,6 +11,9 @@ const authorize = require('../../../app/middleware/authorize');
 // active zones); Delivery serves it without an identity on purpose. The gateway
 // mirrors that posture with a method-restricted public-read rule.
 router.get('/public', ctrl.getPublicZones);
+router.get('/fee-quote', ctrl.quoteDeliveryFee);
+router.get('/fee-settings', authenticate, authorize('ADMIN'), ctrl.getDeliveryFeeSettings);
+router.put('/fee-settings', authenticate, authorize('ADMIN'), ctrl.updateDeliveryFeeSettings);
 router.get('/coverage/:locationId', ctrl.checkCoverage);
 router.get('/location/:locationId', ctrl.findZoneForLocation);
 router.get('/stats', authenticate, authorize('ADMIN'), ctrl.getZoneStats);

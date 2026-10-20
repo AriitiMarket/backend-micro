@@ -11,7 +11,9 @@ module.exports = {
   identityServiceUrl: services.identity.url,
   commerceServiceUrl: services.commerce.url,
   deliveryServiceUrl: services.delivery.url,
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  // Local Vite/dev servers commonly use 3001 or 5173 while the gateway is on
+  // 3000. Keep the same allowlist for REST and Socket.io.
+  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:3001,http://localhost:5173',
 
   // Readiness probe budget for a single downstream service.
   healthProbeTimeoutMs: parseInt(process.env.GATEWAY_HEALTH_TIMEOUT_MS, 10) || 3000,

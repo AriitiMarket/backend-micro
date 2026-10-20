@@ -30,7 +30,13 @@ app.set('trust proxy', 1);
 app.use(enforceHttps);
 app.use(securityHeaders);
 app.use(cors(corsConfig));
-app.use(express.json());
+// The raw bytes are captured while the JSON parser reads them (body-parser's
+// `verify` hook) because the parser consumes the request stream: once it has
+// run there is nothing left to read, and the proxy needs the original bytes to
+// forward the body upstream — including the ones of an empty JSON object.
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(requestId);
 app.use(requestLogger);
 

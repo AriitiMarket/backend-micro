@@ -275,8 +275,21 @@ async function getBatch(id) {
 /** Batch + hydrated provider, used by both admin and rider detail views. */
 async function getBatchDetail(id) {
   const batch = await getBatch(id);
-  const provider = await providersService.getProvider(batch.providerId).catch(() => null);
-  return { ...batch.toObject(), provider };
+  const [provider, deliveries] = await Promise.all([
+    providersService.getProvider(batch.providerId).catch(() => null),
+    Promise.all((batch.deliveries || []).map(async (item) => ({
+      item,
+      delivery: await deliveriesRepo.findById(item.deliveryId).catch(() => null),
+    }))),
+  ]);
+  return {
+    ...batch.toObject(),
+    provider,
+    deliveries: deliveries.map(({ item, delivery }) => ({
+      ...(typeof item.toObject === 'function' ? item.toObject() : item),
+      itemCount: delivery?.itemCount ?? 0,
+    })),
+  };
 }
 
 async function listBatches(filter = {}, options = {}) {

@@ -18,6 +18,7 @@ router.get('/', authenticate, authorize('ADMIN'), ctrl.getProviders);
 // capacity) to render the profile and the availability toggle, and it cannot know
 // the provider _id without first fetching it.
 router.get('/me', authenticate, authorize(['ADMIN', 'PROVIDER']), ctrl.getMyProvider);
+router.get('/me/coverage', authenticate, authorize(['ADMIN', 'PROVIDER']), ctrl.getMyCoverage);
 router.get('/:id/detail', authenticate, authorize('ADMIN'), ctrl.getProviderDetail);
 router.get('/:id', authenticate, authorize('ADMIN'), ctrl.getProvider);
 router.post('/', authenticate, authorize('ADMIN'), ctrl.createProvider);

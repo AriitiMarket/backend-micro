@@ -9,6 +9,7 @@ const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const { standardErrorHandler } = require('../shared/middleware/standardErrorHandler');
 const shopsRoutes = require('../modules/selling/routes/shops.routes');
+const sellerMetricsRoutes = require('../modules/selling/routes/sellerMetrics.routes');
 const productsRoutes = require('../modules/catalog/routes/products.routes');
 const categoriesRoutes = require('../modules/catalog/routes/categories.routes');
 const ordersRoutes = require('../modules/fulfillment/routes/orders.routes');
@@ -42,6 +43,8 @@ const orderSLARoutes = require('../modules/fulfillment/routes/orderSLA.routes');
 const orderExportRoutes = require('../modules/fulfillment/routes/orderExport.routes');
 const paymentReconciliationRoutes = require('../modules/fulfillment/routes/paymentReconciliation.routes');
 const orderDisputeRoutes = require('../modules/fulfillment/routes/orderDispute.routes');
+const walletsRoutes = require('../modules/fulfillment/routes/wallets.routes');
+const payoutsRoutes = require('../modules/fulfillment/routes/payouts.routes');
 
 const app = express();
 // Trace id first: every log line, every error response and every outbound
@@ -117,6 +120,7 @@ app.use('/uploads', express.static(LEGACY_UPLOADS_DIR));
 app.use(gatewayOnly);
 
 app.use('/shop', shopsRoutes);
+app.use('/metrics', sellerMetricsRoutes);
 app.use('/product', productsRoutes);
 app.use('/category', categoriesRoutes);
 app.use('/order', ordersRoutes);
@@ -156,6 +160,8 @@ app.use('/order-sla', orderSLARoutes);
 app.use('/order-export', orderExportRoutes);
 app.use('/payment-reconciliation', paymentReconciliationRoutes);
 app.use('/order-dispute', orderDisputeRoutes);
+app.use('/wallet', walletsRoutes);
+app.use('/payout', payoutsRoutes);
 app.use('/admin', adminPlatformRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', settingsRoutes);

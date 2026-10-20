@@ -1,5 +1,6 @@
 const reviewRepository = require('../repositories/reviews.repository');
 const { PUBLIC_STATUS } = require('../repositories/reviews.repository');
+const productService = require('./products.service');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -119,17 +120,8 @@ class ReviewsService {
 
   /** FIX #5: Admin - Get all pending reviews across all products */
   async getPendingReviews(opts = {}) {
-    const products = await reviewRepository.findAllProducts();
-    const pending = [];
-
-    for (const product of products) {
-      for (const review of product.reviews || []) {
-        if (review.moderationStatus !== 'PENDING' && review.moderationStatus !== 'pending') continue;
-        pending.push(reviewDto(product, review, { withAuthorId: true }));
-      }
-    }
-
-    return pageOf(pending.sort(byNewest), opts);
+    // ProductService owns the canonical embedded-review query and pagination.
+    return productService.listPendingReviews(opts);
   }
 
   /** FIX #5: Admin - Get all reviews for a product (all statuses) */
@@ -145,34 +137,29 @@ class ReviewsService {
   }
 
   /** FIX #5: Admin - Approve a review by product and review ID */
-  async approveReview(productId, reviewId) {
+  async approveReview(productId, reviewId, adminId) {
     const product = await reviewRepository.findProductById(productId);
     if (!product) throw new ApiError('Product not found', 404);
-
-    const review = (product.reviews || []).find((r) => String(r._id) === String(reviewId));
-    if (!review) throw new ApiError('Review not found', 404);
-
-    review.moderationStatus = PUBLIC_STATUS;
-    review.approvedAt = new Date();
-
-    await product.save();
-    return reviewDto(product, review);
+    if (!(product.reviews || []).some((review) => String(review._id) === String(reviewId))) {
+      throw new ApiError('Review not found', 404);
+    }
+    // Reuse the canonical writer: it loads a writable document, updates
+    // moderation fields and recomputes the product's approved-only rating.
+    return (await productService.moderateReview(productId, reviewId, { action: 'approve', adminId })).review;
   }
 
   /** FIX #5: Admin - Reject a review with optional reason */
-  async rejectReview(productId, reviewId, reason = '') {
+  async rejectReview(productId, reviewId, reason = '', adminId) {
     const product = await reviewRepository.findProductById(productId);
     if (!product) throw new ApiError('Product not found', 404);
-
-    const review = (product.reviews || []).find((r) => String(r._id) === String(reviewId));
-    if (!review) throw new ApiError('Review not found', 404);
-
-    review.moderationStatus = 'REJECTED';
-    review.rejectionReason = reason;
-    review.rejectedAt = new Date();
-
-    await product.save();
-    return reviewDto(product, review);
+    if (!(product.reviews || []).some((review) => String(review._id) === String(reviewId))) {
+      throw new ApiError('Review not found', 404);
+    }
+    return (await productService.moderateReview(productId, reviewId, {
+      action: 'reject',
+      reason,
+      adminId,
+    })).review;
   }
 }
 

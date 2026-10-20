@@ -9,10 +9,25 @@
  */
 
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const orderRepository = require('../repositories/orders.repository');
 const inventoryService = require('./inventory.service');
 const orderStateService = require('./orderState.service');
-const shopsService = require('../../selling/services/shops.service');
+const shopRepository = require('../../selling/repositories/shops.repository');
+const notificationService = require('../../../shared/services/notification.service');
+const productRepository = require('../../catalog/repositories/products.repository');
+const { isProductPubliclyVisible } = require('../../../shared/utils/productVisibility');
+const promotionsService = require('../../promotions/services/promotions.service');
+const { ORDER_STATUSES } = require('../constants/orderStatuses');
+const { deliveryClient } = require('../../../app/clients/delivery.client');
+
+async function notifyOrderStatus(order, previousStatus, nextStatus) {
+  try {
+    await notificationService.notifyOrderStatus(order, previousStatus, nextStatus);
+  } catch (err) {
+    console.warn(`Notification failed for order ${order._id}: ${err.message}`);
+  }
+}
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -25,43 +40,251 @@ class OrdersService {
   /**
    * Create order with stock reservation (FIX #2)
    * @param {Object} orderData
-   * @returns {Promise<Object>}
+   * @returns {Promise<Array<Object>>} Seller-level order rows for the checkout
    */
   async createOrder(orderData = {}) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const fulfilmentType = String(orderData.fulfilmentType || 'delivery').toLowerCase();
+    if (!['delivery', 'pickup'].includes(fulfilmentType)) throw new ApiError('Invalid fulfilment type', 422);
+    const buyerId = String(orderData.userId || orderData.user?._id || orderData.user?.id || '');
+    if (!buyerId) throw new ApiError('Authenticated buyer is required', 401);
+    if (!Array.isArray(orderData.cart) || orderData.cart.length === 0) {
+      throw new ApiError('Cart is required', 400);
+    }
+
+    // Rebuild every money-bearing field from current catalog records. The
+    // browser's displayed total and line prices are estimates only.
+    const cart = [];
+    for (const requested of orderData.cart) {
+      const productId = String(requested.productId || requested._id || '');
+      const quantity = Number(requested.quantity ?? requested.qty ?? 1);
+      if (!mongoose.isValidObjectId(productId)) throw new ApiError('Invalid product in cart', 400);
+      if (!Number.isSafeInteger(quantity) || quantity < 1) throw new ApiError('Cart quantity must be a positive whole number', 400);
+
+      const product = await productRepository.findById(productId);
+      if (!product || !(await isProductPubliclyVisible(product))) {
+        throw new ApiError('A product in your cart is no longer available', 409);
+      }
+      const unitPrice = Number(product.discountPrice);
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new ApiError('A product has an invalid price', 409);
+      const lineSubtotal = Math.round(unitPrice * quantity * 100) / 100;
+      if (!Number.isFinite(lineSubtotal)) throw new ApiError('Cart total is too large', 400);
+
+      cart.push({
+        _id: String(product._id),
+        productId: String(product._id),
+        name: product.name,
+        category: product.category,
+        categoryId: product.categoryId || '',
+        shopId: String(product.shopId),
+        shopName: product.shop?.name || '',
+        sellerId: String(product.sellerId || product.shop?.ownerId || ''),
+        image: product.images?.[0] || '',
+        images: product.images || [],
+        price: unitPrice,
+        discountPrice: unitPrice,
+        originalPrice: Number(product.originalPrice) || unitPrice,
+        quantity,
+        qty: quantity,
+        subtotal: lineSubtotal,
+      });
+    }
+
+    const groups = new Map();
+    for (const item of cart) {
+      if (!groups.has(item.shopId)) groups.set(item.shopId, []);
+      groups.get(item.shopId).push(item);
+    }
+    if (!groups.size) throw new ApiError('Cart has no valid seller items', 400);
+
+    const groupTotals = new Map(await Promise.all([...groups.entries()].map(async ([shopId, items]) => {
+      const subtotal = Math.round(items.reduce((sum, item) => sum + item.subtotal, 0) * 100) / 100;
+      const quantity = items.reduce((sum, item) => sum + item.quantity, 0);
+      if (fulfilmentType === 'pickup') {
+        const pickupShop = await shopRepository.findById(shopId);
+        if (!pickupShop || pickupShop.pickupEnabled !== true) throw new ApiError('Pickup is not available for this seller', 422);
+        return [shopId, { items, subtotal, quantity, shippingFee: 0, deliveryFeeRuleId: null, delivererShareRate: 0 }];
+      }
+      const destinationLocationId = orderData.destination?.sectorId || orderData.destination?.locationId || orderData.locationId;
+      const quoteResult = await deliveryClient.quoteDeliveryFee(orderData.deliveryZoneId, quantity, destinationLocationId);
+      if (!quoteResult.ok || !Number.isFinite(Number(quoteResult.body?.fee))) {
+        throw new ApiError(quoteResult.body?.message || 'Could not calculate delivery fee', quoteResult.status || 503);
+      }
+      return [shopId, {
+        items, subtotal, quantity,
+        shippingFee: Math.round(Number(quoteResult.body.fee) * 100) / 100,
+        deliveryFeeRuleId: quoteResult.body.ruleId || null,
+        delivererShareRate: Number(quoteResult.body.delivererShareRate ?? 80),
+      }];
+    })));
+    const subtotal = Math.round([...groupTotals.values()].reduce((sum, group) => sum + group.subtotal, 0) * 100) / 100;
+    let promo = null;
+    const promoCode = orderData.promoCode ? String(orderData.promoCode) : null;
+
+    if (promoCode) {
+      const priorOrders = await orderRepository.count({
+        buyerId,
+        status: { $nin: [ORDER_STATUSES.CANCELLED, 'CANCELLED', 'CANCELED'] },
+      });
+      promo = await promotionsService.validateCode(
+        promoCode,
+        cart,
+        subtotal,
+        buyerId,
+        priorOrders === 0
+      );
+    }
+
+    // Allocate the validated discount only to seller groups that contain
+    // eligible lines. Platform promotions are apportioned by eligible value;
+    // seller promotions remain inside their owning shop.
+    const eligibleByShop = new Map();
+    if (promo) {
+      const promotion = promo.promotion;
+      for (const [shopId, group] of groupTotals) {
+        const eligibleSubtotal = group.items.reduce((sum, item) => {
+          if (!promotion.isPlatformWide && String(promotion.shopId) !== shopId) return sum;
+          if (promo.eligibleProducts.length && !promo.eligibleProducts.includes(item.productId)) return sum;
+          if (promo.eligibleCategories.length && !promo.eligibleCategories.includes(String(item.categoryId))) return sum;
+          return sum + item.subtotal;
+        }, 0);
+        eligibleByShop.set(shopId, eligibleSubtotal);
+      }
+    }
+    const eligibleTotal = [...eligibleByShop.values()].reduce((sum, value) => sum + value, 0);
+    let discountRemaining = promo && !promo.isFreeDelivery
+      ? Math.min(subtotal, Number(promo.discountAmount) || 0)
+      : 0;
+    const freeDelivery = promo?.isFreeDelivery === true;
+    const shopDiscounts = new Map();
+    for (const [shopId, group] of groupTotals) {
+      const eligibleSubtotal = eligibleByShop.get(shopId) || 0;
+      let discount = 0;
+      if (freeDelivery && eligibleSubtotal > 0) {
+        discount = group.shippingFee;
+      } else if (eligibleSubtotal > 0 && eligibleTotal > 0 && discountRemaining > 0) {
+        const remainingEligible = [...groupTotals.keys()]
+          .slice([...groupTotals.keys()].indexOf(shopId) + 1)
+          .reduce((sum, nextShopId) => sum + (eligibleByShop.get(nextShopId) || 0), 0);
+        discount = remainingEligible === 0
+          ? discountRemaining
+          : Math.min(discountRemaining, Math.round((Number(promo.discountAmount) * eligibleSubtotal / eligibleTotal) * 100) / 100);
+        discount = Math.min(discount, group.subtotal, discountRemaining);
+        discountRemaining = Math.round((discountRemaining - discount) * 100) / 100;
+      }
+      shopDiscounts.set(shopId, Math.round(discount * 100) / 100);
+    }
+
+    const orderGroupId = new mongoose.Types.ObjectId().toString();
+    const reservations = [];
+    const createdOrders = [];
 
     try {
-      // Reserve stock for all items
-      const reservations = [];
-      for (const item of (orderData.cart || [])) {
-        const reservation = await inventoryService.reserveStock(
-          item.productId,
-          item.quantity,
-          orderData.orderId,
-          'STANDARD'
-        );
-        reservations.push(reservation);
+      for (const [shopId, group] of groupTotals) {
+        const orderId = new mongoose.Types.ObjectId();
+        const shop = await shopRepository.findById(shopId);
+        if (!shop) throw new ApiError('A shop in your cart is no longer available', 409);
+        if (shop.showOnPublic === false || (shop.status && !['APPROVED', 'ACTIVE'].includes(shop.status))) {
+          throw new ApiError('A shop in your cart is no longer accepting orders', 409);
+        }
+        const sellerId = String(shop.ownerId || group.items[0].sellerId || '');
+        for (const item of group.items) item.sellerId = sellerId;
+        const groupReservations = [];
+        for (const item of group.items) {
+          const reservation = await inventoryService.reserveStock(
+            item.productId,
+            item.quantity,
+            String(orderId),
+            'STANDARD'
+          );
+          reservations.push({ ...reservation, orderId: String(orderId) });
+          groupReservations.push(reservation);
+        }
+
+        const discountAmount = shopDiscounts.get(shopId) || 0;
+        const pickupCode = fulfilmentType === 'pickup' ? String(crypto.randomInt(0, 1000000)).padStart(6, '0') : null;
+        const order = await orderRepository.create({
+          _id: orderId,
+          orderGroupId,
+          buyerId,
+          user: { ...(orderData.user || {}), _id: buyerId, id: buyerId },
+          cart: group.items,
+          sellerId,
+          shopId,
+          sellerShipments: [{
+            sellerId,
+            businessId: shop.businessId ? String(shop.businessId) : null,
+            shopId,
+            items: group.items,
+            subtotal: group.subtotal,
+            discountAmount,
+            origin: shop.locationSnapshot || {},
+          }],
+          subtotal: group.subtotal,
+          shippingFee: group.shippingFee,
+          fulfilmentType,
+          ...(pickupCode ? {
+            pickupCodeHash: crypto.createHash('sha256').update(pickupCode).digest('hex'),
+            pickupExpiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+          } : {}),
+          deliveryFeeRuleId: group.deliveryFeeRuleId,
+          delivererShareRate: group.delivererShareRate,
+          discountAmount,
+          totalPrice: Math.max(0, Math.round((group.subtotal + group.shippingFee - discountAmount) * 100) / 100),
+          currency: 'ETB',
+          promoCode: promo?.promotion?.code || null,
+          appliedPromotionId: promo?.promotion?.id ? String(promo.promotion.id) : null,
+          promoDiscountDetails: promo?.promotion ? {
+            discountType: promo.promotion.discountType,
+            discountPercent: promo.promotion.discountPercent,
+            fixedAmount: promo.promotion.fixedAmount,
+            maxDiscountAmount: promo.promotion.maxDiscountAmount,
+            isPlatformWide: promo.promotion.isPlatformWide,
+          } : undefined,
+          shippingAddress: orderData.shippingAddress || {},
+          destination: orderData.destination || {},
+          deliveryZoneId: orderData.deliveryZoneId || null,
+          deliveryZoneName: orderData.deliveryZoneName || '',
+          sectorId: orderData.sectorId || orderData.destination?.sectorId || null,
+          locationId: orderData.locationId || orderData.destination?.sectorId || null,
+          paymentInfo: orderData.paymentInfo || {},
+          status: ORDER_STATUSES.PROCESSING,
+          createdAt: new Date(),
+          reservations: groupReservations,
+        });
+        if (pickupCode) {
+          order.pickupCode = pickupCode;
+          delete order.pickupCodeHash;
+        }
+        createdOrders.push(order);
       }
 
-      // Create order record
-      const order = await orderRepository.create(
-        {
-          ...orderData,
-          status: 'PROCESSING',
-          createdAt: new Date(),
-          reservations,
-        },
-        { session }
-      );
+      if (promo) {
+        await promotionsService.usageTracker.recordUsage(
+          promo.promotion.id,
+          buyerId,
+          orderGroupId,
+          [...shopDiscounts.values()].reduce((sum, amount) => sum + amount, 0)
+        );
+      }
 
-      await session.commitTransaction();
-      return order;
+      return createdOrders;
     } catch (err) {
-      await session.abortTransaction();
+      if (promo) {
+        try { await promotionsService.usageTracker.rollbackUsage(promo.promotion.id, orderGroupId); }
+        catch (rollbackError) { console.error('Promotion usage rollback failed:', rollbackError.message); }
+      }
+      for (const createdOrder of createdOrders) {
+        try { await orderRepository.deleteById(createdOrder._id); }
+        catch (cleanupError) { console.error('Failed to remove incomplete order:', cleanupError.message); }
+      }
+      for (const reservation of reservations.reverse()) {
+        try {
+          await inventoryService.releaseReservation(reservation.productId, reservation.quantity, reservation.orderId);
+        } catch (cleanupError) {
+          console.error(`Failed to release reservation for ${reservation.productId}:`, cleanupError.message);
+        }
+      }
       throw err;
-    } finally {
-      await session.endSession();
     }
   }
 
@@ -149,11 +372,15 @@ class OrdersService {
       if (!order) {
         throw new ApiError('Order not found', 404);
       }
+      if (order.paymentStatus !== 'CONFIRMED') throw new ApiError('Order cannot be approved before payment is confirmed', 409);
 
       // Get shop and buyer info
-      const shop = await shopsService.getShopById(order.shopId);
+      const shop = await shopRepository.findById(order.shopId);
       if (!shop) {
         throw new ApiError('Shop not found', 404);
+      }
+      if (context.userRole === 'SELLER' && String(shop.ownerId) !== String(context.userId)) {
+        throw new ApiError('You cannot approve orders for this seller', 403);
       }
 
       // FIX #12: Check delivery coverage
@@ -187,7 +414,36 @@ class OrdersService {
    * @returns {Promise<Object>}
    */
   async updateOrderStatus(orderId, newStatus, context = {}) {
+    if (context.userRole === 'SELLER') {
+      const order = await orderRepository.findById(orderId);
+      if (!order) throw new ApiError('Order not found', 404);
+      const shop = await shopRepository.findById(order.shopId);
+      if (!shop || String(shop.ownerId) !== String(context.userId)) throw new ApiError('You cannot update this order', 403);
+    }
     return orderStateService.transitionOrder(orderId, newStatus, context);
+  }
+
+  async verifyPickup(orderId, suppliedCode, actorId) {
+    const order = await orderRepository.findById(orderId, { pickupCode: true });
+    if (!order) throw new ApiError('Order not found', 404);
+    if (order.fulfilmentType !== 'pickup') throw new ApiError('This order is not a pickup order', 422);
+    if (String(order.sellerId) !== String(actorId)) throw new ApiError('You cannot verify pickup for this order', 403);
+    if (order.status === ORDER_STATUSES.DELIVERED || order.pickupCompletedAt) throw new ApiError('Pickup already completed', 409);
+    if (order.status !== ORDER_STATUSES.SHIPPED) throw new ApiError('Order is not ready for pickup', 409);
+    if (Number(order.pickupCodeAttempts || 0) >= 5) throw new ApiError('Pickup code verification is locked', 429);
+    const code = String(suppliedCode || '');
+    const suppliedHash = crypto.createHash('sha256').update(code).digest();
+    const storedHash = Buffer.from(String(order.pickupCodeHash || ''), 'hex');
+    const valid = /^\d{6}$/.test(code) && storedHash.length === suppliedHash.length && crypto.timingSafeEqual(storedHash, suppliedHash);
+    if (!valid) {
+      const updated = await orderRepository.incrementPickupCodeAttempt(orderId);
+      const locked = !updated || Number(updated.pickupCodeAttempts) >= 5;
+      throw new ApiError(locked ? 'Pickup code verification is locked' : 'Invalid pickup code', locked ? 429 : 422);
+    }
+    const completed = await orderRepository.claimPickupCompletion(orderId, storedHash.toString('hex'), actorId);
+    if (!completed) throw new ApiError('Pickup was already completed or the code is no longer valid', 409);
+    await notifyOrderStatus(completed, ORDER_STATUSES.SHIPPED, ORDER_STATUSES.DELIVERED);
+    return completed;
   }
 
   /**
@@ -216,6 +472,18 @@ class OrdersService {
         throw new ApiError('Order not found', 404);
       }
 
+      if (context.userRole === 'BUYER' && String(order.buyerId) !== String(context.userId)) {
+        await session.abortTransaction();
+        throw new ApiError('You cannot cancel this order', 403);
+      }
+      if (context.userRole === 'SELLER') {
+        const shop = await shopRepository.findById(order.shopId);
+        if (!shop || String(shop.ownerId) !== String(context.userId)) {
+          await session.abortTransaction();
+          throw new ApiError('You cannot cancel this order', 403);
+        }
+      }
+
       // Release all reservations with current session
       for (const item of (order.cart || [])) {
         await inventoryService.releaseReservation(
@@ -226,22 +494,46 @@ class OrdersService {
         );
       }
 
-      // Update status
-      order.status = 'CANCELLED';
+      // Update status using the canonical spelling accepted by the model.
+      const previousStatus = order.status;
+      order.status = ORDER_STATUSES.CANCELLED;
       order.cancelledAt = new Date();
       order.cancelledBy = context.userId;
       order.cancellationReason = context.reason;
 
       if (!order.timeline) order.timeline = [];
       order.timeline.push({
-        status: 'CANCELLED',
-        previousStatus: order.status,
+        status: ORDER_STATUSES.CANCELLED,
+        previousStatus,
         timestamp: new Date(),
         reason: context.reason,
       });
 
       await order.save({ session });
       await session.commitTransaction();
+
+      // A seller-split checkout counts as one promotion redemption. Release it
+      // only after every order in that checkout has been cancelled.
+      if (order.appliedPromotionId) {
+        const activeGroupOrders = order.orderGroupId
+          ? await orderRepository.count({
+            orderGroupId: String(order.orderGroupId),
+            status: { $nin: [ORDER_STATUSES.CANCELLED, 'CANCELLED', 'CANCELED'] },
+          })
+          : 0;
+        if (activeGroupOrders === 0) {
+          try {
+            await promotionsService.usageTracker.rollbackUsage(
+              order.appliedPromotionId,
+              String(order.orderGroupId || order._id)
+            );
+          } catch (rollbackError) {
+            // Cancellation is already committed; log so a redemption can be
+            // repaired without restoring the cancelled order's stock/status.
+            console.error('Promotion usage rollback failed:', rollbackError.message);
+          }
+        }
+      }
 
       return order;
     } catch (err) {
@@ -342,7 +634,7 @@ class OrdersService {
       }
 
       // Transition to Refund Success
-      await orderStateService.transitionOrder(orderId, 'Refund Success', {}, { session });
+      await orderStateService.transitionOrder(orderId, 'Refund Success', {}, { session, deferSideEffects: true });
 
       // Restock items if not already restocked
       if (!order.restocked) {
@@ -356,8 +648,9 @@ class OrdersService {
         }
       }
 
-      const updated = await orderRepository.findById(orderId);
+      const updated = await orderRepository.findById(orderId, { session });
       await session.commitTransaction();
+      await notifyOrderStatus(updated, order.status, updated.status);
       return updated;
     } catch (err) {
       await session.abortTransaction();
@@ -425,11 +718,32 @@ class OrdersService {
     session.startTransaction();
 
     try {
+      // Agreement orders use the same required core fields as checkout orders.
+      // Keep the request service's descriptive `lines` input, but persist it as
+      // the canonical cart and derive the amount from the accepted terms.
+      const cart = (agreementData.lines || agreementData.cart || []).map((line) => ({
+        ...line,
+        quantity: Number(line.quantity || 0),
+        price: Number(line.unitPrice ?? line.price ?? 0),
+        unitPrice: Number(line.unitPrice ?? line.price ?? 0),
+      }));
+      const subtotal = cart.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
+      const buyerId = String(agreementData.buyerId || agreementData.user?.id || agreementData.user?._id || '');
+      const sellerId = String(agreementData.sellerId || cart[0]?.sellerId || '');
+      const shopId = String(agreementData.shopId || cart[0]?.shopId || '');
       // Create order with agreement reference
       const order = await orderRepository.create(
         {
           ...agreementData,
-          status: 'PROCESSING',
+          cart,
+          buyerId,
+          user: { ...(agreementData.user || {}), id: buyerId, _id: buyerId },
+          sellerId,
+          shopId,
+          subtotal,
+          shippingFee: Number(agreementData.shippingFee || 0),
+          totalPrice: subtotal + Number(agreementData.shippingFee || 0),
+          status: 'Processing',
           isAgreement: true,
           createdAt: new Date(),
         },
@@ -444,6 +758,211 @@ class OrdersService {
     } finally {
       await session.endSession();
     }
+  }
+/**
+   * Get orders for a buyer
+   * @param {string} userId
+   * @returns {Promise<Array>}
+   */
+  async getBuyerOrders(userId) {
+    if (!userId) throw new ApiError('User ID required', 400);
+    return orderRepository.findByBuyerId(userId);
+  }
+
+  /**
+   * Get orders for a seller
+   * @param {string} sellerId
+   * @returns {Promise<Array>}
+   */
+  async getSellerOrders(sellerId) {
+    if (!sellerId) throw new ApiError('Seller ID required', 400);
+    return orderRepository.findBySellerId(sellerId);
+  }
+
+  /**
+   * Get order by ID
+   * @param {string} orderId
+   * @returns {Promise<Object|null>}
+   */
+  async getOrderById(orderId) {
+    if (!orderId) throw new ApiError('Order ID required', 400);
+    return orderRepository.findById(orderId);
+  }
+
+  /**
+   * Approve refund for order (seller action)
+   * @param {string} orderId
+   * @param {Object} data - { userId, userRole, status }
+   * @returns {Promise<Object>}
+   */
+  async approveRefund(orderId, data = {}) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const order = await orderRepository.findById(orderId, { session });
+      if (!order) {
+        await session.abortTransaction();
+        throw new ApiError('Order not found', 404);
+      }
+
+      // Transition to Refund Success
+      await orderStateService.transitionOrder(orderId, 'Refund Success', {}, { session, deferSideEffects: true });
+
+      // Restock items if not already restocked
+      if (!order.restocked) {
+        for (const item of (order.cart || [])) {
+          await inventoryService.releaseReservation(
+            item.productId,
+            item.quantity,
+            orderId,
+            { session }
+          );
+        }
+      }
+
+      const updated = await orderRepository.findById(orderId, { session });
+      await session.commitTransaction();
+      await notifyOrderStatus(updated, order.status, updated.status);
+      return updated;
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  /**
+   * Request refund for order (buyer action)
+   * @param {string} orderId
+   * @param {Object} data - { userId, userRole, status }
+   * @returns {Promise<Object>}
+   */
+  async requestRefund(orderId, data = {}) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const order = await orderRepository.findById(orderId, { session });
+      if (!order) {
+        await session.abortTransaction();
+        throw new ApiError('Order not found', 404);
+      }
+
+      // Transition to Refund Requested
+      await orderStateService.transitionOrder(orderId, 'Refund Requested', {}, { session, deferSideEffects: true });
+
+      const updated = await orderRepository.findById(orderId, { session });
+      await session.commitTransaction();
+      await notifyOrderStatus(updated, order.status, updated.status);
+      return updated;
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  /**
+   * Recover delivery handoffs for orders that are confirmed but haven't been handed off to Delivery Service.
+   * Runs at startup and periodically to ensure no confirmed order is stuck without a delivery request.
+   * @param {number} limit - Max orders to process per run
+   * @returns {Promise<Object>} { processed, succeeded, failed, abandoned }
+   */
+  async recoverDeliveryHandoffs(limit = 100) {
+    const orderDeliveryService = require('./orderDelivery.service');
+
+    // Find orders that are CONFIRMED but don't have a delivery request yet
+    const orders = await orderRepository.find({
+      filter: {
+        status: 'Confirmed',
+        // Only orders created from checkout (not agreement orders)
+        requestId: null,
+        // Pickup orders are completed at the shop and must never enter the
+        // delivery network. `$ne` also includes legacy rows without this field.
+        fulfilmentType: { $ne: 'pickup' },
+      },
+      limit,
+      sort: { createdAt: 1 },
+    });
+
+    if (!orders.length) {
+      return { processed: 0, succeeded: 0, failed: 0, abandoned: 0 };
+    }
+
+    let succeeded = 0;
+    let failed = 0;
+    let abandoned = 0;
+
+    for (const order of orders) {
+      const orderId = String(order._id);
+
+      // Check if already has a delivery link
+      const existingLink = await orderDeliveryService.getByOrderId(orderId);
+      if (existingLink?.deliveryRequestId) {
+        continue; // Already handed off
+      }
+
+      try {
+        // Mark as pending handoff
+        await orderDeliveryService.queueHandoff(orderId);
+
+        // Build delivery request payload
+        const shipment = order.sellerShipments?.[0] || {};
+        const destination = order.destination || {};
+
+        const handoffData = {
+          orderId,
+          orderGroupId: order.orderGroupId,
+          sellerId: order.sellerId || shipment.sellerId,
+          buyerId: order.buyerId,
+          shopId: order.shopId || shipment.shopId,
+          paymentMethod: order.paymentInfo?.method || 'COD',
+          paymentAmount: order.totalPrice,
+          // Keep recovery's financial snapshot identical to the first handoff;
+          // otherwise a retried order silently gets zero provider earnings.
+          deliveryFee: Number(order.shippingFee) || 0,
+          deliveryFeeRuleId: order.deliveryFeeRuleId || null,
+          delivererShareRate: Number(order.delivererShareRate ?? 80),
+          items: (order.cart || []).map(item => ({
+            productId: item.productId,
+            name: item.name,
+            quantity: item.quantity,
+            value: item.discountPrice || item.price || 0,
+          })),
+          origin: shipment.origin || {},
+          destination: destination,
+          idempotencyKey: `order:${orderId}`,
+        };
+
+        // Send to Delivery Service
+        const result = await deliveryClient.createDeliveryRequest(handoffData);
+
+        if (result.ok && result.body?.deliveryRequestId) {
+          // Successfully created delivery request
+          await orderDeliveryService.attachRequest(orderId, result.body.deliveryRequestId);
+          succeeded++;
+        } else if (result.status >= 400 && result.status < 500) {
+          // Client error - permanent failure, mark as abandoned
+          await orderDeliveryService.markHandoffAbandoned(orderId);
+          console.warn(`[recoverDeliveryHandoffs] Order ${orderId} handoff abandoned: ${result.body?.message || 'Delivery service rejected'}`);
+          abandoned++;
+        } else {
+          // Server error or network issue - will retry next sweep
+          await orderDeliveryService.waitForOrderApproval(orderId);
+          failed++;
+        }
+      } catch (err) {
+        // Network/timeout error - will retry next sweep
+        await orderDeliveryService.waitForOrderApproval(orderId);
+        console.error(`[recoverDeliveryHandoffs] Order ${orderId} handoff failed:`, err.message);
+        failed++;
+      }
+    }
+
+    return { processed: orders.length, succeeded, failed, abandoned };
   }
 }
 

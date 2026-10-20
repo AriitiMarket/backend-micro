@@ -80,11 +80,12 @@ async function computeShopRatings() {
  *                 A shop with no configured coverage can never match — it is
  *                 not "serving every zone by default".
  *   * `cityId`  → only shops whose physical location snapshot is in that city.
+ *   * `regionId` → only shops whose physical location snapshot is in that region.
  * Both are AND-ed with the existing search/category/visibility filters, so the
  * same eligibility rule applies wherever shops are listed.
  */
 async function findPublicAll(opts = {}) {
-  const { search, category, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId } = opts;
+  const { search, category, sort = '-createdAt', page = 1, limit = 20, zoneId, cityId, regionId } = opts;
   const filter = approvedFilter();
 
   if (zoneId) {
@@ -93,6 +94,9 @@ async function findPublicAll(opts = {}) {
   }
   if (cityId) {
     filter['locationSnapshot.cityId'] = String(cityId);
+  }
+  if (regionId) {
+    filter['locationSnapshot.regionId'] = String(regionId);
   }
 
   // Shop category browse (type 'business') — exact, case-insensitive match on

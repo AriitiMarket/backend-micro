@@ -231,7 +231,7 @@ class PromotionsService {
    * @param {boolean} isFirstOrder - Whether this is the buyer's first order
    * @returns {Promise<Object>} Validation result with discount calculation
    */
-  async validateCode(code, cartItems, subtotal, buyerId = null, isFirstOrder = false) {
+  async validateCode(code, cartItems, _subtotal, buyerId = null, isFirstOrder = false) {
     if (!code) {
       throw new ApiError('Promo code is required', 400);
     }
@@ -276,8 +276,28 @@ class PromotionsService {
       throw new ApiError(totalUsage.reason, 400);
     }
 
-    // Calculate discount
-    const discountResult = DiscountCalculator.calculateDiscount(promo, subtotal);
+    // A shop promotion only discounts that shop's lines. Product/category
+    // restrictions also limit the amount eligible for the discount; checking
+    // that one line qualifies must not discount the entire basket.
+    const eligibleItems = (cartItems || []).filter((item) => {
+      const itemShopId = String(item.shopId || item.shop?._id || '');
+      if (!promo.isPlatformWide && itemShopId !== String(promo.shopId)) return false;
+      if (promo.eligibleProductIds?.length && !promo.eligibleProductIds.includes(String(item.productId || item._id))) return false;
+      if (promo.eligibleCategoryIds?.length && !promo.eligibleCategoryIds.includes(String(item.categoryId || ''))) return false;
+      return true;
+    });
+    if (!eligibleItems.length) throw new ApiError('No eligible products in cart', 400);
+    const eligibleSubtotal = eligibleItems.reduce((sum, item) => {
+      const lineTotal = Number(item.subtotal);
+      if (Number.isFinite(lineTotal) && lineTotal >= 0) return sum + lineTotal;
+      const price = Number(item.price ?? item.discountPrice ?? 0);
+      const quantity = Number(item.quantity ?? item.qty ?? 1);
+      return sum + (Number.isFinite(price) && Number.isFinite(quantity) ? price * quantity : 0);
+    }, 0);
+
+    // Calculate from server-priced eligible lines, not the caller's full-cart
+    // subtotal. The subtotal argument remains for older consumers.
+    const discountResult = DiscountCalculator.calculateDiscount(promo, eligibleSubtotal);
 
     return {
       valid: true,
@@ -297,6 +317,7 @@ class PromotionsService {
       isFreeDelivery: discountResult.isFreeDelivery || false,
       eligibleProducts: promo.eligibleProductIds || [],
       eligibleCategories: promo.eligibleCategoryIds || [],
+      eligibleSubtotal,
     };
   }
 

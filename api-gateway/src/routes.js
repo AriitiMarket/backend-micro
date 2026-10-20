@@ -54,6 +54,7 @@ const ROUTES = [
 
   // Commerce Service.
   { service: 'commerce', prefix: '/shop' },
+  { service: 'commerce', prefix: '/metrics' },
   { service: 'commerce', prefix: '/product' },
   { service: 'commerce', prefix: '/category' },
   { service: 'commerce', prefix: '/order' },
@@ -73,6 +74,28 @@ const ROUTES = [
   { service: 'commerce', prefix: '/disputes' },
   { service: 'commerce', prefix: '/analytics' },
   { service: 'commerce', prefix: '/settings' },
+  { service: 'commerce', prefix: '/wallet' },
+  { service: 'commerce', prefix: '/payout' },
+  // Returns/refunds. The commerce service mounts `returnsRoutes` at '/return'
+  // (see commerce-service/src/app/app.js), but the prefix was missing here —
+  // every /return request was answered with 404 at the edge, so the seller
+  // returns dashboard and the buyer return request flow could never load.
+  { service: 'commerce', prefix: '/return' },
+
+  // Phase-1 fulfillment & financial sub-resources. These are mounted at the
+  // commerce service root (see commerce-service/src/app/app.js) and are NOT
+  // covered by the generic '/order', '/payment', '/disputes' prefixes above —
+  // the segment-aware matcher requires an exact path or a '/' boundary, so
+  // '/order-notes' would otherwise miss '/order' and 404 at the edge.
+  { service: 'commerce', prefix: '/order-notes' },
+  { service: 'commerce', prefix: '/order-hold' },
+  { service: 'commerce', prefix: '/order-priority' },
+  { service: 'commerce', prefix: '/order-sla' },
+  { service: 'commerce', prefix: '/order-export' },
+  { service: 'commerce', prefix: '/order-dispute' },
+  { service: 'commerce', prefix: '/payment-ledger' },
+  { service: 'commerce', prefix: '/payment-reconciliation' },
+  { service: 'commerce', prefix: '/commission-ledger' },
 
   // Delivery Service.
   { service: 'delivery', prefix: '/delivery' },

@@ -26,6 +26,7 @@ class ReturnsController {
         items,
         reason,
         comments,
+        role: req.user?.role,
       });
 
       res.status(201).json({
@@ -48,6 +49,7 @@ class ReturnsController {
 
       const returnRecord = await returnsService.approveReturn(returnId, {
         sellerId,
+        role: req.user?.role,
       });
 
       res.json({
@@ -72,6 +74,11 @@ class ReturnsController {
         amount,
         method,
         notes,
+      }, {
+        sellerId: req.user?.id || req.user?._id,
+        userId: req.user?.id || req.user?._id,
+        actorType: req.user?.role,
+        role: req.user?.role,
       });
 
       res.json({
@@ -95,6 +102,7 @@ class ReturnsController {
       const returnRecord = await returnsService.rejectReturn(returnId, {
         sellerId,
         reason,
+        role: req.user?.role,
       });
 
       res.json({
@@ -112,7 +120,10 @@ class ReturnsController {
   async getReturn(req, res, next) {
     try {
       const { returnId } = req.params;
-      const returnRecord = await returnsService.getReturn(returnId);
+      const returnRecord = await returnsService.getReturn(returnId, {
+        userId: req.user?.id || req.user?._id,
+        role: req.user?.role,
+      });
 
       res.json(returnRecord);
     } catch (err) {
@@ -127,20 +138,69 @@ class ReturnsController {
   async getSellerReturnsDashboard(req, res, next) {
     try {
       const { shopId } = req.params;
+      const result = await returnsService.getSellerReturnsDashboard(shopId);
+      res.json({ success: true, data: { shopId, ...result } });
+    } catch (err) {
+      next(err);
+    }
+  }
+/**
+   * ADMIN: GET /api/admin/returns/list
+   * List all returns with pagination and filters
+   */
+  async listReturns(req, res, next) {
+    try {
+      const { role } = req.user || {};
+      const { page = 1, limit = 20, status, buyerId, sellerId } = req.query;
 
-      // This would connect to returnsRepository to fetch aggregated data
-      // For now, returning structure for frontend integration
-      const dashboard = {
-        pending: 0,
-        approved: 0,
-        inspecting: 0,
-        completed: 0,
-        totalValue: 0,
-      };
+      if (!isAdmin(role)) {
+        return res.status(403).json({
+          error: 'Admin access required',
+          code: 'ADMIN_ONLY'
+        });
+      }
+
+      const result = await returnsService.listReturns({
+        page: parseInt(page),
+        limit: parseInt(limit),
+        status,
+        buyerId,
+        sellerId
+      });
 
       res.json({
-        shopId,
-        dashboard,
+        success: true,
+        data: result
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * ADMIN: GET /api/admin/returns/stats
+   * Get returns statistics
+   */
+  async getStats(req, res, next) {
+    try {
+      const { role } = req.user || {};
+      const { startDate, endDate } = req.query;
+
+      if (!isAdmin(role)) {
+        return res.status(403).json({
+          error: 'Admin access required',
+          code: 'ADMIN_ONLY'
+        });
+      }
+
+      const stats = await returnsService.getStats({
+        startDate,
+        endDate
+      });
+
+      res.json({
+        success: true,
+        data: stats
       });
     } catch (err) {
       next(err);

@@ -17,6 +17,7 @@ async function getPublicAllShops(req, res, next) {
       // Location-aware discovery: the buyer's selected city/zone.
       zoneId: req.query.zoneId || undefined,
       cityId: req.query.cityId || undefined,
+      regionId: req.query.regionId || undefined,
     });
     return ok(res, { shops: result.shops, count: result.count, total: result.total, page: result.page, limit: result.limit });
   } catch (err) {

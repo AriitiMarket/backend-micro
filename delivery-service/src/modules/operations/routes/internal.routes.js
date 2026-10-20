@@ -51,6 +51,7 @@ router.get('/location/:id', locationsCtrl.getLocation);
 // real actor identity, which a service call deliberately does not carry).
 const zonesCtrl = require('../../locations-expansion/controllers/zones.controller');
 router.get('/zone/location/:locationId', zonesCtrl.findZoneForLocation);
+router.get('/zone/fee-quote', zonesCtrl.quoteDeliveryFee);
 router.get('/zone', zonesCtrl.getZoneSummariesInternal);
 router.get('/zone/:id', zonesCtrl.getZoneSummaryInternal);
 

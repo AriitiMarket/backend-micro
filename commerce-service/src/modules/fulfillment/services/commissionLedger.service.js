@@ -7,6 +7,7 @@
 const mongoose = require('mongoose');
 const commissionLedgerRepository = require('../repositories/commissionLedger.repository');
 const allocationRepository = require('../repositories/sellerAllocation.repository');
+const settingsService = require('../../platform/services/settings.service');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -17,63 +18,132 @@ class ApiError extends Error {
 
 class CommissionLedgerService {
   /**
+   * Resolve the effective commission rate for an order.
+   * Priority: seller variation > category commission > platform default.
+   * All rates come from platform settings — callers cannot override.
+   */
+  async resolveCommissionRate(orderContext = {}) {
+    const settings = await settingsService.getPlatformSettings();
+    const { sellerId, categoryId } = orderContext;
+
+    let rate = settings.commissionRate !== null && settings.commissionRate !== undefined && Number.isFinite(Number(settings.commissionRate))
+      ? Number(settings.commissionRate) : 10;
+
+    // Resolve in priority order. A seller-specific rate must win even when
+    // the product also has a category rate.
+    let sellerRate = null;
+    if (sellerId && Array.isArray(settings.sellerCommissionVariations)) {
+      const variation = settings.sellerCommissionVariations.find(
+        (v) => v.sellerId && String(v.sellerId) === String(sellerId)
+      ) || settings.sellerCommissionVariations.find(
+        (v) => !v.sellerId && v.sellerType && v.sellerType === orderContext.sellerType
+      );
+      if (variation && typeof variation.commission === 'number') {
+        sellerRate = variation.commission;
+      }
+    }
+
+    let categoryRate = null;
+    if ((categoryId || orderContext.categoryName) && Array.isArray(settings.categoryCommissions)) {
+      const catComm = settings.categoryCommissions.find(
+        (c) => (c.categoryId && String(c.categoryId) === String(categoryId)) ||
+          (c.category && c.category === orderContext.categoryName)
+      );
+      if (catComm && typeof catComm.commission === 'number') {
+        categoryRate = catComm.commission;
+      }
+    }
+
+    if (sellerRate === null && sellerId && settings.sellerCommissionRates?.[sellerId] !== undefined) {
+      const legacySellerRate = Number(settings.sellerCommissionRates[sellerId]);
+      if (Number.isFinite(legacySellerRate)) sellerRate = legacySellerRate;
+    }
+    if (sellerRate !== null) rate = sellerRate;
+    else if (categoryRate !== null) rate = categoryRate;
+    return Math.min(Math.max(rate, 0), 100);
+  }
+
+  /**
    * Log commission calculation (APPEND-ONLY)
    * Called when order is confirmed and allocation computed
-   * 
+   * Commission rate is enforced from platform settings — not caller-trusted.
+   *
    * @param {string} orderId
    * @param {string} sellerId
    * @param {Object} commissionData
+   * @param {Object} context - { actorId, actorRole, orderContext }
    * @returns {Promise<Object>}
    */
-  async logCommission(orderId, sellerId, commissionData = {}) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
+  async logCommission(orderId, sellerId, commissionData = {}, context = {}) {
+    // NOTE: this append is a SINGLE document insert, which MongoDB already
+    // performs atomically, so it is deliberately NOT wrapped in a transaction.
+    //
+    // The transaction used to be opened here, which required a replica-set
+    // member or mongos. The platform deploys a STANDALONE mongod
+    // (see backend-services/docker-compose.yml: `image: mongo:7` with no
+    // --replSet), so every call failed with "Transaction numbers are only
+    // allowed on a replica set member or mongos" and the commission ledger —
+    // the audit trail of every commission calculation — never recorded a
+    // single row. The ledger's append-only guarantee comes from the model's
+    // immutability hooks, not from the transaction, and no multi-document
+    // invariant is involved.
     try {
-      // commissionData structure:
-      // {
-      //   grossSubtotal, shippingFee, commissionRate, platformCommission,
-      //   netPayable, allocationId, reason, metadata
-      // }
+      const orderContext = context.orderContext || {};
+      orderContext.sellerId = sellerId;
+
+      const commissionRate = await this.resolveCommissionRate(orderContext);
+
+      const grossSubtotal = Number(commissionData.grossSubtotal || 0);
+      const shippingFee = Number(commissionData.shippingFee || 0);
+      const taxAmount = Number(commissionData.taxAmount || 0);
+      const discountAmount = Number(commissionData.discountAmount || 0);
+      // Commission applies to discounted merchandise only. Shipping and tax
+      // are passed through and are not part of the commission base.
+      const commissionBase = Math.max(0, grossSubtotal - discountAmount);
+      // Recompute amounts on the server. Caller-supplied commission amounts
+      // are not authoritative, and shipping/tax are outside the commission base.
+      const platformCommission = Math.round((commissionBase * commissionRate) / 100 * 100) / 100;
+      const netPayable = Math.round((grossSubtotal + shippingFee + taxAmount - discountAmount - platformCommission) * 100) / 100;
 
       const ledgerEntry = await commissionLedgerRepository.create(
         {
           orderId: String(orderId),
           sellerId: String(sellerId),
-          
+
           // Calculation breakdown
-          grossSubtotal: commissionData.grossSubtotal || 0,
-          shippingFee: commissionData.shippingFee || 0,
-          taxAmount: commissionData.taxAmount || 0,
-          discountAmount: commissionData.discountAmount || 0,
-          
-          // Commission
-          commissionRate: commissionData.commissionRate || 0,
-          platformCommission: commissionData.platformCommission || 0,
-          
+          grossSubtotal,
+          shippingFee,
+          taxAmount,
+          discountAmount,
+
+          // Commission (enforced from platform settings)
+          commissionRate,
+          platformCommission,
+
           // Result
-          netPayable: commissionData.netPayable || 0,
-          
+          netPayable,
+
           // Reference
           allocationId: commissionData.allocationId || null,
-          
-          // Metadata
+
+          // Audit metadata
           reason: commissionData.reason || 'ORDER_CONFIRMED',
           metadata: commissionData.metadata || {},
-          
-          // Timestamp
+          commissionRateApplied: commissionRate,
+          effectiveFrom: new Date(),
+
+          // Actor audit trail
+          actorId: context.actorId || null,
+          actorRole: context.actorRole || 'SYSTEM',
+
+          // Timestamp (immutable)
           timestamp: new Date(),
         },
-        { session }
       );
 
-      await session.commitTransaction();
       return ledgerEntry;
     } catch (err) {
-      await session.abortTransaction();
       throw err;
-    } finally {
-      await session.endSession();
     }
   }
 
@@ -233,6 +303,57 @@ class CommissionLedgerService {
     });
 
     return byReason;
+  }
+
+  /**
+   * Audit commission integrity — verify platformCommission matches expected
+   * calculation based on the rate in force at effectiveFrom.
+   */
+  async auditCommissionDrift(sellerId, options = {}) {
+    const { startDate, endDate } = options;
+    const entries = await this.getCommissionHistory(sellerId, {
+      startDate,
+      endDate,
+      limit: 10000,
+    });
+
+    if (!entries || entries.length === 0) {
+      return {
+        sellerId,
+        entryCount: 0,
+        driftCount: 0,
+        verified: true,
+        issues: [],
+      };
+    }
+
+    const issues = [];
+    let driftCount = 0;
+
+    for (const entry of entries) {
+      const commissionBase = Math.max(0, Number(entry.grossSubtotal || 0) - Number(entry.discountAmount || 0));
+      const expectedCommission = Math.round((commissionBase * Number(entry.commissionRateApplied || 0)) / 100 * 100) / 100;
+      const actualCommission = Number(entry.platformCommission || 0);
+
+      if (Math.abs(expectedCommission - actualCommission) > 0.01) {
+        driftCount++;
+        issues.push({
+          orderId: entry.orderId,
+          expectedCommission,
+          actualCommission,
+          difference: actualCommission - expectedCommission,
+          commissionRateApplied: entry.commissionRateApplied,
+        });
+      }
+    }
+
+    return {
+      sellerId,
+      entryCount: entries.length,
+      driftCount,
+      verified: driftCount === 0,
+      issues,
+    };
   }
 }
 

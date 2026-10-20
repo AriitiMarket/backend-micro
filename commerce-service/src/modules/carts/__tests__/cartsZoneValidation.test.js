@@ -6,7 +6,7 @@
  * runs (Rule A + Rule C).
  */
 const assert = require('assert');
-const { describe, it, before, afterEach } = require('node:test');
+const { describe, it, before, after, afterEach } = require('node:test');
 
 const cartService = require('../services/carts.service');
 const shopCoverageService = require('../../selling/services/shopCoverage.service');
@@ -25,8 +25,11 @@ const PRODUCT_ID = 'prod-a';
 const SHOP_ID = 'shop-harar';
 
 async function stubClients() {
+  console.log('stubClients called');
   deliveryClient = require('../../../app/clients/delivery.client').deliveryClient;
+  console.log('deliveryClient loaded');
   deliveryClient.getZoneSummary = async () => ({ status: 200, ok: true, body: { zone: TEST_ZONE } });
+  console.log('getZoneSummary stubbed');
 
   const cartsByUser = new Map();
   const productsById = new Map();
@@ -42,6 +45,7 @@ async function stubClients() {
   productRepository.findById = async (id) => productsById.get(String(id)) || null;
   shopRepository.findById = async (id) => shopsById.get(String(id)) || null;
 
+  console.log('stubClients done');
   return { cartsByUser, productsById, shopsById };
 }
 
@@ -66,16 +70,29 @@ function product(pid, overrides = {}) {
 describe('Cart zone-aware validation (validateForZone)', () => {
   let stores;
   before(async () => {
+    console.log('Starting before hook...');
     const mongoose = require('mongoose');
-    await mongoose.connect('mongodb://localhost:27017/ariti_commerce_test_zone_validation');
+    const uri = process.env.MONGODB_URI.replace(/\/[^/?]+(\?.*)?$/, '/ariti_commerce_test_zone_validation$1');
+    console.log('Connecting to:', uri);
+    await mongoose.connect(uri);
+    console.log('Connected to MongoDB');
     Cart = require('../models/Carts');
     Product = require('../../catalog/models/Products');
     Shop = require('../../selling/models/Shops');
+    console.log('Models loaded');
     stores = await stubClients();
+    console.log('Clients stubbed');
     await Cart.deleteMany({});
     await Product.deleteMany({});
     await Shop.deleteMany({});
+    console.log('Collections cleared');
   });
+  
+  after(async () => {
+    const mongoose = require('mongoose');
+    await mongoose.connection.close();
+  });
+  
   afterEach(async () => {
     stores = await stubClients();
     stores.cartsByUser.clear();

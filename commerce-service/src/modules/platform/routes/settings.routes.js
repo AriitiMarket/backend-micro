@@ -6,6 +6,7 @@ const { authorize } = require('../../../app/middleware/authorize');
 
 // Settings endpoints (admin only)
 router.get('/settings/platform', authenticate, authorize('ADMIN'), controller.getPlatformSettings);
+router.get('/settings/platform/audit', authenticate, authorize('ADMIN'), controller.getPlatformSettingsAudit);
 router.put('/settings/platform', authenticate, authorize('ADMIN'), controller.updatePlatformSettings);
 
 router.get('/settings/notifications', authenticate, authorize('ADMIN'), controller.getNotificationSettings);

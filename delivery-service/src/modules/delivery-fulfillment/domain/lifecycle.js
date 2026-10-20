@@ -137,8 +137,8 @@ function normalizeProofOfDelivery(proof) {
  * Throws 400 listing every proof requirement the delivery has not met.
  *
  * A COD delivery counts as confirmed either by an explicit `codConfirmed: true`
- * or by reporting the collected amount — the amount is the evidence the platform
- * reconciles, so accepting it keeps the rule satisfiable by real clients.
+ * or by reporting the exact collected amount — Commerce reconciles that amount
+ * against the order total before settling a COD order.
  */
 function assertProofSatisfied(proof, rules, { expectedCodAmount = null } = {}) {
   const effective = { ...moduleConstants.DEFAULT_PROOF_RULES, ...(rules || {}) };

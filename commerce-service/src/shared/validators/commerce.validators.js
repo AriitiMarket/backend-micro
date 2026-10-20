@@ -58,6 +58,12 @@ const validateUpdateShop = (req, res, next) => {
       !/^[0-9]{1,10}$/.test(String(body.zipCode).trim())) {
     errors.push('Zip code must be numeric');
   }
+  if (body.pickupEnabled !== undefined && typeof body.pickupEnabled !== 'boolean') {
+    errors.push('pickupEnabled must be a boolean');
+  }
+  if (body.pickupHours !== undefined && String(body.pickupHours).length > 200) {
+    errors.push('pickupHours must be at most 200 characters');
+  }
   for (const key of ['locationId', 'sectorId', 'shopId']) {
     if (body[key] !== undefined && body[key] !== null && body[key] !== '' && typeof body[key] !== 'string') {
       errors.push(`${key} must be a string id`);

@@ -7,9 +7,12 @@ class OrderRepository {
 
   // An id from the UI is not guaranteed to be an ObjectId; return null so the
   // caller can answer 404 instead of a CastError-driven 500.
-  findById(id) {
+  findById(id, options = {}) {
     if (!isValidObjectId(id)) return Promise.resolve(null);
-    return Order.findById(id);
+    const query = Order.findById(id);
+    if (options.session) query.session(options.session);
+    if (options.pickupCode) query.select('+pickupCodeHash');
+    return query;
   }
 
   findByRequestId(requestId) {
@@ -23,6 +26,10 @@ class OrderRepository {
   }
   findByUser(userId) { return Order.find({ buyerId: userId }).sort({ createdAt: -1 }); }
   findBySeller(sellerId) { return Order.find({ sellerId }).sort({ createdAt: -1 }); }
+
+  // Aliases for clarity in orders service layer
+  findByBuyerId(userId) { return Order.find({ buyerId: userId }).sort({ createdAt: -1 }); }
+  findBySellerId(sellerId) { return Order.find({ sellerId }).sort({ createdAt: -1 }); }
 
   /**
    * Orders for a seller addressed by EITHER id shape:
@@ -65,6 +72,27 @@ class OrderRepository {
   updateFields(id, fields = {}) {
     if (!isValidObjectId(id)) return Promise.resolve(null);
     return Order.findByIdAndUpdate(id, { $set: { ...fields, updatedAt: new Date() } }, { new: true });
+  }
+
+  incrementPickupCodeAttempt(id) {
+    if (!isValidObjectId(id)) return Promise.resolve(null);
+    return Order.findOneAndUpdate(
+      { _id: id, fulfilmentType: 'pickup', status: ORDER_STATUSES.SHIPPED, pickupCodeAttempts: { $lt: 5 } },
+      { $inc: { pickupCodeAttempts: 1 }, $set: { updatedAt: new Date() } },
+      { new: true },
+    );
+  }
+
+  claimPickupCompletion(id, codeHash, actorId, now = new Date()) {
+    if (!isValidObjectId(id)) return Promise.resolve(null);
+    return Order.findOneAndUpdate(
+      { _id: id, fulfilmentType: 'pickup', status: ORDER_STATUSES.SHIPPED, pickupCodeHash: codeHash, pickupCodeAttempts: { $lt: 5 } },
+      {
+        $set: { status: ORDER_STATUSES.DELIVERED, deliveredAt: now, pickupCompletedAt: now, pickupCodeHash: null, updatedAt: now },
+        $push: { timeline: { status: ORDER_STATUSES.DELIVERED, previousStatus: ORDER_STATUSES.SHIPPED, timestamp: now, actor: String(actorId), actorRole: 'SELLER', reason: 'Pickup code verified' } },
+      },
+      { new: true },
+    );
   }
 
   /**
@@ -161,13 +189,16 @@ class OrderRepository {
 
   /**
    * Verified purchase: does this customer have a non-cancelled order that
-   * contains this product? (cart lines store the product id as `_id`.)
+   * contains this product? Both current and legacy cart line keys are read.
    */
   existsOwnedOrder(buyerId, productId) {
     if (!buyerId || !isValidObjectId(productId)) return Promise.resolve(false);
     return Order.exists({
       buyerId: String(buyerId),
-      'cart._id': String(productId),
+      $or: [
+        { 'cart._id': String(productId) },
+        { 'cart.productId': String(productId) },
+      ],
       // Exclude BOTH spellings — legacy rows used 'CANCELLED', canonical is
       // 'Cancelled'; filtering only the former let cancelled orders still
       // count as verified purchases (review gating).
@@ -187,7 +218,10 @@ class OrderRepository {
     return Order.exists({
       _id: orderId,
       buyerId: String(buyerId),
-      'cart._id': String(productId),
+      $or: [
+        { 'cart._id': String(productId) },
+        { 'cart.productId': String(productId) },
+      ],
     });
   }
 
@@ -200,7 +234,12 @@ class OrderRepository {
    */
   countByProduct(productId) {
     if (!isValidObjectId(productId)) return Promise.resolve(0);
-    return Order.countDocuments({ 'cart._id': String(productId) });
+    return Order.countDocuments({
+      $or: [
+        { 'cart._id': String(productId) },
+        { 'cart.productId': String(productId) },
+      ],
+    });
   }
 
   // --- Admin / analytics reads -------------------------------------------
@@ -212,6 +251,16 @@ class OrderRepository {
 
   findAll(filter = {}, opts = {}) {
     const { skip = 0, limit = 50, sort = { createdAt: -1 } } = opts;
+    return Order.find(filter).sort(sort).skip(skip).limit(limit).lean();
+  }
+
+  /** Backwards-compatible filtered read used by seller lists and exports. */
+  find(query = {}, options = {}) {
+    const wrapped = Object.prototype.hasOwnProperty.call(query, 'filter');
+    const filter = wrapped ? (query.filter || {}) : query;
+    const skip = query.offset ?? query.skip ?? options.offset ?? options.skip ?? 0;
+    const limit = query.limit ?? options.limit ?? 0;
+    const sort = query.sort || options.sort || { createdAt: -1 };
     return Order.find(filter).sort(sort).skip(skip).limit(limit).lean();
   }
 

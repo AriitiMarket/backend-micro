@@ -320,4 +320,83 @@ async function getAssignments(filter = {}, options = {}) {
   };
 }
 
-module.exports = { createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign, getAssignments, expireStaleOffers };
+/**
+ * The status a provider may drive a delivery to on their OWN single
+ * assignment. `assigned`/`reassigned` belong to the platform (they mean "a
+ * rider holds this delivery"), and `failed`/`cancelled` are recovery actions
+ * the platform takes — so the rider's own progress is exactly these three.
+ */
+const PROVIDER_ADVANCE_TARGETS = ['pickup', 'in_transit', 'delivered'];
+
+/** The status a delivery must already be in for the given target. */
+const ADVANCE_PREREQUISITE = {
+  pickup: ['assigned', 'reassigned'],
+  in_transit: ['pickup'],
+  delivered: ['in_transit'],
+};
+
+/**
+ * Let the provider who holds a SINGLE assignment move their delivery forward.
+ *
+ * Before this existed only the batch (multi-order) flow could advance a
+ * delivery, so a rider with one order accepted could neither pick it up, nor
+ * mark it in transit, nor complete it — the delivery was stuck in `assigned`
+ * until an admin closed it by hand. The two assignment paths now behave the
+ * same way, and both go through the ONE state machine, so the milestone
+ * timestamp, the wallet credit, the tracking event, the Commerce notification
+ * and the audit trail are identical whichever path was used.
+ *
+ * @param {string} id assignment id
+ * @param {string} targetStatus pickup | in_transit | delivered
+ * @param {object} actor the provider (or an admin) driving the change
+ * @param {object} extra { note, proofOfDelivery, proof }
+ */
+async function advanceAssignment(id, targetStatus, actor, extra = {}) {
+  const status = String(targetStatus || '').trim().toLowerCase();
+  if (!PROVIDER_ADVANCE_TARGETS.includes(status)) {
+    throw Object.assign(new Error(`Cannot move a delivery to '${targetStatus}'`), { status: 400, code: 'INVALID_ADVANCE_STATUS' });
+  }
+
+  const assignment = await getAssignment(id);
+  const providerId = actor && actor.providerId ? actor.providerId : null;
+  const isAdminActor = Boolean(actor && actor.isAdmin);
+
+  // Ownership: the provider who holds the assignment, or a platform operator.
+  if (!isAdminActor) {
+    if (!providerId) {
+      throw Object.assign(new Error('No delivery provider profile for this account'), { status: 403 });
+    }
+    if (String(assignment.providerId) !== String(providerId)) {
+      throw Object.assign(new Error('This assignment belongs to another provider'), { status: 403 });
+    }
+    // The provider must have ACCEPTED the offer before they perform work on it.
+    if (assignment.status !== 'accepted') {
+      throw Object.assign(new Error('Accept the assignment before starting the delivery'), { status: 409, code: 'ASSIGNMENT_NOT_ACCEPTED' });
+    }
+  }
+
+  const delivery = await deliveriesService.getDelivery(assignment.deliveryId);
+  const required = ADVANCE_PREREQUISITE[status];
+  if (!required.includes(delivery.status)) {
+    throw Object.assign(
+      new Error(`Delivery is '${delivery.status}' — it must be '${required.join("' or '")}' first`),
+      { status: 409, code: 'INVALID_ADVANCE_STATE' },
+    );
+  }
+
+  const transitionActor = {
+    id: providerId || (actor && actor.id) || null,
+    name: (actor && actor.name) || null,
+    role: isAdminActor ? 'ADMIN' : 'PROVIDER',
+  };
+
+  return transitionDeliveryStatus(assignment.deliveryId, status, transitionActor, {
+    note: extra.note || '',
+    proofOfDelivery: extra.proofOfDelivery || extra.proof || null,
+  });
+}
+
+module.exports = {
+  createAssignment, automaticAssignment, getAssignment, respondToAssignment, reassign,
+  getAssignments, expireStaleOffers, advanceAssignment, PROVIDER_ADVANCE_TARGETS,
+};

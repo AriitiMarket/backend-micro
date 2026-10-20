@@ -20,13 +20,12 @@ const wishlistItemSchema = new mongoose.Schema({
 });
 
 const wishlistSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
+  // A buyer has exactly one wishlist document. This unique key is what makes
+  // atomic first-item upserts safe across concurrent API workers.
+  userId: { type: String, required: true, unique: true },
   items: [wishlistItemSchema],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
-
-// One wishlist line per product per user, enforced at the database level.
-wishlistSchema.index({ userId: 1, 'items.productId': 1 }, { unique: true });
 
 module.exports = mongoose.model('Wishlist', wishlistSchema);

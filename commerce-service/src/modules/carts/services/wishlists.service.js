@@ -51,7 +51,23 @@ class WishlistService {
   }
 
   async getUserWishlist(userId) {
-    return wishlistRepository.findByUser(userId);
+    const wishlist = await wishlistRepository.findByUser(userId);
+    if (!wishlist) return null;
+    const items = await Promise.all((wishlist.items || []).map(async (saved) => {
+      const product = await productRepository.findById(String(saved.productId));
+      if (!product) return { ...saved, unavailable: true, stock: 0 };
+      const visible = await isProductPubliclyVisible(product);
+      return {
+        ...saved,
+        name: product.name,
+        price: Number(product.discountPrice) || 0,
+        originalPrice: Number(product.originalPrice) || Number(product.discountPrice) || 0,
+        image: firstImage(product),
+        stock: Number(product.stock) || 0,
+        unavailable: !visible,
+      };
+    }));
+    return { ...wishlist, items };
   }
 
   async isWishlisted(userId, productId) {

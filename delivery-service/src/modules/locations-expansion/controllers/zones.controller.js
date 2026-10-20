@@ -18,9 +18,10 @@ async function getZone(req, res, next) {
 
 async function updateZone(req, res, next) {
   try {
+    const previous = await svc.getZone(req.params.id);
     const result = await svc.updateZone(req.params.id, req.body);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'ZONE_UPDATED', adminId, adminName, targetEntity: 'zone', targetId: req.params.id, ipAddress });
+    sendAudit({ action: 'ZONE_UPDATED', adminId, adminName, targetEntity: 'zone', targetId: req.params.id, oldValue: { deliveryRules: previous.deliveryRules }, newValue: { deliveryRules: result.deliveryRules }, reason: req.body.reason || null, ipAddress });
     return ok(res, { zone: result }, 'Zone updated');
   } catch (err) { return next(err); }
 }
@@ -142,8 +143,33 @@ async function getZoneSummaryInternal(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+async function quoteDeliveryFee(req, res, next) {
+  try {
+    const quote = await svc.quoteDeliveryFee({ zoneId: req.query.zoneId || null, locationId: req.query.locationId || null, quantity: req.query.quantity });
+    return ok(res, quote);
+  } catch (err) { return next(err); }
+}
+
+async function getDeliveryFeeSettings(_req, res, next) {
+  try { return ok(res, { settings: await svc.getDeliveryFeeSettings() }); }
+  catch (err) { return next(err); }
+}
+
+async function updateDeliveryFeeSettings(req, res, next) {
+  try {
+    const previous = await svc.getDeliveryFeeSettings();
+    const { reason, ...fields } = req.body || {};
+    const settings = await svc.updateDeliveryFeeSettings(fields);
+    const { adminId, adminName, ipAddress } = getAdminFromReq(req);
+    sendAudit({ action: 'DELIVERY_FEE_SETTINGS_UPDATED', adminId, adminName, targetEntity: 'delivery_fee_settings', targetId: settings._id, oldValue: previous.toObject(), newValue: settings.toObject(), reason: reason || null, ipAddress });
+    return ok(res, { settings }, 'Delivery fee settings updated');
+  } catch (err) { return next(err); }
+}
+
 module.exports = {
   createZone, getZone, updateZone, deleteZone, getZones, getZoneStats, activateZone, deactivateZone,
   addLocationToZone, removeLocationFromZone, checkCoverage, findZoneForLocation,
   getPublicZones, getZoneSummariesInternal, getZoneSummaryInternal,
+  quoteDeliveryFee,
+  getDeliveryFeeSettings, updateDeliveryFeeSettings,
 };

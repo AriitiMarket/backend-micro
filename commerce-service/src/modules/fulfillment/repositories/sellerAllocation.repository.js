@@ -23,14 +23,17 @@ class SellerAllocationRepository {
   updateById(id, data) {
     return SellerAllocation.findByIdAndUpdate(id, { ...data, updatedAt: new Date() }, { new: true });
   }
-  /** Idempotent upsert keyed on (orderId, sellerId) — creates or refreshes one row.
+  /** Idempotent snapshot keyed on (orderId, sellerId) — creates once and
+   * preserves the original rate and amounts on retries after settings change.
    * orderId/sellerId are immutable keys (part of the unique index) so they are
    * never $set on an existing document — only inserted on create. */
   async upsert(orderId, sellerId, data) {
     const { orderId: _oid, sellerId: _sid, ...rest } = data;
     return SellerAllocation.findOneAndUpdate(
       { orderId, sellerId },
-      { $set: { ...rest, updatedAt: new Date() }, $setOnInsert: { orderId, sellerId, createdAt: new Date() } },
+      // Mongoose timestamps writes updatedAt itself, so don't include that path
+      // in $setOnInsert or MongoDB rejects the conflicting update operators.
+      { $setOnInsert: { ...rest, orderId, sellerId, createdAt: new Date() } },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
     ).lean();
   }

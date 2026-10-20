@@ -491,11 +491,26 @@ describe('payments.service ↔ order consistency', () => {
 
   it('createPayment does not create a duplicate for the same order', async () => {
     const order = await seedOrder();
-    await paymentService.createPayment({ orderId: String(order._id) });
-    await assert.rejects(
-      () => paymentService.createPayment({ orderId: String(order._id) }),
-      /already exists/
-    );
+    console.log('Created order:', order._id);
+    const payment1 = await paymentService.createPayment({ orderId: String(order._id) });
+    console.log('Created payment:', payment1._id);
+    
+    // Check if findByOrder works
+    const existing = await paymentRepo.findByOrder(String(order._id));
+    console.log('Found by repo:', existing ? existing._id : 'null');
+    
+    // Check if payment service's internal findByOrder works
+    const existing2 = await paymentService.getPaymentByOrder(String(order._id));
+    console.log('Found by service:', existing2 ? existing2._id : 'null');
+    
+    try {
+      const payment2 = await paymentService.createPayment({ orderId: String(order._id) });
+      console.log('Created duplicate payment:', payment2._id);
+      assert.fail('Should have thrown');
+    } catch (e) {
+      console.log('Error caught:', e.message);
+      assert.match(e.message, /already exists/);
+    }
   });
 
   it('createPayment rejects a missing order', async () => {
