@@ -182,9 +182,9 @@ async function visibilityFilter(opts = {}) {
 const SENSITIVE_SHOP_FIELDS = ['availableBalance', 'transections', 'transactions', 'email', 'ownerId', 'phoneNumber', 'password'];
 
 function sanitizeProduct(product, { includeSensitive = false } = {}) {
-  if (!product || includeSensitive) return product;
+  if (!product) return product;
   const plain = typeof product.toObject === 'function' ? product.toObject() : (Array.isArray(product) ? product : { ...product });
-  if (plain.shop && typeof plain.shop === 'object') {
+  if (!includeSensitive && plain.shop && typeof plain.shop === 'object') {
     const safeShop = { ...plain.shop };
     for (const field of SENSITIVE_SHOP_FIELDS) delete safeShop[field];
     plain.shop = safeShop;
@@ -612,24 +612,32 @@ class ProductService {
     }
 
     return rows.map((row) => {
-      const shopId = row.shopId || (row.shop && row.shop._id) || null;
+      const base = typeof row.toObject === 'function'
+        ? row.toObject()
+        : (row._doc ? { ...row._doc, ...row } : { ...row });
+      delete base.$__;
+      delete base.$isNew;
+      delete base._doc;
+
+      const shopId = base.shopId || (base.shop && (base.shop._id || base.shop.id)) || null;
       const shop = shopId ? shopsById.get(String(shopId)) || null : null;
-      const ownerId = row.sellerId || (row.shop && row.shop.ownerId) || null;
+      const ownerId = base.sellerId || (base.shop && (base.shop.ownerId || base.shop.userId)) || null;
       const owner = ownerId ? ownersById.get(String(ownerId)) || null : null;
-      const businessId = (shop && shop.businessId) || (row.shop && row.shop.businessId) || null;
+      const businessId = (shop && shop.businessId) || (base.shop && base.shop.businessId) || null;
       const business = businessId ? businessesById.get(String(businessId)) || null : null;
       return {
-        ...row,
-        shopId: shopId || row.shopId || null,
-        shopName: row.shopName || (row.shop && row.shop.name) || (shop ? shop.name : null) || null,
+        ...base,
+        id: String(base._id || base.id),
+        shopId: shopId || base.shopId || null,
+        shopName: base.shopName || (base.shop && base.shop.name) || (shop ? shop.name : null) || null,
         businessId,
         businessName:
           (business && business.businessInformation && business.businessInformation.businessName) ||
           (business ? business.businessName || null : null) ||
           null,
         sellerId: ownerId,
-        sellerName: row.sellerName || (owner ? owner.name || null : null) || null,
-        sellerEmail: (owner ? owner.email || null : null) || (row.shop && row.shop.email) || null,
+        sellerName: base.sellerName || (owner ? owner.name || null : null) || null,
+        sellerEmail: (owner ? owner.email || null : null) || (base.shop && base.shop.email) || null,
       };
     });
   }
