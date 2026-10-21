@@ -32,6 +32,7 @@ const ENDPOINT_PERMISSIONS = {
 
   // ── User 2FA Management ──
   'GET /user/2fa/setup': ['*'],
+  'POST /user/2fa/setup': ['*'],
   'POST /user/2fa/verify-setup': ['*'],
   'GET /user/2fa/status': ['*'],
   'POST /user/2fa/disable': ['*'],
@@ -168,7 +169,14 @@ const ENDPOINT_PERMISSIONS = {
  */
 function normalizePathForMatching(method, path) {
   // Remove query string
-  const pathOnly = path.split('?')[0];
+  let pathOnly = path.split('?')[0];
+
+  // Strip the /api gateway prefix so paths match the permission map keys.
+  // The gateway is mounted at /api, so req.path is /api/user/2fa/setup but
+  // ENDPOINT_PERMISSIONS keys are /user/2fa/setup.
+  if (pathOnly.startsWith('/api')) {
+    pathOnly = pathOnly.slice(4) || '/';
+  }
 
   // Replace various ID formats with :id
   // - UUIDs: /[a-f0-9\-]{36}
