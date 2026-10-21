@@ -565,6 +565,24 @@ async function initSchema(p) {
     ON CONFLICT DO NOTHING;
   `);
 
+  // Remove stale junction entries for non-wildcard roles so narrowed permission lists take effect
+  await p.query(`
+    DELETE FROM admin_role_permissions arp
+    USING admin_roles r
+    WHERE arp.role_id = r.id
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(COALESCE(r.permissions, '[]'::jsonb)) AS key
+        WHERE key = '*'
+      )
+      AND arp.permission_id NOT IN (
+        SELECT ap.id
+        FROM admin_permissions ap
+        WHERE ap.key IN (
+          SELECT jsonb_array_elements_text(COALESCE(r.permissions, '[]'::jsonb))
+        )
+      );
+  `);
+
   // Clean up expired refresh tokens and auth codes periodically.
   await p.query(`
     CREATE OR REPLACE FUNCTION cleanup_expired_tokens() RETURNS void AS $$
