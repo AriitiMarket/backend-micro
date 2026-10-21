@@ -25,7 +25,6 @@ class OrderSLAService {
     try {
       const order = await orderRepository.findById(orderId);
       if (!order) {
-        await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -33,7 +32,6 @@ class OrderSLAService {
 
       const hours = Number(durationHours);
       if (!Number.isFinite(hours) || hours <= 0) {
-        await session.abortTransaction();
         throw new ApiError('durationHours must be a positive number', 400);
       }
 
@@ -56,7 +54,9 @@ class OrderSLAService {
       await session.commitTransaction();
       return sla;
     } catch (err) {
-      await session.abortTransaction();
+      if (session?.inTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
       throw err;
     } finally {
       await session.endSession();
@@ -95,7 +95,6 @@ class OrderSLAService {
     try {
       const order = await orderRepository.findById(orderId);
       if (!order) {
-        await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
@@ -133,7 +132,6 @@ class OrderSLAService {
       // service level was missed) and is already in the past.
       const deadline = payload.deadline ? new Date(payload.deadline) : now;
       if (Number.isNaN(deadline.getTime())) {
-        await session.abortTransaction();
         throw new ApiError('deadline is not a valid date', 400);
       }
 
@@ -158,7 +156,9 @@ class OrderSLAService {
       await session.commitTransaction();
       return sla;
     } catch (err) {
-      await session.abortTransaction();
+      if (session?.inTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
       throw err;
     } finally {
       await session.endSession();

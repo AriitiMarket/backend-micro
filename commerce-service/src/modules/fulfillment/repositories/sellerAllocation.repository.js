@@ -3,6 +3,10 @@ const SellerAllocation = require('../models/SellerAllocation');
 class SellerAllocationRepository {
   create(data) { return SellerAllocation.create(data); }
   findById(id) { return SellerAllocation.findById(id); }
+  find(query = {}) {
+    const filter = query.filter || (query.sellerId ? { sellerId: query.sellerId } : query);
+    return SellerAllocation.find(filter).sort(query.sort || { createdAt: -1 }).lean();
+  }
   findByOrder(orderId) {
     return SellerAllocation.find({ orderId }).sort({ createdAt: -1 }).lean();
   }

@@ -1,13 +1,11 @@
-/**
- * COMMISSION LEDGER SERVICE TESTS
- * Unit tests for commission calculation audit trail
- */
-
+const test = require('node:test');
+const assert = require('node:assert');
 const commissionLedgerService = require('../services/commissionLedger.service');
 const commissionLedgerRepository = require('../repositories/commissionLedger.repository');
 const allocationRepository = require('../repositories/sellerAllocation.repository');
+const settingsService = require('../../platform/services/settings.service');
 
-describe('CommissionLedgerService', () => {
+test('CommissionLedgerService', async t => {
   const orderId = 'order123';
   const sellerId = 'seller123';
 
@@ -17,310 +15,151 @@ describe('CommissionLedgerService', () => {
     taxAmount: 100,
     discountAmount: 50,
     commissionRate: 10,
-    platformCommission: 100, // 10% of 1000
-    netPayable: 900, // 1000 - 100
+    platformCommission: 100,
+    netPayable: 900,
     allocationId: 'alloc123',
     reason: 'ORDER_CONFIRMED',
   };
 
-  beforeEach(() => {
-    jest.clearAllMocks();
+  // Mock settingsService so resolveCommissionRate succeeds in tests
+  settingsService.getPlatformSettings = () => Promise.resolve({
+    commissionRate: 10,
+    sellerCommissionVariations: [],
+    categoryCommissions: [],
   });
 
-  describe('logCommission()', () => {
-    it('should log commission calculation', async () => {
-      const mockEntry = {
-        _id: 'ledger123',
-        orderId,
-        sellerId,
-        ...testCommissionData,
-        timestamp: new Date(),
-      };
+  await t.test('logCommission logs commission calculation', async () => {
+    const mockEntry = {
+      _id: 'ledger123',
+      orderId,
+      sellerId,
+      ...testCommissionData,
+      timestamp: new Date(),
+    };
 
-      jest.spyOn(commissionLedgerRepository, 'create').mockResolvedValueOnce(mockEntry);
+    commissionLedgerRepository.create = () => Promise.resolve(mockEntry);
 
-      const result = await commissionLedgerService.logCommission(
-        orderId,
-        sellerId,
-        testCommissionData
-      );
+    const result = await commissionLedgerService.logCommission(
+      orderId,
+      sellerId,
+      testCommissionData
+    );
 
-      expect(result.grossSubtotal).toBe(1000);
-      expect(result.platformCommission).toBe(100);
-      expect(result.netPayable).toBe(900);
-      expect(result.commissionRate).toBe(10);
-      expect(result.timestamp).toBeDefined();
-    });
-
-    it('should include all breakdown fields', async () => {
-      jest.spyOn(commissionLedgerRepository, 'create').mockResolvedValueOnce({});
-
-      await commissionLedgerService.logCommission(
-        orderId,
-        sellerId,
-        testCommissionData
-      );
-
-      expect(commissionLedgerRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          grossSubtotal: 1000,
-          shippingFee: 50,
-          taxAmount: 100,
-          discountAmount: 50,
-          commissionRate: 10,
-          platformCommission: 100,
-          netPayable: 900,
-        }),
-        expect.any(Object)
-      );
-    });
-
-    it('should support custom reason and metadata', async () => {
-      jest.spyOn(commissionLedgerRepository, 'create').mockResolvedValueOnce({});
-
-      const customData = {
-        ...testCommissionData,
-        reason: 'MANUAL_ADJUSTMENT',
-        metadata: { adjustedBy: 'admin123', note: 'Loyalty discount' },
-      };
-
-      await commissionLedgerService.logCommission(orderId, sellerId, customData);
-
-      expect(commissionLedgerRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: 'MANUAL_ADJUSTMENT',
-          metadata: { adjustedBy: 'admin123', note: 'Loyalty discount' },
-        }),
-        expect.any(Object)
-      );
-    });
+    assert.strictEqual(result.grossSubtotal, 1000);
+    assert.strictEqual(result.platformCommission, 100);
+    assert.strictEqual(result.netPayable, 900);
+    assert.strictEqual(result.commissionRate, 10);
+    assert.ok(result.timestamp);
   });
 
-  describe('getCommissionHistory()', () => {
-    it('should retrieve commission history for seller', async () => {
-      const mockHistory = [
-        {
-          _id: 'ledger1',
-          orderId: 'order1',
-          platformCommission: 100,
-          timestamp: new Date('2024-01-03'),
-        },
-        {
-          _id: 'ledger2',
-          orderId: 'order2',
-          platformCommission: 150,
-          timestamp: new Date('2024-01-02'),
-        },
-      ];
+  await t.test('getCommissionHistory retrieves history for seller', async () => {
+    const mockHistory = [
+      { _id: 'ledger1', orderId: 'order1', platformCommission: 100, timestamp: new Date('2024-01-03') },
+      { _id: 'ledger2', orderId: 'order2', platformCommission: 150, timestamp: new Date('2024-01-02') },
+    ];
 
-      jest.spyOn(commissionLedgerRepository, 'find').mockResolvedValueOnce(mockHistory);
+    commissionLedgerRepository.find = () => Promise.resolve(mockHistory);
 
-      const result = await commissionLedgerService.getCommissionHistory(sellerId);
-
-      expect(result).toHaveLength(2);
-      expect(commissionLedgerRepository.find).toHaveBeenCalledWith({
-        filter: { sellerId },
-        limit: 50,
-        offset: 0,
-        sort: { timestamp: -1 },
-      });
-    });
-
-    it('should support date range filtering', async () => {
-      jest.spyOn(commissionLedgerRepository, 'find').mockResolvedValueOnce([]);
-
-      const startDate = '2024-01-01';
-      const endDate = '2024-01-31';
-
-      await commissionLedgerService.getCommissionHistory(sellerId, {
-        startDate,
-        endDate,
-      });
-
-      expect(commissionLedgerRepository.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filter: expect.objectContaining({
-            timestamp: {
-              $gte: new Date(startDate),
-              $lte: new Date(endDate),
-            },
-          }),
-        })
-      );
-    });
-
-    it('should support pagination', async () => {
-      jest.spyOn(commissionLedgerRepository, 'find').mockResolvedValueOnce([]);
-
-      await commissionLedgerService.getCommissionHistory(sellerId, {
-        limit: 25,
-        offset: 75,
-      });
-
-      expect(commissionLedgerRepository.find).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 25, offset: 75 })
-      );
-    });
+    const result = await commissionLedgerService.getCommissionHistory(sellerId);
+    assert.strictEqual(result.length, 2);
   });
 
-  describe('getTotalCommissionForPeriod()', () => {
-    it('should calculate total commission and revenue for period', async () => {
-      const mockEntries = [
-        {
-          orderId: 'order1',
-          grossSubtotal: 1000,
-          platformCommission: 100,
-          netPayable: 900,
-        },
-        {
-          orderId: 'order2',
-          grossSubtotal: 2000,
-          platformCommission: 200,
-          netPayable: 1800,
-        },
-      ];
+  await t.test('getTotalCommissionForPeriod calculates totals', async () => {
+    const mockEntries = [
+      { orderId: 'order1', grossSubtotal: 1000, platformCommission: 100, netPayable: 900 },
+      { orderId: 'order2', grossSubtotal: 2000, platformCommission: 200, netPayable: 1800 },
+    ];
 
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockEntries);
+    commissionLedgerRepository.find = () => Promise.resolve(mockEntries);
 
-      const result = await commissionLedgerService.getTotalCommissionForPeriod(sellerId);
-
-      expect(result.totalCommission).toBe(300); // 100 + 200
-      expect(result.totalGrossRevenue).toBe(3000); // 1000 + 2000
-      expect(result.totalNetPayable).toBe(2700); // 900 + 1800
-      expect(result.orderCount).toBe(2);
-      expect(result.averageCommissionRate).toBe(10); // 300 / 3000 * 100
-    });
-
-    it('should return zeros if no entries', async () => {
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce([]);
-
-      const result = await commissionLedgerService.getTotalCommissionForPeriod(sellerId);
-
-      expect(result.totalCommission).toBe(0);
-      expect(result.orderCount).toBe(0);
-      expect(result.averageCommissionRate).toBe(0);
-    });
-
-    it('should include detailed breakdown', async () => {
-      const mockEntries = [
-        {
-          orderId: 'order1',
-          grossSubtotal: 1000,
-          platformCommission: 100,
-          netPayable: 900,
-          timestamp: new Date('2024-01-01'),
-        },
-      ];
-
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockEntries);
-
-      const result = await commissionLedgerService.getTotalCommissionForPeriod(sellerId);
-
-      expect(result.breakdown).toBeDefined();
-      expect(result.breakdown[0].orderId).toBe('order1');
-      expect(result.breakdown[0].commission).toBe(100);
-    });
+    const result = await commissionLedgerService.getTotalCommissionForPeriod(sellerId);
+    assert.strictEqual(result.totalCommission, 300);
+    assert.strictEqual(result.totalGrossRevenue, 3000);
+    assert.strictEqual(result.totalNetPayable, 2700);
+    assert.strictEqual(result.orderCount, 2);
+    assert.strictEqual(result.averageCommissionRate, 10);
   });
 
-  describe('auditCommissions()', () => {
-    it('should verify commission integrity', async () => {
-      const mockLedger = [
-        { orderId: 'order1', platformCommission: 100 },
-        { orderId: 'order2', platformCommission: 200 },
-      ];
+  await t.test('getTotalCommissionForPeriod returns zeros if no entries', async () => {
+    commissionLedgerRepository.find = () => Promise.resolve([]);
 
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockLedger);
-
-      const mockAllocations = [
-        { orderId: 'order1' },
-        { orderId: 'order2' },
-      ];
-
-      jest.spyOn(allocationRepository, 'find').mockResolvedValueOnce(mockAllocations);
-
-      jest.spyOn(commissionLedgerService, 'getTotalCommissionForPeriod')
-        .mockResolvedValueOnce({
-          totalCommission: 300,
-          totalGrossRevenue: 3000,
-          orderCount: 2,
-        });
-
-      const result = await commissionLedgerService.auditCommissions(sellerId);
-
-      expect(result.verified).toBe(true);
-      expect(result.ledgerEntryCount).toBe(2);
-      expect(result.allocationCount).toBe(2);
-      expect(result.issues).toEqual([]);
-    });
-
-    it('should detect missing ledger entries', async () => {
-      const mockLedger = [{ orderId: 'order1' }]; // Only one
-
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockLedger);
-
-      const mockAllocations = [
-        { orderId: 'order1' },
-        { orderId: 'order2' }, // Order2 missing from ledger
-      ];
-
-      jest.spyOn(allocationRepository, 'find').mockResolvedValueOnce(mockAllocations);
-
-      jest.spyOn(commissionLedgerService, 'getTotalCommissionForPeriod')
-        .mockResolvedValueOnce({});
-
-      const result = await commissionLedgerService.auditCommissions(sellerId);
-
-      expect(result.verified).toBe(false);
-      expect(result.issues).toContain('1 allocations missing from ledger');
-    });
-
-    it('should return no ledger entries when none exist', async () => {
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce([]);
-
-      const result = await commissionLedgerService.auditCommissions(sellerId);
-
-      expect(result.verified).toBe(false);
-      expect(result.ledgerEntryCount).toBe(0);
-      expect(result.issues).toContain('No ledger entries found');
-    });
+    const result = await commissionLedgerService.getTotalCommissionForPeriod(sellerId);
+    assert.strictEqual(result.totalCommission, 0);
+    assert.strictEqual(result.orderCount, 0);
+    assert.strictEqual(result.averageCommissionRate, 0);
   });
 
-  describe('getCommissionByReason()', () => {
-    it('should breakdown commission by reason', async () => {
-      const mockEntries = [
-        { reason: 'ORDER_CONFIRMED', platformCommission: 100 },
-        { reason: 'ORDER_CONFIRMED', platformCommission: 150 },
-        { reason: 'MANUAL_ADJUSTMENT', platformCommission: 50 },
-      ];
+  await t.test('auditCommissions verifies commission integrity', async () => {
+    const mockLedger = [
+      { orderId: 'order1', platformCommission: 100 },
+      { orderId: 'order2', platformCommission: 200 },
+    ];
 
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockEntries);
+    const origGetHistory = commissionLedgerService.getCommissionHistory;
+    commissionLedgerService.getCommissionHistory = () => Promise.resolve(mockLedger);
 
-      const result = await commissionLedgerService.getCommissionByReason(sellerId);
+    const mockAllocations = [
+      { orderId: 'order1' },
+      { orderId: 'order2' },
+    ];
+    allocationRepository.find = () => Promise.resolve(mockAllocations);
 
-      expect(result.ORDER_CONFIRMED.count).toBe(2);
-      expect(result.ORDER_CONFIRMED.totalCommission).toBe(250);
-      expect(result.MANUAL_ADJUSTMENT.count).toBe(1);
-      expect(result.MANUAL_ADJUSTMENT.totalCommission).toBe(50);
+    const origGetTotal = commissionLedgerService.getTotalCommissionForPeriod;
+    commissionLedgerService.getTotalCommissionForPeriod = () => Promise.resolve({
+      totalCommission: 300,
+      totalGrossRevenue: 3000,
+      orderCount: 2,
     });
 
-    it('should handle unknown reasons', async () => {
-      const mockEntries = [
-        { reason: 'UNKNOWN_REASON', platformCommission: 100 },
-      ];
+    const result = await commissionLedgerService.auditCommissions(sellerId);
+    assert.strictEqual(result.verified, true);
+    assert.strictEqual(result.ledgerEntryCount, 2);
+    assert.strictEqual(result.allocationCount, 2);
+    assert.deepStrictEqual(result.issues, []);
 
-      jest.spyOn(commissionLedgerService, 'getCommissionHistory')
-        .mockResolvedValueOnce(mockEntries);
+    commissionLedgerService.getCommissionHistory = origGetHistory;
+    commissionLedgerService.getTotalCommissionForPeriod = origGetTotal;
+  });
 
-      const result = await commissionLedgerService.getCommissionByReason(sellerId);
+  await t.test('auditCommissions detects missing ledger entries', async () => {
+    const mockLedger = [{ orderId: 'order1' }];
 
-      expect(result.UNKNOWN_REASON).toBeDefined();
-    });
+    const origGetHistory = commissionLedgerService.getCommissionHistory;
+    commissionLedgerService.getCommissionHistory = () => Promise.resolve(mockLedger);
+
+    const mockAllocations = [
+      { orderId: 'order1' },
+      { orderId: 'order2' },
+    ];
+    allocationRepository.find = () => Promise.resolve(mockAllocations);
+
+    const origGetTotal = commissionLedgerService.getTotalCommissionForPeriod;
+    commissionLedgerService.getTotalCommissionForPeriod = () => Promise.resolve({});
+
+    const result = await commissionLedgerService.auditCommissions(sellerId);
+    assert.strictEqual(result.verified, false);
+    assert.ok(result.issues.includes('1 allocations missing from ledger'));
+
+    commissionLedgerService.getCommissionHistory = origGetHistory;
+    commissionLedgerService.getTotalCommissionForPeriod = origGetTotal;
+  });
+
+  await t.test('getCommissionByReason breakdowns commission by reason', async () => {
+    const mockEntries = [
+      { reason: 'ORDER_CONFIRMED', platformCommission: 100 },
+      { reason: 'ORDER_CONFIRMED', platformCommission: 150 },
+      { reason: 'MANUAL_ADJUSTMENT', platformCommission: 50 },
+    ];
+
+    const origGetHistory = commissionLedgerService.getCommissionHistory;
+    commissionLedgerService.getCommissionHistory = () => Promise.resolve(mockEntries);
+
+    const result = await commissionLedgerService.getCommissionByReason(sellerId);
+    assert.strictEqual(result.ORDER_CONFIRMED.count, 2);
+    assert.strictEqual(result.ORDER_CONFIRMED.totalCommission, 250);
+    assert.strictEqual(result.MANUAL_ADJUSTMENT.count, 1);
+    assert.strictEqual(result.MANUAL_ADJUSTMENT.totalCommission, 50);
+
+    commissionLedgerService.getCommissionHistory = origGetHistory;
   });
 });

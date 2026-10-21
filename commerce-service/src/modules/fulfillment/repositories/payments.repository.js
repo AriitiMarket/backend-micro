@@ -3,6 +3,7 @@ const Payment = require('../models/Payments');
 class PaymentRepository {
   create(data) { return Payment.create(data); }
   findById(id) { return Payment.findById(id); }
+  findOne(filter = {}) { return Payment.findOne(filter); }
   findByOrder(orderId) { return Payment.findOne({ orderId }); }
   upsertByOrder(orderId, fields = {}) {
     return Payment.findOneAndUpdate(

@@ -17,13 +17,11 @@ class OrderPriorityService {
     try {
       const order = await orderRepository.findById(orderId);
       if (!order) {
-        await session.abortTransaction();
         throw new ApiError('Order not found', 404);
       }
 
       const validPriorities = ['NORMAL', 'HIGH', 'VIP', 'URGENT'];
       if (!validPriorities.includes(priority)) {
-        await session.abortTransaction();
         throw new ApiError('Invalid priority level', 400);
       }
 
@@ -35,7 +33,7 @@ class OrderPriorityService {
           {
             priority,
             reason,
-            setBy: context.userId,
+            setBy: context.userId || 'SYSTEM',
             markedAt: new Date(),
           },
           { session }
@@ -46,7 +44,7 @@ class OrderPriorityService {
             orderId: String(orderId),
             priority,
             reason,
-            setBy: context.userId,
+            setBy: context.userId || 'SYSTEM',
             markedAt: new Date(),
           },
           { session }
@@ -56,7 +54,9 @@ class OrderPriorityService {
       await session.commitTransaction();
       return priorityRecord;
     } catch (err) {
-      await session.abortTransaction();
+      if (session?.inTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
       throw err;
     } finally {
       await session.endSession();
@@ -83,7 +83,6 @@ class OrderPriorityService {
     try {
       const priority = await orderPriorityRepository.findByOrderId(orderId);
       if (!priority) {
-        await session.abortTransaction();
         throw new ApiError('Priority not found', 404);
       }
 
@@ -99,7 +98,9 @@ class OrderPriorityService {
       await session.commitTransaction();
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      if (session?.inTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
       throw err;
     } finally {
       await session.endSession();
