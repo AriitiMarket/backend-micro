@@ -31,6 +31,91 @@ const VALID_TRANSITIONS = ALLOWED_TRANSITIONS;
 
 class OrderStateService {
   /**
+   * The brief the Delivery Service receives for one order.
+   *
+   * Both the seller confirmation and the recovery sweep send the SAME payload,
+   * so a retried handoff can never carry a different financial or address
+   * snapshot than the first attempt did.
+   */
+  buildHandoffData(order) {
+    const shipment = order.sellerShipments?.[0] || {};
+    const destination = order.destination || {};
+    const buyer = order.user || {};
+    return {
+      orderId: String(order._id),
+      orderGroupId: order.orderGroupId,
+      sellerId: order.sellerId || shipment.sellerId,
+      buyerId: order.buyerId,
+      shopId: order.shopId || shipment.shopId,
+      paymentMethod: order.paymentInfo?.method || 'COD',
+      paymentAmount: order.totalPrice,
+      deliveryFee: Number(order.shippingFee) || 0,
+      deliveryFeeRuleId: order.deliveryFeeRuleId || null,
+      delivererShareRate: Number(order.delivererShareRate ?? 80),
+      items: (order.cart || []).map((item) => ({
+        productId: item.productId || item._id,
+        name: item.name,
+        quantity: item.quantity,
+        unit: item.unit || 'pcs',
+        condition: 'good',
+        value: item.discountPrice || item.price || 0,
+        image: item.image || (Array.isArray(item.images) ? item.images[0] : '') || '',
+        images: Array.isArray(item.images) ? item.images : (item.image ? [item.image] : []),
+      })),
+      totalValue: Number(order.subtotal) || 0,
+      // The pickup point: the shop's own location snapshot plus the shop it
+      // belongs to, so the dispatch screen names the shop the rider collects
+      // from instead of a bare seller id.
+      origin: {
+        ...(shipment.origin || {}),
+        shopId: order.shopId || shipment.shopId || '',
+        shopName: shipment.shopName || order.cart?.[0]?.shopName || '',
+        businessId: shipment.businessId || null,
+      },
+      // The destination: the buyer's address plus the person to hand it to.
+      destination: {
+        ...destination,
+        contactName: destination.contactName || buyer.name || '',
+        contactPhone: destination.contactPhone || destination.phone || '',
+      },
+      idempotencyKey: `order:${order._id}`,
+    };
+  }
+
+  /**
+   * Hand the order to the Delivery Service and record the outcome on the
+   * ORDER ↔ DELIVERY bridge. Idempotent on Delivery's side (keyed by orderId).
+   */
+  async deliverHandoff(order) {
+    const { deliveryClient } = require('../../../app/clients/delivery.client');
+    const orderDeliveryService = require('./orderDelivery.service');
+    const orderId = String(order._id);
+    const handoffData = this.buildHandoffData(order);
+
+    await orderDeliveryService.queueHandoff(orderId);
+    const result = await deliveryClient.createDeliveryRequest(handoffData);
+
+    // The Delivery Service answers with the created REQUEST (not with a bare
+    // id), so read the id from every spelling it may use.
+    const requestId = result.body?.deliveryRequestId
+      || result.body?.request?.id
+      || result.body?.request?._id
+      || null;
+
+    if (result.ok && requestId) {
+      await orderDeliveryService.attachRequest(orderId, requestId);
+      return { ok: true, requestId };
+    }
+    if (result.status >= 400 && result.status < 500) {
+      await orderDeliveryService.markHandoffAbandoned(orderId);
+      console.warn(`[handoff] Order ${orderId} handoff abandoned: ${result.body?.message || 'Delivery service rejected'}`);
+      return { ok: false, reason: 'rejected' };
+    }
+    await orderDeliveryService.waitForOrderApproval(orderId);
+    return { ok: false, reason: 'pending' };
+  }
+
+  /**
    * Validate if transition is allowed
    * @param {string} currentStatus
    * @param {string} targetStatus
@@ -67,7 +152,13 @@ class OrderStateService {
       const currentStatus = normalizeStatus(order.status);
 
       // FIX #10: Idempotency - if already confirmed, return success
-      if (currentStatus === ORDER_STATUSES.CONFIRMED) {
+      const ALREADY_CONFIRMED = [
+        ORDER_STATUSES.CONFIRMED,
+        ORDER_STATUSES.SHIPPED,
+        ORDER_STATUSES.DELIVERED,
+        ORDER_STATUSES.COMPLETED,
+      ];
+      if (ALREADY_CONFIRMED.includes(currentStatus)) {
         if (session.inTransaction()) await session.abortTransaction();
         return order; // Already confirmed, return as-is
       }
@@ -128,48 +219,7 @@ class OrderStateService {
       // Trigger delivery handoff asynchronously (fire-and-forget)
       // This ensures the order gets sent to Delivery Service promptly
       try {
-        const { deliveryClient } = require('../../app/clients/delivery.client');
-        const orderDeliveryService = require('./orderDelivery.service');
-
-        const shipment = order.sellerShipments?.[0] || {};
-        const destination = order.destination || {};
-
-        const handoffData = {
-          orderId,
-          orderGroupId: order.orderGroupId,
-          sellerId: order.sellerId || shipment.sellerId,
-          buyerId: order.buyerId,
-          shopId: order.shopId || shipment.shopId,
-          paymentMethod: order.paymentInfo?.method || 'COD',
-          paymentAmount: order.totalPrice,
-          deliveryFee: Number(order.shippingFee) || 0,
-          deliveryFeeRuleId: order.deliveryFeeRuleId || null,
-          delivererShareRate: Number(order.delivererShareRate ?? 80),
-          items: (order.cart || []).map(item => ({
-            productId: item.productId,
-            name: item.name,
-            quantity: item.quantity,
-            value: item.discountPrice || item.price || 0,
-          })),
-          origin: shipment.origin || {},
-          destination: destination,
-          idempotencyKey: `order:${orderId}`,
-        };
-
-        // Mark as pending handoff
-        await orderDeliveryService.queueHandoff(orderId);
-
-        // Send to Delivery Service (idempotent)
-        const result = await deliveryClient.createDeliveryRequest(handoffData);
-
-        if (result.ok && result.body?.deliveryRequestId) {
-          await orderDeliveryService.attachRequest(orderId, result.body.deliveryRequestId);
-        } else if (result.status >= 400 && result.status < 500) {
-          await orderDeliveryService.markHandoffAbandoned(orderId);
-          console.warn(`[confirmOrder] Order ${orderId} handoff abandoned: ${result.body?.message || 'Delivery service rejected'}`);
-        } else {
-          await orderDeliveryService.waitForOrderApproval(orderId);
-        }
+        await this.deliverHandoff(order);
       } catch (err) {
         // Log but don't fail the order confirmation
         console.error(`[confirmOrder] Delivery handoff failed for order ${orderId}:`, err.message);

@@ -45,6 +45,7 @@ const paymentReconciliationRoutes = require('../modules/fulfillment/routes/payme
 const orderDisputeRoutes = require('../modules/fulfillment/routes/orderDispute.routes');
 const walletsRoutes = require('../modules/fulfillment/routes/wallets.routes');
 const payoutsRoutes = require('../modules/fulfillment/routes/payouts.routes');
+const mediaRoutes = require('../modules/media/routes/media.routes');
 
 const app = express();
 // Trace id first: every log line, every error response and every outbound
@@ -162,6 +163,8 @@ app.use('/payment-reconciliation', paymentReconciliationRoutes);
 app.use('/order-dispute', orderDisputeRoutes);
 app.use('/wallet', walletsRoutes);
 app.use('/payout', payoutsRoutes);
+// Standalone single-file image upload (Cloudinary via ImageUploadManager).
+app.use('/media', mediaRoutes);
 app.use('/admin', adminPlatformRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', settingsRoutes);

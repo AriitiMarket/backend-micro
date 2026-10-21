@@ -39,8 +39,13 @@ const pickupStopSchema = new mongoose.Schema({
   sellerName: { type: String, default: '' },
   shopName: { type: String, default: '' },
   address: { type: mongoose.Schema.Types.Mixed, default: null },
+  contactPhone: { type: String, default: '' },
+  contactName: { type: String, default: '' },
   // Order ids collected at this stop (grouped by seller).
   orderIds: { type: [String], default: [] },
+  items: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  discrepancies: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  notes: { type: String, default: '' },
   completed: { type: Boolean, default: false },
   completedAt: { type: Date, default: null },
 }, { _id: false });

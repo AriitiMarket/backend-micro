@@ -33,6 +33,17 @@ const deliverySchema = new mongoose.Schema({
   // the order may change afterwards, the parcel that is on the road does not.
   itemCount: { type: Number, min: 0, default: 0 },
   totalValue: { type: Number, min: 0, default: 0 },
+  items: [{
+    productId: { type: String, default: null },
+    name: { type: String, default: '' },
+    quantity: { type: Number, default: 1 },
+    unit: { type: String, default: 'pcs' },
+    condition: { type: String, default: 'good' },
+    weight: { type: Number, default: 0 },
+    value: { type: Number, default: 0 },
+    image: { type: String, default: '' },
+    images: { type: [String], default: [] },
+  }],
   // Checkout fee and provider revenue share are immutable order snapshots.
   deliveryFee: { type: Number, min: 0, default: 0 },
   deliveryFeeRuleId: { type: String, default: null },

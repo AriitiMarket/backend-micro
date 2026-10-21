@@ -1,4 +1,5 @@
 const walletsService = require('../services/wallets.service');
+const walletsRepository = require('../repositories/wallets.repository');
 const { isSeller, isAdmin } = require('../../../shared/utils/roles');
 
 class ApiError extends Error {
@@ -26,17 +27,17 @@ class WalletController {
   async getWallet(req, res) {
     try {
       const { sellerId } = req.params;
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization: seller accesses own wallet, admin accesses any
-      if (isSeller(role) && String(actorId) !== String(sellerId)) {
+      if (isSeller(req.user) && String(actorId) !== String(sellerId)) {
         return res.status(403).json({
           error: 'You can only access your own wallet',
           code: 'WALLET_ACCESS_DENIED'
         });
       }
 
-      if (!isAdmin(role) && !isSeller(role)) {
+      if (!isAdmin(req.user) && !isSeller(req.user)) {
         return res.status(401).json({
           error: 'Authentication required',
           code: 'UNAUTHORIZED'
@@ -82,10 +83,10 @@ class WalletController {
   async getWalletDashboard(req, res) {
     try {
       const { sellerId } = req.params;
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization
-      if (isSeller(role) && String(actorId) !== String(sellerId)) {
+      if (isSeller(req.user) && String(actorId) !== String(sellerId)) {
         return res.status(403).json({
           error: 'You can only access your own wallet',
           code: 'WALLET_ACCESS_DENIED'
@@ -137,10 +138,10 @@ class WalletController {
     try {
       const { sellerId } = req.params;
       const { limit = 50, offset = 0, startDate, endDate } = req.query;
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization
-      if (isSeller(role) && String(actorId) !== String(sellerId)) {
+      if (isSeller(req.user) && String(actorId) !== String(sellerId)) {
         return res.status(403).json({
           error: 'You can only access your own transaction history',
           code: 'TRANSACTION_ACCESS_DENIED'
@@ -193,10 +194,10 @@ class WalletController {
   async getTransaction(req, res) {
     try {
       const { sellerId, transactionId } = req.params;
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization
-      if (isSeller(role) && String(actorId) !== String(sellerId)) {
+      if (isSeller(req.user) && String(actorId) !== String(sellerId)) {
         return res.status(403).json({
           error: 'You can only access your own transactions',
           code: 'TRANSACTION_ACCESS_DENIED'
@@ -256,10 +257,10 @@ class WalletController {
    */
   async getAllWallets(req, res) {
     try {
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization: admin only
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({
           error: 'Admin access required',
           code: 'ADMIN_ACCESS_DENIED'
@@ -316,10 +317,10 @@ class WalletController {
    */
   async getPlatformFinancialSummary(req, res) {
     try {
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization: admin only
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({
           error: 'Admin access required',
           code: 'ADMIN_ACCESS_DENIED'
@@ -363,10 +364,10 @@ class WalletController {
     try {
       const { walletId } = req.params;
       const { reason } = req.body || {};
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization: admin only
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({
           error: 'Admin access required',
           code: 'ADMIN_ACCESS_DENIED'
@@ -409,9 +410,9 @@ class WalletController {
     try {
       const { walletId } = req.params;
       const { reason } = req.body || {};
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({ error: 'Admin access required', code: 'ADMIN_ACCESS_DENIED' });
       }
       if (!reason || !String(reason).trim()) {
@@ -440,7 +441,7 @@ class WalletController {
   async exportWalletData(req, res) {
     try {
       const { role } = req.user || {};
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({ error: 'Admin access required', code: 'ADMIN_ACCESS_DENIED' });
       }
 
@@ -474,10 +475,10 @@ class WalletController {
     try {
       const { walletId } = req.params;
       const { amount, reason } = req.body || {};
-      const { id: actorId, role } = req.user || {};
+      const { id: actorId } = req.user || {};
 
       // Authorization: admin only
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({
           error: 'Admin access required',
           code: 'ADMIN_ACCESS_DENIED'
@@ -523,6 +524,56 @@ class WalletController {
     }
   }
 
+  /**
+   * Release pending balance to available balance (admin only)
+   * Body: { amount?: number, reason?: string }
+   */
+  async releasePending(req, res) {
+    try {
+      const { walletId } = req.params;
+      const { amount, reason } = req.body || {};
+      const { id: actorId } = req.user || {};
+
+      if (!isAdmin(req.user)) {
+        return res.status(403).json({
+          error: 'Admin access required',
+          code: 'ADMIN_ACCESS_DENIED'
+        });
+      }
+
+      let targetWalletId = walletId;
+      const wallet = await walletsRepository.getWalletById(walletId).catch(() => null);
+      if (!wallet) {
+        const bySeller = await walletsRepository.getWalletBySellerId(walletId).catch(() => null);
+        if (bySeller) targetWalletId = String(bySeller._id);
+      }
+
+      const result = await walletsService.releasePendingBalance(targetWalletId, amount ? Number(amount) : null, {
+        actor: actorId,
+        actorType: 'ADMIN',
+        reason: reason || 'Admin settlement release'
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Pending balance released to available balance',
+        data: {
+          walletId: result.wallet._id,
+          sellerId: result.wallet.sellerId,
+          releasedAmount: result.released,
+          availableBalance: result.wallet.availableBalance,
+          pendingBalance: result.wallet.pendingBalance
+        }
+      });
+    } catch (err) {
+      console.error('releasePending error:', err);
+      const statusCode = err.statusCode || 500;
+      return res.status(statusCode).json({
+        error: err.message || 'Failed to release pending balance',
+        code: 'RELEASE_PENDING_ERROR'
+      });
+    }
   }
+}
 
 module.exports = new WalletController();

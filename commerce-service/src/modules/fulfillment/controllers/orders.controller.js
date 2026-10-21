@@ -7,6 +7,7 @@
 const ordersService = require('../services/orders.service');
 const orderStateService = require('../services/orderState.service');
 const returnsService = require('../services/returns.service');
+const shopRepository = require('../../selling/repositories/shops.repository');
 const { isSeller, isAdmin } = require('../../../shared/utils/roles');
 
 class OrdersController {
@@ -52,6 +53,40 @@ class OrdersController {
 
       res.json({
         message: 'Order confirmed successfully',
+        order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Buyer confirms receipt of a delivered order
+   */
+  async confirmReceipt(req, res, next) {
+    try {
+      const { orderId } = req.params;
+      const order = await ordersService.confirmReceipt(orderId, req.user);
+      res.json({
+        success: true,
+        message: 'Order receipt confirmed successfully',
+        order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Buyer confirms receipt of a consolidated order group
+   */
+  async confirmReceiptGroup(req, res, next) {
+    try {
+      const { orderGroupId } = req.params;
+      const order = await ordersService.confirmReceipt(orderGroupId, req.user);
+      res.json({
+        success: true,
+        message: 'Order group receipt confirmed successfully',
         order,
       });
     } catch (err) {
@@ -320,10 +355,17 @@ class OrdersController {
 
       // Authorization: buyer/seller/admin can view order if they own it
       const isBuyer = String(order.buyerId) === String(actorId);
-      const isSeller = String(order.sellerId) === String(actorId);
+      let isSellerOwner = String(order.sellerId) === String(actorId);
       const isAdminRole = role === 'ADMIN';
 
-      if (!isBuyer && !isSeller && !isAdminRole) {
+      if (!isSellerOwner && (role === 'SELLER' || isSeller(req.user) || req.user?.roleStatuses?.SELLER === 'ACTIVE')) {
+        const shop = await shopRepository.findById(order.shopId);
+        if (shop && (String(shop.ownerId) === String(actorId) || String(shop._id) === String(actorId))) {
+          isSellerOwner = true;
+        }
+      }
+
+      if (!isBuyer && !isSellerOwner && !isAdminRole) {
         return res.status(403).json({ error: 'You can only view your own orders', code: 'ORDER_ACCESS_DENIED' });
       }
 

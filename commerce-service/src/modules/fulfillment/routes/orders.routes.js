@@ -42,6 +42,22 @@ router.post('/:orderId/confirm', authenticate, authorize(['SELLER', 'ADMIN']), (
   ordersController.confirmOrder(req, res, next);
 });
 
+/**
+ * Buyer confirms receipt of order after delivery
+ * POST /orders/:orderId/confirm-receipt
+ */
+router.post('/:orderId/confirm-receipt', authenticate, authorize(['BUYER', 'ADMIN']), (req, res, next) => {
+  ordersController.confirmReceipt(req, res, next);
+});
+
+/**
+ * Buyer confirms receipt of consolidated order group after delivery
+ * POST /orders/group/:orderGroupId/confirm-receipt
+ */
+router.post('/group/:orderGroupId/confirm-receipt', authenticate, authorize(['BUYER', 'ADMIN']), (req, res, next) => {
+  ordersController.confirmReceiptGroup(req, res, next);
+});
+
 // Shop staff verifies the buyer's one-time pickup code; no delivery assignment
 // or deliverer wallet transaction is created for this fulfilment path.
 router.post('/:orderId/verify-pickup', authenticate, authorize(['SELLER']), (req, res, next) => {
@@ -55,6 +71,14 @@ router.post('/:orderId/verify-pickup', authenticate, authorize(['SELLER']), (req
  * - Timeline tracking
  */
 router.patch('/:orderId/status', authenticate, authorize(['SELLER', 'ADMIN']), (req, res, next) => {
+  ordersController.updateOrderStatus(req, res, next);
+});
+
+// Legacy PUT route alias for status updates
+router.put('/update-order-status/:orderId', authenticate, authorize(['SELLER', 'ADMIN']), (req, res, next) => {
+  if (req.body?.status === 'Confirmed') {
+    return ordersController.confirmOrder(req, res, next);
+  }
   ordersController.updateOrderStatus(req, res, next);
 });
 

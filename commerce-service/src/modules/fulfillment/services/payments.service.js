@@ -4,7 +4,7 @@ const allocationRepository = require('../repositories/sellerAllocation.repositor
 const walletsService = require('./wallets.service');
 const chapaProvider = require('../providers/chapa');
 const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
-const { isBuyer, isSeller } = require('../../../shared/utils/roles');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 
@@ -41,11 +41,17 @@ class PaymentService {
     await this._ensureDefaults();
     const order = await orderRepository.findById(payload.orderId);
     if (!order) throw new ApiError('Order not found', 404);
-    if (actor && isBuyer(actor.role) && String(order.buyerId || order.user?.id || order.user?._id) !== String(actor.id)) {
-      throw new ApiError('You can only create a payment for your own order', 403);
-    }
-    if (actor && isSeller(actor.role) && String(order.sellerId) !== String(actor.id)) {
-      throw new ApiError('You can only create a payment for your own order', 403);
+    // The actor may only pay for an order they are a PARTY to. The test is
+    // OWNERSHIP, not a role guess: one account can be the buyer and the seller
+    // of the same order, and the token's primary role says nothing about it
+    // (a multi-actor account signs in with BUYER as its primary role).
+    if (actor) {
+      const actorId = String(actor.id || actor.sub || '');
+      const isBuyerOfOrder = String(order.buyerId || order.user?.id || order.user?._id) === actorId;
+      const isSellerOfOrder = String(order.sellerId || '') === actorId;
+      if (!isBuyerOfOrder && !isSellerOfOrder && !isAdmin(actor)) {
+        throw new ApiError('You can only create a payment for your own order', 403);
+      }
     }
     const existing = await paymentRepository.findByOrder(payload.orderId);
     if (existing) throw new ApiError('Payment already exists for this order', 409);
@@ -253,7 +259,10 @@ class PaymentService {
     const order = await orderRepository.findById(orderId);
     if (!order) throw new ApiError('Order not found', 404);
     const buyerId = String(order.buyerId || order.user?.id || order.user?._id || '');
-    if (actor && isBuyer(actor.role) && buyerId !== String(actor.id || actor._id)) throw new ApiError('You can only verify your own payment', 403);
+    if (actor) {
+      const actorId = String(actor.id || actor.sub || '');
+      if (buyerId !== actorId && !isAdmin(actor)) throw new ApiError('You can only verify your own payment', 403);
+    }
     const payment = await paymentRepository.findByOrder(orderId);
     if (!payment || payment.paymentMethod !== 'CHAPA' || String(payment.transactionId) !== String(txRef)) throw new ApiError('Chapa payment reference does not match this order', 404);
     if (payment.status === 'COMPLETED') return { success: true, alreadyCompleted: true, payment };
@@ -300,8 +309,29 @@ class PaymentService {
     if (!method || method.status !== 'ACTIVE') throw new ApiError('Payment method is not active', 400);
     const crypto = require('crypto');
     const secret = process.env.PAYMENT_ACCOUNT_ENCRYPTION_KEY || process.env.SECRET_KEY || 'development-only-change-me';
-    const encryptedDetails = crypto.createCipheriv('aes-256-gcm', crypto.createHash('sha256').update(secret).digest(), crypto.randomBytes(12)).update(String(input.accountNumber || ''), 'utf8').digest('hex');
-    const row = await SellerPaymentAccount.create({ sellerId: String(sellerId), methodId: input.methodId, provider: input.provider || method.name, accountLabel: input.accountLabel || method.name, accountHint: String(input.accountNumber || '').slice(-4).padStart(4, '•'), encryptedDetails, isDefault: Boolean(input.isDefault), status: 'PENDING' });
+    const iv = crypto.randomBytes(12);
+    const key = crypto.createHash('sha256').update(secret).digest();
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let encrypted = cipher.update(String(input.accountNumber || ''), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag().toString('hex');
+    const encryptedDetails = `${iv.toString('hex')}:${authTag}:${encrypted}`;
+    const row = await SellerPaymentAccount.findOneAndUpdate(
+      { sellerId: String(sellerId), methodId: input.methodId },
+      {
+        $set: {
+          provider: input.provider || method.name,
+          accountLabel: input.accountLabel || method.name,
+          accountHint: String(input.accountNumber || '').slice(-4).padStart(4, '•'),
+          encryptedDetails,
+          isDefault: Boolean(input.isDefault),
+          status: 'PENDING',
+          updatedAt: new Date(),
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { new: true, upsert: true }
+    );
     return { id: row._id, sellerId: row.sellerId, methodId: row.methodId, methodName: method.name, provider: row.provider, status: row.status, isDefault: row.isDefault, accountLabel: row.accountLabel, accountHint: row.accountHint, createdAt: row.createdAt };
   }
 

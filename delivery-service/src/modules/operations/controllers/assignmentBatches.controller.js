@@ -142,7 +142,12 @@ async function startPickup(req, res, next) {
 async function confirmPickup(req, res, next) {
   try {
     const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
-    const result = await svc.confirmPickupStop(batch._id, req.params.sellerId, { id: String(provider._id), name: provider.name, role: 'PROVIDER' });
+    const result = await svc.confirmPickupStop(
+      batch._id,
+      req.params.sellerId,
+      { id: String(provider._id), name: provider.name, role: 'PROVIDER' },
+      req.body
+    );
     return ok(res, { assignment: result }, 'Pickup confirmed');
   } catch (err) { return next(err); }
 }

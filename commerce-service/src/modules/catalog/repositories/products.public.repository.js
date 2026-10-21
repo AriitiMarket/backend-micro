@@ -9,7 +9,7 @@ const { inactiveProductCategoryTitles } = require('../../../shared/utils/categor
  * .lean() to avoid hydrating full Mongoose documents.
  */
 
-const PUBLIC_LIST_FIELDS = '_id name description images discountPrice originalPrice category ratings sold_out stock reserved createdAt shop.name shop.avatar shop._id';
+const PUBLIC_LIST_FIELDS = '_id name description images discountPrice originalPrice category subcategory ratings sold_out stock reserved createdAt shop.name shop.avatar shop._id';
 const PUBLIC_DETAIL_FIELDS = '_id name description images discountPrice originalPrice category ratings sold_out stock reserved createdAt reviews.rating reviews.comment reviews.createdAt reviews.moderationStatus shop.name shop.avatar shop._id';
 
 /**
@@ -103,6 +103,7 @@ async function findPublicAll(opts = {}) {
   const {
     search,
     category,
+    subcategory,
     shopId,
     regionId,
     minPrice,
@@ -121,6 +122,9 @@ async function findPublicAll(opts = {}) {
 
   if (category) {
     clauses.push({ category: { $regex: new RegExp(`^${escapeRegex(category)}$`, 'i') } });
+  }
+  if (subcategory) {
+    clauses.push({ subcategory: { $regex: new RegExp(`^${escapeRegex(subcategory)}$`, 'i') } });
   }
   if (shopId) {
     clauses.push({ shopId: String(shopId) });

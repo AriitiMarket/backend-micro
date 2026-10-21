@@ -15,7 +15,8 @@ const {
   toAdminRow,
   countMapFromRows,
 } = require('../shops.mapper');
-const { publicDeliveryInfo } = require('./shopCoverage.service');
+const shopCoverageService = require('./shopCoverage.service');
+const { publicDeliveryInfo } = shopCoverageService;
 
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 

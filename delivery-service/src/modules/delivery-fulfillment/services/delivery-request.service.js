@@ -19,6 +19,39 @@ function keepIfKnown(id, location) {
   return location ? id : null;
 }
 
+/**
+ * Normalize ONE address block onto the vocabulary the Delivery documents store.
+ *
+ * Commerce speaks the ORDER vocabulary (`origin` / `destination`, `fullAddress`,
+ * `phone`), the Delivery Service stores the delivery vocabulary
+ * (`pickupAddress` / `deliveryAddress`, `addressDetail`, `contactPhone`).
+ * Both spellings are accepted and the address fields are mapped, so a shipment
+ * carries the real pickup point and the real destination instead of an empty
+ * snapshot — a rider could otherwise never see where the parcel goes.
+ */
+function normalizeAddressSnapshot(source = {}) {
+  const out = { ...(source || {}) };
+  if (!out.addressDetail && source.fullAddress) out.addressDetail = source.fullAddress;
+  if (!out.contactPhone && source.phone) out.contactPhone = source.phone;
+  if (!out.contactName && source.name) out.contactName = source.name;
+  if (!out.zoneId && source.deliveryZoneId) out.zoneId = source.deliveryZoneId;
+  if (!out.zoneName && source.deliveryZoneName) out.zoneName = source.deliveryZoneName;
+  if (!out.locationId && source.sectorId) out.locationId = source.sectorId;
+  return out;
+}
+
+/** The declared value of the parcel: what the handoff states, else the items. */
+function declaredValue(data) {
+  const stated = Number(data.totalValue);
+  if (Number.isFinite(stated) && stated > 0) return stated;
+  const items = Array.isArray(data.items) ? data.items : [];
+  return items.reduce((sum, item) => {
+    const quantity = Number(item?.quantity) || 0;
+    const value = Number(item?.value) || 0;
+    return sum + quantity * value;
+  }, 0);
+}
+
 async function createRequest(data) {
   // The Commerce handoff is an API contract: validate it before ANY document is
   // written. `validateRequestHandoffInput` existed in the module but was never
@@ -50,9 +83,10 @@ async function createRequest(data) {
   if (destination && !destination.isActive) throw Object.assign(new Error('Destination location is inactive'), { status: 400 });
 
   // Auto-resolve zone if not provided (one centralized resolver)
-  const deliveryAddress = { ...data.deliveryAddress };
+  const pickupAddress = normalizeAddressSnapshot(data.pickupAddress || data.origin);
+  const deliveryAddress = normalizeAddressSnapshot(data.deliveryAddress || data.destination);
   if (!deliveryAddress.zoneId) {
-    const zone = await zonesService.resolveDeliveryArea({ locationId: data.destinationLocationId });
+    const zone = await zonesService.resolveDeliveryArea({ locationId: data.destinationLocationId || deliveryAddress.locationId });
     if (zone) deliveryAddress.zoneId = zone._id;
   }
 
@@ -86,7 +120,7 @@ async function createRequest(data) {
     pickupLocationId,
     destinationLocationId,
     deliveryAddress,
-    pickupAddress: { ...data.pickupAddress },
+    pickupAddress,
     requestedAt: new Date(),
   };
 
@@ -96,17 +130,18 @@ async function createRequest(data) {
   if (data.orderId) {
     const existing = await deliveriesRepo.findByOrderId(data.orderId);
     if (!existing) {
-      const pickupAddr = data.pickupAddress || {};
+      const pickupAddr = pickupAddress;
       // The parcel snapshot comes from the request's own items, so the buyer,
       // the rider and the admin all see the same count and declared value.
       const requestItems = Array.isArray(request.items) ? request.items : [];
       const itemCount = requestItems.reduce((sum, item) => sum + (Number(item?.quantity) || 0), 0);
-      const totalValue = Number(request.totalValue) || 0;
+      const totalValue = declaredValue({ totalValue: request.totalValue, items: requestItems });
       const deliveryData = {
         idempotencyKey: `order:${data.orderId}`,
         orderId: data.orderId,
         sellerId: data.sellerId,
         buyerId: data.buyerId,
+        items: requestItems,
         paymentMethod,
         paymentAmount: Number(data.paymentAmount) || 0,
         itemCount,

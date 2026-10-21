@@ -155,23 +155,28 @@ async function buildDeliveryFilter(query, user) {
     buyerId: undefined,
   });
 
-  if (user) {
-    if (isAdmin(user)) {
-      // Operational access — the filters below apply as requested.
-    } else if (isSeller(user)) {
-      filter.sellerId = user.id;
-    } else if (isBuyer(user)) {
-      filter.buyerId = user.id;
-    } else if (isOperator(user)) {
+  if (user && !isAdmin(user)) {
+    // Tenant scoping is ADDITIVE (see shared/utils/access.js): a multi-actor
+    // account sees the rows of EVERY role it holds. A delivery provider is also
+    // a BUYER in the one-account model, so scoping by buyerId alone left the
+    // rider's OWN deliveries list empty — the provider portal showed an empty
+    // queue even with deliveries assigned to it.
+    const scopes = [];
+    if (isSeller(user)) scopes.push({ sellerId: user.id });
+    if (isOperator(user)) {
       const provider = await resolveProviderForUser(user);
       // An operator without a Provider document sees nothing: `null` matches
       // deliveries whose providerId is unset. The previous '__no_partner__'
       // sentinel could not be cast to an ObjectId and turned the list into a
       // 400 CastError.
-      filter.providerId = provider ? String(provider._id) : null;
-    } else {
-      filter.providerId = null;
+      scopes.push({ providerId: provider ? String(provider._id) : null });
     }
+    if (isBuyer(user)) scopes.push({ buyerId: user.id });
+    if (!scopes.length) scopes.push({ providerId: null });
+    const scope = scopes.length === 1 ? scopes[0] : { $or: scopes };
+    // The status/date/search filters may already carry their own $or, so the
+    // scope is added through $and — the two must never overwrite each other.
+    filter.$and = [...(filter.$and || []), scope];
   }
 
   // Query params may narrow the tenant's own view, never widen it.

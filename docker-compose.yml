@@ -125,7 +125,7 @@ services:
         condition: service_healthy
     volumes:
       # Source code mount for development hot-reload (disable in production)
-      # - ./commerce-service:/app/commerce-service
+      - ./commerce-service:/app/commerce-service
       - /app/commerce-service/node_modules
       - ./packages:/app/packages
       - /app/node_modules

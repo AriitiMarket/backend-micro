@@ -6,6 +6,24 @@ const { sanitizeImageReference } = require('../../../shared/utils/imageRefs');
 const { isAdmin } = require('../../../shared/utils/roles');
 
 /**
+ * Split a raw `imageUrls` body field into individual references.
+ *
+ * A comma-separated string is the seller-typed form ("url1, url2"), but an
+ * inline `data:image/…` payload CONTAINS commas (base64) — splitting it
+ * truncates the image. A string that is itself a data payload is therefore
+ * kept whole. Repeated multipart fields arrive as an array and are never
+ * split.
+ */
+function parseImageUrls(raw) {
+  if (Array.isArray(raw)) return raw.filter(Boolean).map((u) => String(u).trim()).filter(Boolean);
+  if (typeof raw !== 'string') return [];
+  const value = raw.trim();
+  if (!value) return [];
+  if (/^data:image\//i.test(value)) return [value];
+  return value.split(',').map((u) => u.trim()).filter(Boolean);
+}
+
+/**
  * Validate an image reference from the request body. Accepts external
  * http(s) URLs, data:image URIs, and real storage keys / /uploads paths
  * (audit: raw imageUrls was an XSS / javascript:-URI vector).
@@ -22,14 +40,7 @@ async function createProduct(req, res, next) {
 
     let urlImages = [];
     if (req.body.imageUrls) {
-      const raw = req.body.imageUrls;
-      let urls = [];
-      if (typeof raw === 'string') {
-        urls = raw.split(',').map((u) => u.trim()).filter(Boolean);
-      } else if (Array.isArray(raw)) {
-        urls = raw.filter(Boolean);
-      }
-      urlImages = urls.map(sanitizeImageUrl).filter(Boolean);
+      urlImages = parseImageUrls(req.body.imageUrls).map(sanitizeImageUrl).filter(Boolean);
     }
 
     const images = [...uploadedImages, ...urlImages];
@@ -94,12 +105,7 @@ async function updateProduct(req, res, next) {
     // new that fails the policy. Create has no prior list, so it sanitises here.
     let urlRefs = [];
     if (req.body.imageUrls) {
-      const raw = req.body.imageUrls;
-      if (typeof raw === 'string') {
-        urlRefs = raw.split(',').map((u) => u.trim()).filter(Boolean);
-      } else if (Array.isArray(raw)) {
-        urlRefs = raw.filter(Boolean).map((u) => String(u).trim()).filter(Boolean);
-      }
+      urlRefs = parseImageUrls(req.body.imageUrls);
     }
 
     const newImages = [...uploadedImages, ...urlRefs];

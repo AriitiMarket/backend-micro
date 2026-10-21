@@ -76,6 +76,9 @@ const ROUTES = [
   { service: 'commerce', prefix: '/settings' },
   { service: 'commerce', prefix: '/wallet' },
   { service: 'commerce', prefix: '/payout' },
+  // Standalone image upload (multipart) — must not collide with the media
+  // serving prefix '/uploads' above.
+  { service: 'commerce', prefix: '/media' },
   // Returns/refunds. The commerce service mounts `returnsRoutes` at '/return'
   // (see commerce-service/src/app/app.js), but the prefix was missing here —
   // every /return request was answered with 404 at the edge, so the seller
