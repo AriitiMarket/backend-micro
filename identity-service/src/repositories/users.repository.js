@@ -5,7 +5,7 @@ const { toUser } = require('../models/User');
 const { ROLES, normalizeRole } = require('../models/Role');
 const userRolesRepo = require('./user-roles.repository');
 
-const USER_COLUMNS = 'id, name, email, phone_number, role, active_role, avatar_public_id, avatar_url, addresses, shop_id, status, is_verified, seller_status, admin_scope, created_at, updated_at';
+const USER_COLUMNS = 'id, name, email, phone_number, role, active_role, avatar_public_id, avatar_url, addresses, shop_id, status, is_verified, seller_status, admin_scope, two_factor_enabled, two_factor_type, created_at, updated_at';
 
 /** Attach the actor memberships of many rows in ONE extra query (never N+1). */
 async function attachMemberships(rows) {

@@ -231,7 +231,10 @@ async function verify2FALogin(req, res, next) {
       id_token: loginResult.tokens.idToken,
       token_type: 'Bearer',
       expires_in: loginResult.tokens.expiresIn,
-      user: loginResult.user,
+      user: {
+        ...loginResult.user,
+        ...(loginResult.authorization || {}),
+      },
       message: '2FA verification successful',
     }, 'Code verified successfully');
   } catch (err) {
