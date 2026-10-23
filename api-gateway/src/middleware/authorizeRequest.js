@@ -166,6 +166,7 @@ const ACTOR_SHARED_PREFIXES = [
   // still requires ADMIN for every location/zone write, so this entry does not
   // widen what a non-admin can change.
   '/delivery/location',
+  '/delivery/port',
   // A delivery provider's own wallet and payout requests live on the
   // /delivery/provider-wallet router, whose /me paths are provider-facing
   // (Delivery gates them with authorize('PROVIDER')). The router also carries
@@ -202,6 +203,10 @@ const PUBLIC_READ_PREFIXES = [
   '/delivery/zone/location/',
   '/delivery/location',
   '/delivery/location/',
+  '/delivery/port/public',
+  '/delivery/port/zone/',
+  '/coupon/get-coupon-value',
+  '/coupon/get-coupon-value/',
 ];
 
 /** Is this a public read of reference data (no auth required)? */
