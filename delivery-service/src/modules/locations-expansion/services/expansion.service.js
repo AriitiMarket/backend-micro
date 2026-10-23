@@ -2,6 +2,7 @@ const locationsRepo = require('../repositories/locations.repository');
 const zonesRepo = require('../repositories/zones.repository');
 const routesRepo = require('../repositories/routes.repository');
 const deliveryServicesRepo = require('../repositories/deliveryServices.repository');
+const portsRepo = require('../../operations/repositories/ports.repository');
 const auditClient = require('../../../shared/utils/audit-client');
 
 const EXPANSION_TRANSITIONS = {
@@ -106,14 +107,15 @@ async function checkReadiness(locationId) {
     blockingReasons.push('No active delivery service is available');
   }
 
-  // Check port - requirement depends on business logic, let's say it's required if it's a city or above
+  // Check port - required if it's a city or above
   if (loc.type !== 'community' && loc.type !== 'village' && loc.type !== 'other') {
      if (loc.port && loc.port.isPort && loc.port.operatingStatus === 'active') {
        checks.port = true;
      } else {
-       // Look if any parent has a port, or if the zone has a port
-       let hasPort = false;
-       if (zones && zones.some(z => z.portId)) hasPort = true;
+       // Look if an active Port is assigned to the location, or if the zone has a port
+       const activePorts = await portsRepo.findByLocationId(locationId).catch(() => []);
+       let hasPort = activePorts.length > 0;
+       if (!hasPort && zones && zones.some(z => z.portId)) hasPort = true;
        if (hasPort) {
          checks.port = true;
        } else {

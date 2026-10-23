@@ -1,11 +1,10 @@
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 const env = require('./config/env');
 const gatewayOnly = require('./middleware/gatewayOnly');
 const { requestId } = require('../shared/request-context');
-const { notFound, errorHandler } = require('./middleware/errorHandler');
+const { notFound } = require('./middleware/errorHandler');
 
 const { standardErrorHandler } = require('../shared/middleware/standardErrorHandler');
 const shopsRoutes = require('../modules/selling/routes/shops.routes');
@@ -57,7 +56,6 @@ app.use(requestId);
 app.use(cors({ origin: [env.corsOrigin, 'http://localhost:8000'], credentials: false }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(bodyParser.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => res.send('Commerce Service is running'));
 

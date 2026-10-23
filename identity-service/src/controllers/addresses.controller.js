@@ -39,6 +39,8 @@ async function addAddress(req, res, next) {
         sectorName: req.body.sectorName,
         deliveryZoneId: req.body.deliveryZoneId,
         deliveryZoneName: req.body.deliveryZoneName,
+        portId: req.body.portId,
+        portName: req.body.portName,
         // Address details
         houseBuilding: req.body.houseBuilding,
         landmark: req.body.landmark,
@@ -80,6 +82,8 @@ async function updateAddress(req, res, next) {
         sectorName: req.body.sectorName,
         deliveryZoneId: req.body.deliveryZoneId,
         deliveryZoneName: req.body.deliveryZoneName,
+        portId: req.body.portId,
+        portName: req.body.portName,
         // Address details
         houseBuilding: req.body.houseBuilding,
         landmark: req.body.landmark,

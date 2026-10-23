@@ -171,9 +171,34 @@ async function confirmDelivery(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+/** Rider confirms delivery of ALL remaining orders in a batch with one click. */
+async function deliverAllBatchOrders(req, res, next) {
+  try {
+    const { batch, provider } = await svc.getBatchForRider(req.params.id, req.user && req.user.id);
+    const actor = { id: String(provider._id), name: provider.name, role: 'PROVIDER' };
+
+    const ordersToDeliver = batch.deliveries.filter((d) => d.status !== 'delivered');
+    if (ordersToDeliver.length === 0) {
+      return ok(res, { message: 'No active orders to deliver', total: 0, delivered: 0 }, 'No orders to deliver');
+    }
+
+    // Mark each remaining order as delivered
+    const results = [];
+    for (const entry of ordersToDeliver) {
+      const result = await svc.markDelivered(batch._id, entry.orderId, actor, {});
+      results.push({ orderId: entry.orderId, success: true });
+    }
+
+    // Sync delivery statuses to update provider workload etc.
+    await svc.syncDeliveryStatuses(batch);
+
+    return ok(res, { results, total: ordersToDeliver.length }, 'All batch orders delivered');
+  } catch (err) { return next(err); }
+}
+
 module.exports = {
   listReadyOrders, createBatchAssignment, getBatchAssignment,
   listBatchAssignments, reassignBatchAssignment, cancelBatchAssignment,
   listMyAssignments, respondToBatch, startPickup, confirmPickup,
-  startTransit, confirmDelivery,
+  startTransit, confirmDelivery, deliverAllBatchOrders,
 };

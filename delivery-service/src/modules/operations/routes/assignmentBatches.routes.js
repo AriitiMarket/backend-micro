@@ -31,5 +31,6 @@ router.post('/batches/:id/pickup/start', authenticate, authorize('PROVIDER'), ct
 router.post('/batches/:id/pickup/:sellerId/confirm', authenticate, authorize('PROVIDER'), ctrl.confirmPickup);
 router.post('/batches/:id/transit/start', authenticate, authorize('PROVIDER'), ctrl.startTransit);
 router.post('/batches/:id/orders/:orderId/deliver', authenticate, authorize('PROVIDER'), ctrl.confirmDelivery);
+router.post('/batches/:id/deliver-all', authenticate, authorize('PROVIDER'), ctrl.deliverAllBatchOrders);
 
 module.exports = router;

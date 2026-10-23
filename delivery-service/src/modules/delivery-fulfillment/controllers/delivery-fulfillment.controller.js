@@ -215,4 +215,42 @@ async function getDeliveries(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { createDelivery, getDelivery, getDeliveryHistory, getDeliveryByOrderId, updateStatus, assignDelivery, getDeliveries };
+async function deliverAllBatchOrders(req, res, next) {
+  try {
+    const batchId = req.params.id;
+    const delivery = await deliveriesRepo.findById(batchId);
+    if (!delivery) throw Object.assign(new Error('Batch not found'), { status: 404 });
+
+    // Get all assignments in this batch
+    const assignments = await assignmentsRepo.findByDeliveryId(batchId);
+    const activeAssignments = assignments.filter(a => {
+      const status = normalizeStatus(a.status);
+      return !['delivered', 'cancelled', 'failed'].includes(status);
+    });
+
+    if (activeAssignments.length === 0) {
+      return ok(res, { delivery }, 'No active assignments to deliver');
+    }
+
+    // Process each assignment - deliver all remaining orders
+    const results = [];
+    for (const assignment of activeAssignments) {
+      const proof = assignment.proofOfDelivery || {};
+      const result = await svc.updateStatus(assignment._id, 'delivered', {
+        proofOfDelivery: proof,
+        note: 'Delivered all orders in batch via single action',
+      }, {
+        id: req.user?.id || null,
+        name: req.user?.name || 'Provider',
+        role: req.user?.role || 'PROVIDER',
+      });
+      results.push({ orderId: assignment.orderId, success: result.success });
+    }
+
+    sendAudit({ action: 'BATCH_DELIVER_ALL', adminId: req.user?.id || null, adminName: req.user?.name || 'Provider', targetEntity: 'delivery', targetId: batchId, newValue: { deliveredCount: activeAssignments.length }, ipAddress: req.ip });
+
+    return ok(res, { results, total: activeAssignments.length }, 'Batch delivery completed');
+  } catch (err) { return next(err); }
+}
+
+module.exports = { createDelivery, getDelivery, getDeliveryHistory, getDeliveryByOrderId, updateStatus, assignDelivery, getDeliveries, deliverAllBatchOrders };

@@ -238,7 +238,7 @@ class OrdersController {
       const userId = req.user?.id || req.user?._id;
       const {
         cart, promoCode, shippingAddress, destination, deliveryZoneId,
-        deliveryZoneName, sectorId, locationId, user, paymentInfo,
+        deliveryZoneName, portId, portName, sectorId, locationId, user, paymentInfo,
         fulfilmentType,
       } = req.body;
 
@@ -256,6 +256,8 @@ class OrdersController {
         destination,
         deliveryZoneId,
         deliveryZoneName,
+        portId,
+        portName,
         sectorId,
         locationId,
         user,

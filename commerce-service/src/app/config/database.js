@@ -101,6 +101,18 @@ async function runMigrations(db) {
     }
   }
 
+  // The legacy unique buyerId index on carts predates userId ownership. Because
+  // Cart documents only store `userId`, carts had `buyerId: null`, which caused
+  // E11000 duplicate key (409 Conflict) on any second user's cart creation.
+  const CARTS_COLLECTION = 'carts';
+  if (existing.has(CARTS_COLLECTION)) {
+    const indexes = await db.collection(CARTS_COLLECTION).indexes();
+    if (indexes.some((ix) => ix.name === 'buyerId_1')) {
+      await db.collection(CARTS_COLLECTION).dropIndex('buyerId_1');
+      changed.push(`${CARTS_COLLECTION}: dropped legacy index buyerId_1`);
+    }
+  }
+
   return changed;
 }
 

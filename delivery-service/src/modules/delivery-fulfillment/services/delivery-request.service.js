@@ -93,16 +93,18 @@ async function createRequest(data) {
   // One centralized requestability gate: unknown zone, paused zone, outside
   // service hours or not-yet-live zone rejects the request with a clear code
   // BEFORE any Delivery row is created. Existing deliveries are untouched.
-  let resolvedPortId = null;
+  let resolvedPortId = deliveryAddress.portId || data.portId || null;
   if (deliveryAddress.zoneId) {
     let zone = null;
     try { zone = await zonesService.getZone(deliveryAddress.zoneId); } catch { zone = null; }
     if (!zone) throw Object.assign(new Error('Zone not serviceable: ZONE_NOT_FOUND'), { status: 400, code: 'ZONE_NOT_FOUND' });
     await zonesService.assertZoneRequestable(zone);
     // Zone says WHERE; the Port is the known local point that will serve it.
-    // Resolved once, here, so assignment and tracking never re-derive it.
-    const port = await zonesService.resolveZonePort(zone._id);
-    resolvedPortId = port ? port._id : null;
+    // If not explicitly provided, resolve the default port for this zone.
+    if (!resolvedPortId) {
+      const port = await zonesService.resolveZonePort(zone._id);
+      resolvedPortId = port ? port._id : null;
+    }
   }
 
   // Location references that do not resolve to a real location are dropped from

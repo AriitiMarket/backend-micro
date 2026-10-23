@@ -130,6 +130,8 @@ const orderSchema = new mongoose.Schema({
     // Legacy orders predate the field and carry null.
     deliveryZoneId: { type: String, default: null, index: true },
     deliveryZoneName: { type: String, default: '' },
+    portId: { type: String, default: null, index: true },
+    portName: { type: String, default: '' },
 
     // Full address details
     fullAddress: { type: String, default: '' },
@@ -157,6 +159,10 @@ const orderSchema = new mongoose.Schema({
   shopId: { type: String, index: true, default: null },
 
   // Location & Sector tracking for admin scope filtering
+  deliveryZoneId: { type: String, index: true, default: null },
+  deliveryZoneName: { type: String, default: '' },
+  portId: { type: String, index: true, default: null },
+  portName: { type: String, default: '' },
   sectorId: {
     type: String,
     index: true,

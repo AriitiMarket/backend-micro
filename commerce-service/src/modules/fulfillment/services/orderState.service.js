@@ -75,6 +75,9 @@ class OrderStateService {
       // The destination: the buyer's address plus the person to hand it to.
       destination: {
         ...destination,
+        zoneId: destination.zoneId || destination.deliveryZoneId || order.deliveryZoneId || null,
+        portId: destination.portId || order.portId || null,
+        portName: destination.portName || order.portName || '',
         contactName: destination.contactName || buyer.name || '',
         contactPhone: destination.contactPhone || destination.phone || '',
       },

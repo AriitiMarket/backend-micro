@@ -52,48 +52,6 @@ async function requireShopOwner(req, res, next) {
   }
 }
 
-/**
- * Middleware: Verify user has permission for bulk operations on multiple shops
- * @param {Object} req
- * @param {Object} res
- * @param {Function} next
- */
-async function requireShopsAccess(req, res, next) {
-  try {
-    const userId = req.user?.id || req.user?._id;
-    if (!userId) {
-      throw new ApiError('Unauthorized: no user context', 401);
-    }
-
-    const shopIds = req.body?.shopIds || [];
-    if (!Array.isArray(shopIds) || shopIds.length === 0) {
-      throw new ApiError('shopIds array required', 400);
-    }
-
-    // Fetch all shops and verify ownership
-    const shops = await Promise.all(
-      shopIds.map(id => shopsService.getShopById(id))
-    );
-
-    const unauthorized = shops.some(shop => {
-      if (!shop) return true; // Shop doesn't exist
-      return String(shop.ownerId) !== String(userId);
-    });
-
-    if (unauthorized) {
-      throw new ApiError('Forbidden: access denied to one or more shops', 403);
-    }
-
-    req.shops = shops;
-    req.shopIds = shopIds;
-
-    next();
-  } catch (err) {
-    next(err);
-  }
-}
-
 module.exports = {
   requireShopOwner,
-  requireShopsAccess,
 };

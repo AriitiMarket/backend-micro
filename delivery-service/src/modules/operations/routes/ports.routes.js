@@ -5,6 +5,8 @@ const { authenticate } = require('../../../app/middleware/authenticate');
 const authorize = require('../../../app/middleware/authorize');
 
 // Physical/logistical ports, surfaced in the Locations & Expansion workspace.
+router.get('/public', ctrl.getPublicPorts);
+router.get('/zone/:zoneId', ctrl.getPortsByZone);
 router.get('/stats', authenticate, authorize('ADMIN'), ctrl.getPortStats);
 router.get('/', authenticate, authorize('ADMIN'), ctrl.getPorts);
 router.get('/:id', authenticate, authorize('ADMIN'), ctrl.getPort);
