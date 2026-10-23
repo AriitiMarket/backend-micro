@@ -417,6 +417,11 @@ class SellerApplicationService {
       avatar.url = '/app/uploads/shop-default.svg';
     }
 
+    const resolvedLocationId = locationId || location.cityId || location.regionId || null;
+    const resolvedSectorId = sectorId || location.sectorId || null;
+    const resolvedZoneId = location.deliveryZoneId || location.zoneId || null;
+    const resolvedZoneName = location.deliveryZoneName || location.zoneName || 'Operating Zone';
+
     const shop = await shopRepository.create({
       name: shopInfo.shopName,
       email: shopInfo.publicEmail || business.email || (app.ownerId + '@aritii.local'),
@@ -425,23 +430,56 @@ class SellerApplicationService {
       // Shop category (type 'business') — what the public /shops sidebar
       // filters on. Prefer the shop-level pick, fall back to the business one.
       category: String(shopInfo.category || business.businessCategory || '').trim(),
-      address: location.address || location.city || '',
+      address: location.address || location.specificPlace || location.cityName || location.city || '',
       // Phone/zip stay strings (validators allow "+251-911…" / leading zeros).
       // zipCode is not a region id — when the application has no zip we leave it
       // empty rather than stuffing Number(region) into the field.
       phoneNumber: shopInfo.publicPhone != null && String(shopInfo.publicPhone).trim() !== ''
         ? String(shopInfo.publicPhone).trim()
-        : '',
+        : (location.dispatchPhone || business.phone || ''),
       avatar,
       zipCode: location.zipCode != null && String(location.zipCode).trim() !== ''
         ? String(location.zipCode).trim()
         : '',
-      // NEW: Link to location, sector, and application
-      locationId: locationId || null,
-      sectorId: sectorId || null,
+      // Link to location, sector, and application
+      locationId: resolvedLocationId,
+      sectorId: resolvedSectorId,
       applicationId: String(app._id),
       businessId: String(app._id),
       status: 'APPROVED',
+      // Store complete pickup location snapshot so orders and delivery drivers know exact pickup point
+      locationSnapshot: {
+        regionId: location.regionId || null,
+        regionName: location.regionName || location.region || '',
+        cityId: location.cityId || null,
+        cityName: location.cityName || location.city || '',
+        areaId: location.areaId || null,
+        areaName: location.areaName || '',
+        sectorId: resolvedSectorId,
+        sectorName: location.sectorName || '',
+        fullAddress: location.address || location.specificPlace || [location.cityName, location.regionName].filter(Boolean).join(', '),
+        landmark: location.landmark || '',
+        building: location.building || '',
+        contactPhone: location.dispatchPhone || shopInfo.publicPhone || business.phone || '',
+        coordinates: {
+          latitude: location.latitude != null ? Number(location.latitude) : null,
+          longitude: location.longitude != null ? Number(location.longitude) : null,
+        },
+        resolvedAt: new Date(),
+      },
+      // Operating delivery coverage
+      deliveryCoverage: resolvedZoneId ? {
+        zoneIds: [String(resolvedZoneId)],
+        zoneNames: [{ id: String(resolvedZoneId), name: resolvedZoneName }],
+        status: 'ACTIVE',
+        source: 'APPLICATION',
+        verifiedAt: new Date(),
+      } : {
+        zoneIds: [],
+        zoneNames: [],
+        status: 'UNCONFIGURED',
+        source: 'APPLICATION',
+      },
       approvalMetadata: {
         approvedBy: reviewedBy,
         approvedAt: new Date(),
