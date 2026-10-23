@@ -375,8 +375,20 @@ class ShopService {
    *      being permanently locked out with a 404.
    */
   async getSellerShop(userId, email = null) {
-    const shops = await shopRepository.find({ filter: { ownerId: userId } });
+    let shops = await shopRepository.find({ filter: { ownerId: userId } });
     if (shops.length > 0) return shops[0];
+
+    // Business-first resolution: a business owns shops, and the user may be the
+    // business owner or an affiliated seller actor.
+    const business = await sellerAppRepository.findByOwner(userId).catch(() => null);
+    if (business && business._id) {
+      const bizId = String(business._id);
+      shops = await shopRepository.find({
+        filter: { $or: [{ businessId: bizId }, { applicationId: bizId }] },
+        sort: { createdAt: 1 },
+      });
+      if (shops.length > 0) return shops[0];
+    }
 
     // Fallback: look up by the shop's own _id, but only when the provided value
     // is a valid Mongo ObjectId. The identity-backed ownerId is a UUID string
@@ -384,7 +396,7 @@ class ShopService {
     // a UUID would throw a CastError (500). Non-sellers simply get null.
     if (isValidObjectId(userId)) {
       const byId = await shopRepository.findById(userId);
-      if (byId && byId.ownerId === userId) return byId;
+      if (byId && (byId.ownerId === userId || (business && String(byId.businessId) === String(business._id)))) return byId;
     }
 
     if (email) {
@@ -416,13 +428,21 @@ class ShopService {
   async getSellerShops(userId, email = null) {
     const primary = await this.getSellerShop(userId, email); // keeps the verified-email self-heal
     if (!primary) return [];
-    const shops = await shopRepository.find({ filter: { ownerId: userId }, sort: { createdAt: 1 } });
+
+    const business = await sellerAppRepository.findByOwner(userId).catch(() => null);
+    const businessId = business ? String(business._id) : (primary.businessId || primary.applicationId || null);
+
+    const filter = businessId
+      ? { $or: [{ ownerId: userId }, { businessId: String(businessId) }, { applicationId: String(businessId) }] }
+      : { ownerId: userId };
+
+    const shops = await shopRepository.find({ filter, sort: { createdAt: 1 } });
     if (!shops.length) return [primary.toObject ? primary.toObject() : primary];
 
     const rows = await productRepository.countByShops(shops.map((s) => String(s._id)));
     const counts = new Map(rows.map((r) => [String(r._id), r.count]));
     return shops.map((s) => {
-      const plain = s.toObject();
+      const plain = typeof s.toObject === 'function' ? s.toObject() : s;
       plain.productCount = counts.get(String(s._id)) || 0;
       return plain;
     });
@@ -443,7 +463,13 @@ class ShopService {
   async resolveOwnedShop(requester, shopId) {
     if (!requester || !requester.id) throw new ApiError('Authentication required', 401);
 
-    const shops = await shopRepository.find({ filter: { ownerId: requester.id }, sort: { createdAt: 1 } });
+    const business = await sellerAppRepository.findByOwner(requester.id).catch(() => null);
+    const businessId = business ? String(business._id) : null;
+    const filter = businessId
+      ? { $or: [{ ownerId: requester.id }, { businessId }, { applicationId: businessId }] }
+      : { ownerId: requester.id };
+
+    const shops = await shopRepository.find({ filter, sort: { createdAt: 1 } });
     if (!shops.length) throw new ApiError('Business not found', 404);
 
     if (shopId !== undefined && shopId !== null && shopId !== '') {
