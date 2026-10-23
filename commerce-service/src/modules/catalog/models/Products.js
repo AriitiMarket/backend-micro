@@ -4,6 +4,9 @@ const productSchema = new mongoose.Schema({
   name: { type: String, required: [true, 'Please enter your product name!'] },
   description: { type: String, required: [true, 'Please enter your product description!'] },
   category: { type: String, required: [true, 'Please enter your product category!'] },
+  // Optional sub-category within `category` (free text, matched
+  // case-insensitively by the public catalog filter).
+  subcategory: { type: String, default: '' },
   tags: { type: String },
   sku: { type: String, default: '' },
   originalPrice: { type: Number },

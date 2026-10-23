@@ -179,6 +179,8 @@ async function getPublicZones({ cityId } = {}) {
       code: z.code,
       status: z.status,
       lifecycle: z.lifecycle || 'LIVE',
+      portId: z.portId ? String(z.portId) : null,
+      portName: z.portName || '',
       locationIds: (z.locationIds || []).map(String),
       deliveryFee: z.deliveryRules ? (z.deliveryRules.deliveryFee ?? 0) : 0,
       estimatedDeliveryTime: z.deliveryRules ? z.deliveryRules.estimatedDeliveryTime : null,

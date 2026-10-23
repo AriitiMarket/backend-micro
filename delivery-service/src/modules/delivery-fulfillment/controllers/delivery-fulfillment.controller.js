@@ -155,23 +155,28 @@ async function buildDeliveryFilter(query, user) {
     buyerId: undefined,
   });
 
-  if (user) {
-    if (isAdmin(user)) {
-      // Operational access — the filters below apply as requested.
-    } else if (isSeller(user)) {
-      filter.sellerId = user.id;
-    } else if (isBuyer(user)) {
-      filter.buyerId = user.id;
-    } else if (isOperator(user)) {
+  if (user && !isAdmin(user)) {
+    // Tenant scoping is ADDITIVE (see shared/utils/access.js): a multi-actor
+    // account sees the rows of EVERY role it holds. A delivery provider is also
+    // a BUYER in the one-account model, so scoping by buyerId alone left the
+    // rider's OWN deliveries list empty — the provider portal showed an empty
+    // queue even with deliveries assigned to it.
+    const scopes = [];
+    if (isSeller(user)) scopes.push({ sellerId: user.id });
+    if (isOperator(user)) {
       const provider = await resolveProviderForUser(user);
       // An operator without a Provider document sees nothing: `null` matches
       // deliveries whose providerId is unset. The previous '__no_partner__'
       // sentinel could not be cast to an ObjectId and turned the list into a
       // 400 CastError.
-      filter.providerId = provider ? String(provider._id) : null;
-    } else {
-      filter.providerId = null;
+      scopes.push({ providerId: provider ? String(provider._id) : null });
     }
+    if (isBuyer(user)) scopes.push({ buyerId: user.id });
+    if (!scopes.length) scopes.push({ providerId: null });
+    const scope = scopes.length === 1 ? scopes[0] : { $or: scopes };
+    // The status/date/search filters may already carry their own $or, so the
+    // scope is added through $and — the two must never overwrite each other.
+    filter.$and = [...(filter.$and || []), scope];
   }
 
   // Query params may narrow the tenant's own view, never widen it.
@@ -210,4 +215,42 @@ async function getDeliveries(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { createDelivery, getDelivery, getDeliveryHistory, getDeliveryByOrderId, updateStatus, assignDelivery, getDeliveries };
+async function deliverAllBatchOrders(req, res, next) {
+  try {
+    const batchId = req.params.id;
+    const delivery = await deliveriesRepo.findById(batchId);
+    if (!delivery) throw Object.assign(new Error('Batch not found'), { status: 404 });
+
+    // Get all assignments in this batch
+    const assignments = await assignmentsRepo.findByDeliveryId(batchId);
+    const activeAssignments = assignments.filter(a => {
+      const status = normalizeStatus(a.status);
+      return !['delivered', 'cancelled', 'failed'].includes(status);
+    });
+
+    if (activeAssignments.length === 0) {
+      return ok(res, { delivery }, 'No active assignments to deliver');
+    }
+
+    // Process each assignment - deliver all remaining orders
+    const results = [];
+    for (const assignment of activeAssignments) {
+      const proof = assignment.proofOfDelivery || {};
+      const result = await svc.updateStatus(assignment._id, 'delivered', {
+        proofOfDelivery: proof,
+        note: 'Delivered all orders in batch via single action',
+      }, {
+        id: req.user?.id || null,
+        name: req.user?.name || 'Provider',
+        role: req.user?.role || 'PROVIDER',
+      });
+      results.push({ orderId: assignment.orderId, success: result.success });
+    }
+
+    sendAudit({ action: 'BATCH_DELIVER_ALL', adminId: req.user?.id || null, adminName: req.user?.name || 'Provider', targetEntity: 'delivery', targetId: batchId, newValue: { deliveredCount: activeAssignments.length }, ipAddress: req.ip });
+
+    return ok(res, { results, total: activeAssignments.length }, 'Batch delivery completed');
+  } catch (err) { return next(err); }
+}
+
+module.exports = { createDelivery, getDelivery, getDeliveryHistory, getDeliveryByOrderId, updateStatus, assignDelivery, getDeliveries, deliverAllBatchOrders };

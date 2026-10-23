@@ -1,11 +1,10 @@
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 const env = require('./config/env');
 const gatewayOnly = require('./middleware/gatewayOnly');
 const { requestId } = require('../shared/request-context');
-const { notFound, errorHandler } = require('./middleware/errorHandler');
+const { notFound } = require('./middleware/errorHandler');
 
 const { standardErrorHandler } = require('../shared/middleware/standardErrorHandler');
 const shopsRoutes = require('../modules/selling/routes/shops.routes');
@@ -45,6 +44,7 @@ const paymentReconciliationRoutes = require('../modules/fulfillment/routes/payme
 const orderDisputeRoutes = require('../modules/fulfillment/routes/orderDispute.routes');
 const walletsRoutes = require('../modules/fulfillment/routes/wallets.routes');
 const payoutsRoutes = require('../modules/fulfillment/routes/payouts.routes');
+const mediaRoutes = require('../modules/media/routes/media.routes');
 
 const app = express();
 // Trace id first: every log line, every error response and every outbound
@@ -56,7 +56,6 @@ app.use(requestId);
 app.use(cors({ origin: [env.corsOrigin, 'http://localhost:8000'], credentials: false }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(bodyParser.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => res.send('Commerce Service is running'));
 
@@ -162,6 +161,8 @@ app.use('/payment-reconciliation', paymentReconciliationRoutes);
 app.use('/order-dispute', orderDisputeRoutes);
 app.use('/wallet', walletsRoutes);
 app.use('/payout', payoutsRoutes);
+// Standalone single-file image upload (Cloudinary via ImageUploadManager).
+app.use('/media', mediaRoutes);
 app.use('/admin', adminPlatformRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', settingsRoutes);

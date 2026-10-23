@@ -69,10 +69,15 @@ const deliveryRequestSchema = new mongoose.Schema({
 
   // --- Items ---
   items: [{
+    productId: { type: String, default: null },
     name: { type: String, default: '' },
     weight: { type: Number, default: 0 },
     quantity: { type: Number, default: 1 },
+    unit: { type: String, default: 'pcs' },
+    condition: { type: String, default: 'good' },
     value: { type: Number, default: 0 },
+    image: { type: String, default: '' },
+    images: { type: [String], default: [] },
   }],
   totalValue: { type: Number, default: 0 },
   totalWeight: { type: Number, default: 0 },

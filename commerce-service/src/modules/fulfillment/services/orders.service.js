@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const orderRepository = require('../repositories/orders.repository');
 const inventoryService = require('./inventory.service');
 const orderStateService = require('./orderState.service');
+const orderDeliveryService = require('./orderDelivery.service');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const notificationService = require('../../../shared/services/notification.service');
 const productRepository = require('../../catalog/repositories/products.repository');
@@ -20,6 +21,7 @@ const { isProductPubliclyVisible } = require('../../../shared/utils/productVisib
 const promotionsService = require('../../promotions/services/promotions.service');
 const { ORDER_STATUSES, normalizeStatus } = require('../constants/orderStatuses');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 async function notifyOrderStatus(order, previousStatus, nextStatus) {
   try {
@@ -253,9 +255,17 @@ class OrdersService {
             isPlatformWide: promo.promotion.isPlatformWide,
           } : undefined,
           shippingAddress: orderData.shippingAddress || {},
-          destination: orderData.destination || {},
-          deliveryZoneId: orderData.deliveryZoneId || null,
-          deliveryZoneName: orderData.deliveryZoneName || '',
+          destination: {
+            ...(orderData.destination || {}),
+            deliveryZoneId: orderData.deliveryZoneId || orderData.destination?.deliveryZoneId || null,
+            deliveryZoneName: orderData.deliveryZoneName || orderData.destination?.deliveryZoneName || '',
+            portId: orderData.portId || orderData.destination?.portId || null,
+            portName: orderData.portName || orderData.destination?.portName || '',
+          },
+          deliveryZoneId: orderData.deliveryZoneId || orderData.destination?.deliveryZoneId || null,
+          deliveryZoneName: orderData.deliveryZoneName || orderData.destination?.deliveryZoneName || '',
+          portId: orderData.portId || orderData.destination?.portId || null,
+          portName: orderData.portName || orderData.destination?.portName || '',
           sectorId: orderData.sectorId || orderData.destination?.sectorId || null,
           locationId: orderData.locationId || orderData.destination?.sectorId || null,
           paymentInfo: orderData.paymentInfo || {},
@@ -267,6 +277,12 @@ class OrdersService {
           order.pickupCode = pickupCode;
           delete order.pickupCodeHash;
         }
+        // The ORDER ↔ DELIVERY bridge row is written HERE, at checkout, with
+        // the delivery brief (items, pickup, destination, declared value) that
+        // the Delivery handoff and every order view read. Written later it
+        // would be an empty shell — the Delivery Service events that create it
+        // know nothing about the parcel.
+        await orderDeliveryService.linkForOrder(order, order.sellerShipments?.[0], order.destination);
         createdOrders.push(order);
       }
 
@@ -334,7 +350,7 @@ class OrdersService {
         offset: validatedOffset,
         sort: { [sortBy]: sortOrder },
       }),
-      orderRepository.countByFilter(filter),
+      orderRepository.count(filter),
     ]);
 
     const page = Math.floor(validatedOffset / validatedLimit) + 1;
@@ -384,7 +400,17 @@ class OrdersService {
       if (!order) {
         throw new ApiError('Order not found', 404);
       }
-      if (order.paymentStatus !== 'CONFIRMED') throw new ApiError('Order cannot be approved before payment is confirmed', 409);
+      // A PREPAID order must be paid before the seller accepts it. A Cash On
+      // Delivery order is different by design: the money is collected by the
+      // rider at handover, so the seller accepts it while the payment is still
+      // PENDING and the settlement happens on delivery. Gating COD here made
+      // every COD checkout impossible to accept — a deadlock, because the
+      // payment only turns CONFIRMED once the delivery completes.
+      const paymentMethod = String(order.paymentInfo?.method || order.paymentInfo?.type || '').toUpperCase();
+      const cashOnDelivery = ['COD', 'CASH ON DELIVERY', 'CASHONDELIVERY'].includes(paymentMethod);
+      if (order.paymentStatus !== 'CONFIRMED' && !cashOnDelivery) {
+        throw new ApiError('Order cannot be approved before payment is confirmed', 409);
+      }
 
       // Get shop and buyer info
       const shop = await shopRepository.findById(order.shopId);
@@ -930,7 +956,8 @@ class OrdersService {
    */
   async getBuyerOrders(userId) {
     if (!userId) throw new ApiError('User ID required', 400);
-    return orderRepository.findByBuyerId(userId);
+    // The repository reads a buyer's orders by `buyerId` through findByUser().
+    return orderRepository.findByUser(String(userId));
   }
 
   /**
@@ -1036,8 +1063,6 @@ class OrdersService {
    * @returns {Promise<Object>} { processed, succeeded, failed, abandoned }
    */
   async recoverDeliveryHandoffs(limit = 100) {
-    const orderDeliveryService = require('./orderDelivery.service');
-
     // Find orders that are CONFIRMED but don't have a delivery request yet
     const orders = await orderRepository.find({
       filter: {
@@ -1070,52 +1095,16 @@ class OrdersService {
       }
 
       try {
-        // Mark as pending handoff
-        await orderDeliveryService.queueHandoff(orderId);
+        // The SAME handoff the seller confirmation sends — one brief, one
+        // financial snapshot, one address snapshot.
+        const result = await orderStateService.deliverHandoff(order);
 
-        // Build delivery request payload
-        const shipment = order.sellerShipments?.[0] || {};
-        const destination = order.destination || {};
-
-        const handoffData = {
-          orderId,
-          orderGroupId: order.orderGroupId,
-          sellerId: order.sellerId || shipment.sellerId,
-          buyerId: order.buyerId,
-          shopId: order.shopId || shipment.shopId,
-          paymentMethod: order.paymentInfo?.method || 'COD',
-          paymentAmount: order.totalPrice,
-          // Keep recovery's financial snapshot identical to the first handoff;
-          // otherwise a retried order silently gets zero provider earnings.
-          deliveryFee: Number(order.shippingFee) || 0,
-          deliveryFeeRuleId: order.deliveryFeeRuleId || null,
-          delivererShareRate: Number(order.delivererShareRate ?? 80),
-          items: (order.cart || []).map(item => ({
-            productId: item.productId,
-            name: item.name,
-            quantity: item.quantity,
-            value: item.discountPrice || item.price || 0,
-          })),
-          origin: shipment.origin || {},
-          destination: destination,
-          idempotencyKey: `order:${orderId}`,
-        };
-
-        // Send to Delivery Service
-        const result = await deliveryClient.createDeliveryRequest(handoffData);
-
-        if (result.ok && result.body?.deliveryRequestId) {
-          // Successfully created delivery request
-          await orderDeliveryService.attachRequest(orderId, result.body.deliveryRequestId);
+        if (result.ok) {
           succeeded++;
-        } else if (result.status >= 400 && result.status < 500) {
-          // Client error - permanent failure, mark as abandoned
-          await orderDeliveryService.markHandoffAbandoned(orderId);
-          console.warn(`[recoverDeliveryHandoffs] Order ${orderId} handoff abandoned: ${result.body?.message || 'Delivery service rejected'}`);
+        } else if (result.reason === 'rejected') {
           abandoned++;
         } else {
           // Server error or network issue - will retry next sweep
-          await orderDeliveryService.waitForOrderApproval(orderId);
           failed++;
         }
       } catch (err) {
@@ -1127,6 +1116,82 @@ class OrdersService {
     }
 
     return { processed: orders.length, succeeded, failed, abandoned };
+  }
+
+  /**
+   * Buyer confirms receipt of a delivered order.
+   * @param {string} orderId
+   * @param {Object} actor - Authenticated user { id, role, ... }
+   * @returns {Promise<Object>} Updated order document
+   */
+  async confirmReceipt(orderId, actor) {
+    let order = await orderRepository.findById(orderId);
+    let orderGroupId = order?.orderGroupId;
+
+    if (!order) {
+      const ordersInGroup = await orderRepository.findByOrderGroupId(orderId);
+      if (ordersInGroup && ordersInGroup.length > 0) {
+        orderGroupId = orderId;
+        order = ordersInGroup[0];
+      }
+    }
+
+    if (!order) throw new ApiError('Order not found', 404);
+
+    const actorId = String(actor?.id || actor?.sub || '');
+    const isBuyerOfOrder = String(order.buyerId || order.user?._id || order.user?.id || '') === actorId;
+    if (!isBuyerOfOrder && !isAdmin(actor)) {
+      throw new ApiError('You can only confirm receipt for your own order', 403);
+    }
+
+    const currentStatus = normalizeStatus(order.status);
+    if (currentStatus !== ORDER_STATUSES.DELIVERED) {
+      throw new ApiError(`Order must be in Delivered status to confirm receipt (current status: ${currentStatus})`, 409);
+    }
+
+    // Consolidated confirmation: if this order belongs to an order group,
+    // confirm receipt for all sub-orders of this buyer in the group that are delivered.
+    if (orderGroupId) {
+      const groupOrders = await orderRepository.findByOrderGroupId(orderGroupId);
+      for (const ord of groupOrders) {
+        if (String(ord.buyerId) !== String(order.buyerId)) continue;
+        const status = normalizeStatus(ord.status);
+        if (status === ORDER_STATUSES.DELIVERED && !ord.buyerConfirmedReceipt) {
+          ord.buyerConfirmedReceipt = true;
+          ord.buyerConfirmedAt = new Date();
+          if (!ord.timeline) ord.timeline = [];
+          ord.timeline.push({
+            status: ORDER_STATUSES.DELIVERED,
+            previousStatus: status,
+            timestamp: new Date(),
+            actor: actorId,
+            actorRole: 'BUYER',
+            reason: 'Buyer confirmed receipt of consolidated order',
+          });
+          await ord.save();
+        }
+      }
+      return await orderRepository.findById(order._id);
+    }
+
+    if (order.buyerConfirmedReceipt) {
+      return order; // Idempotent
+    }
+
+    order.buyerConfirmedReceipt = true;
+    order.buyerConfirmedAt = new Date();
+    if (!order.timeline) order.timeline = [];
+    order.timeline.push({
+      status: ORDER_STATUSES.DELIVERED,
+      previousStatus: currentStatus,
+      timestamp: new Date(),
+      actor: actorId,
+      actorRole: 'BUYER',
+      reason: 'Buyer confirmed receipt of order',
+    });
+
+    await order.save();
+    return order;
   }
 }
 

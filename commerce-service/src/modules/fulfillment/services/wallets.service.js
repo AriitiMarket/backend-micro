@@ -41,8 +41,7 @@ class WalletService {
    */
   async getSellerWallet(sellerId) {
     if (!sellerId) throw new ApiError('Seller ID required', 400);
-    const wallet = await walletsRepository.getWalletBySellerId(sellerId);
-    if (!wallet) throw new ApiError('Wallet not found', 404);
+    const wallet = await this.getOrCreateWallet(sellerId);
     return wallet;
   }
 

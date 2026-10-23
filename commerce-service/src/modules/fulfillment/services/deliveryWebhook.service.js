@@ -92,7 +92,13 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note,
         throw err;
       }
       try {
-        await orderService.deductInventoryOnPayment(order.cart || [], orderId);
+        // The seller's confirmation ALREADY moved the units (reserved → sold).
+        // Deducting again here would charge the seller twice for one COD
+        // order, so the inventory is only touched when the order was never
+        // confirmed and its units are still sitting in the reservation.
+        if (normalizeStatus(order.status) === ORDER_STATUSES.PROCESSING) {
+          await orderService.deductInventoryOnPayment(order.cart || [], orderId);
+        }
         await paymentRepository.upsertByOrder(orderId, {
           userId: String(order.buyerId || order.user?.id || order.user?._id || ''),
           sellerId: String(order.sellerId || ''),
@@ -109,12 +115,23 @@ async function notifyStatusUpdate(deliveryId, orderId, status, providerId, note,
           paymentInfo: { ...(order.paymentInfo?.toObject?.() || order.paymentInfo || {}), status: 'CONFIRMED' },
         });
 
-        // Compute seller-level allocations from the confirmed payment. Idempotent:
-        // a duplicate webhook finds paymentStatus already CONFIRMED (line 78) and
-        // never re-enters this block, so allocations are created exactly once.
+        // Compute seller-level allocations from the confirmed payment and credit wallets.
         try {
           const confirmedOrder = await ordersRepository.findById(orderId);
-          await allocationService.allocateOrder(confirmedOrder, null);
+          const allocations = await allocationService.allocateOrder(confirmedOrder, null);
+          const walletsService = require('./wallets.service');
+          for (const alloc of (allocations || [])) {
+            try {
+              await walletsService.creditFromAllocation(
+                orderId,
+                alloc.sellerId,
+                alloc,
+                { audit: { source: 'delivery_cod_settlement', deliveryId: String(deliveryId) } }
+              );
+            } catch (walletErr) {
+              console.error('[deliveryWebhook] wallet credit failed for seller', alloc.sellerId, walletErr.message);
+            }
+          }
         } catch (allocErr) {
           // Allocation must not fail a confirmed payment; log and continue.
           console.error('[deliveryWebhook] allocation failed for order', orderId, allocErr.message);

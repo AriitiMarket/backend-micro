@@ -154,4 +154,49 @@ async function setPortStatus(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { getPorts, getPort, getPortStats, createPort, updatePort, setPortStatus };
+async function getPublicPorts(req, res, next) {
+  try {
+    const { zoneId, locationId, status = 'active' } = req.query;
+    const filter = { status };
+    if (zoneId) filter.zoneId = zoneId;
+    if (locationId) filter.locationId = locationId;
+    const ports = await svc.getPorts(filter, { limit: 100 });
+    return ok(res, {
+      ports: ports.map((p) => ({
+        _id: p._id,
+        id: String(p._id),
+        name: p.name,
+        locationId: p.locationId,
+        zoneId: p.zoneId,
+        status: p.status,
+        description: p.description,
+        contactPhone: p.contactPhone,
+        operatingHours: p.operatingHours,
+      })),
+      count: ports.length,
+    });
+  } catch (err) { return next(err); }
+}
+
+async function getPortsByZone(req, res, next) {
+  try {
+    const { zoneId } = req.params;
+    const ports = await svc.getPorts({ zoneId, status: 'active' }, { limit: 100 });
+    return ok(res, {
+      ports: ports.map((p) => ({
+        _id: p._id,
+        id: String(p._id),
+        name: p.name,
+        locationId: p.locationId,
+        zoneId: p.zoneId,
+        status: p.status,
+        description: p.description,
+        contactPhone: p.contactPhone,
+        operatingHours: p.operatingHours,
+      })),
+      count: ports.length,
+    });
+  } catch (err) { return next(err); }
+}
+
+module.exports = { getPorts, getPort, getPortStats, createPort, updatePort, setPortStatus, getPublicPorts, getPortsByZone };

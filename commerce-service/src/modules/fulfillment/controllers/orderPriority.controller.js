@@ -4,7 +4,7 @@ class OrderPriorityController {
   async setPriority(req, res) {
     try {
       const { orderId, priority, reason } = req.body;
-      const userId = req.user?._id;
+      const userId = req.user?.id || req.user?._id || req.user?.sub || 'SYSTEM';
 
       const result = await orderPriorityService.setPriority(orderId, priority, reason, { userId });
       res.status(201).json({ success: true, data: result });
@@ -35,7 +35,7 @@ class OrderPriorityController {
   async resetPriority(req, res) {
     try {
       const { orderId } = req.params;
-      const userId = req.user?._id;
+      const userId = req.user?.id || req.user?._id || req.user?.sub || 'SYSTEM';
 
       const result = await orderPriorityService.resetPriority(orderId, { userId });
       res.status(200).json({ success: true, data: result });

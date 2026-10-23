@@ -11,6 +11,7 @@ async function getPublicAllProducts(req, res, next) {
     const result = await publicProductService.getAllProducts({
       search: req.query.search || req.query.q,
       category: req.query.category,
+      subcategory: req.query.subcategory,
       shopId: req.query.shopId || req.query.shop,
       regionId: req.query.regionId,
       minPrice: req.query.minPrice,

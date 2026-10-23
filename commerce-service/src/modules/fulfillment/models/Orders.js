@@ -41,6 +41,12 @@ const sellerShipmentSchema = new mongoose.Schema({
 
 // Order references identity users via buyerId/sellerId.
 const orderSchema = new mongoose.Schema({
+  // Human-readable order reference (ORD-<epoch ms>-<random>). The database
+  // carries a UNIQUE index on this field, so it has to be populated on EVERY
+  // insert: an order created without it collides with the first order that
+  // lacks one and the whole checkout fails with a duplicate-key error.
+  orderNumber: { type: String, default: null },
+
   // --- Core order data ---
   cart: { type: Array, required: true },
   user: { type: Object, required: true },
@@ -102,6 +108,8 @@ const orderSchema = new mongoose.Schema({
   paidAt: { type: Date, default: null },
   deliveredAt: { type: Date },
   cancelledAt: { type: Date },
+  buyerConfirmedReceipt: { type: Boolean, default: false },
+  buyerConfirmedAt: { type: Date, default: null },
 
   // --- Customer destination (historical snapshot at time of order) ---
   destination: {
@@ -122,6 +130,8 @@ const orderSchema = new mongoose.Schema({
     // Legacy orders predate the field and carry null.
     deliveryZoneId: { type: String, default: null, index: true },
     deliveryZoneName: { type: String, default: '' },
+    portId: { type: String, default: null, index: true },
+    portName: { type: String, default: '' },
 
     // Full address details
     fullAddress: { type: String, default: '' },
@@ -149,6 +159,10 @@ const orderSchema = new mongoose.Schema({
   shopId: { type: String, index: true, default: null },
 
   // Location & Sector tracking for admin scope filtering
+  deliveryZoneId: { type: String, index: true, default: null },
+  deliveryZoneName: { type: String, default: '' },
+  portId: { type: String, index: true, default: null },
+  portName: { type: String, default: '' },
   sectorId: {
     type: String,
     index: true,
@@ -170,6 +184,16 @@ const orderSchema = new mongoose.Schema({
 // the last modification without callers having to set the field themselves.
 orderSchema.pre('save', function assignUpdatedAt(next) {
   this.updatedAt = new Date();
+  next();
+});
+
+// Give every order its human-readable reference before it is written. The
+// unique index on `orderNumber` makes this mandatory: two orders without a
+// number would collide and the second checkout would be rejected.
+orderSchema.pre('validate', function assignOrderNumber(next) {
+  if (!this.orderNumber) {
+    this.orderNumber = `ORD-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  }
   next();
 });
 

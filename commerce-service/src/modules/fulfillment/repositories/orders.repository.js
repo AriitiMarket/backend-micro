@@ -20,6 +20,11 @@ class OrderRepository {
     return Order.findOne({ requestId: String(requestId) });
   }
 
+  findByOrderGroupId(orderGroupId) {
+    if (!orderGroupId) return Promise.resolve([]);
+    return Order.find({ orderGroupId: String(orderGroupId) }).sort({ createdAt: 1 });
+  }
+
   findByIdLean(id) {
     if (!isValidObjectId(id)) return Promise.resolve(null);
     return Order.findById(id).lean();
@@ -27,9 +32,21 @@ class OrderRepository {
   findByUser(userId) { return Order.find({ buyerId: userId }).sort({ createdAt: -1 }); }
   findBySeller(sellerId) { return Order.find({ sellerId }).sort({ createdAt: -1 }); }
 
-  // Aliases for clarity in orders service layer
-  findByBuyerId(userId) { return Order.find({ buyerId: userId }).sort({ createdAt: -1 }); }
-  findBySellerId(sellerId) { return Order.find({ sellerId }).sort({ createdAt: -1 }); }
+  /**
+   * Orders for a seller addressed by seller identity user id or shop id:
+   * Checks top-level `sellerId`, top-level `shopId`, or embedded `sellerShipments.shopId`.
+   */
+  findBySellerId(sellerId) {
+    const key = String(sellerId);
+    return Order.find({
+      $or: [
+        { sellerId: key },
+        { shopId: key },
+        { 'sellerShipments.shopId': key },
+        { 'sellerShipments.sellerId': key },
+      ],
+    }).sort({ createdAt: -1 });
+  }
 
   /**
    * Orders for a seller addressed by EITHER id shape:
@@ -40,8 +57,35 @@ class OrderRepository {
   findBySellerOrShop(id) {
     const key = String(id);
     return Order.find({
-      $or: [{ sellerId: key }, { 'sellerShipments.shopId': key }],
+      $or: [
+        { sellerId: key },
+        { shopId: key },
+        { 'sellerShipments.shopId': key },
+        { 'sellerShipments.sellerId': key },
+      ],
     }).sort({ createdAt: -1 });
+  }
+
+  /**
+   * The ids of a seller's orders, and nothing else.
+   *
+   * Used to scope a seller's breach list to their own orders without loading
+   * every order document (carts, snapshots, totals) into memory just to read
+   * `_id` off each one.
+   */
+  findIdsBySellerOrShop(id) {
+    const key = String(id);
+    return Order.find({
+      $or: [
+        { sellerId: key },
+        { shopId: key },
+        { 'sellerShipments.shopId': key },
+        { 'sellerShipments.sellerId': key },
+      ],
+    })
+      .select('_id')
+      .lean()
+      .then((orders) => orders.map((order) => String(order._id)));
   }
   updateStatus(id, status) {
     return Order.findByIdAndUpdate(id, { status, updatedAt: new Date() }, { new: true });

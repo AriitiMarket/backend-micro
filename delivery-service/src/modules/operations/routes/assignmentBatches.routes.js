@@ -25,11 +25,12 @@ router.post('/batches/:id/reassign', authenticate, authorize('ADMIN'), ctrl.reas
 router.post('/batches/:id/cancel', authenticate, authorize('ADMIN'), ctrl.cancelBatchAssignment);
 
 // --- Rider ---
-router.get('/mine', authenticate, ctrl.listMyAssignments);
-router.post('/batches/:id/respond', authenticate, ctrl.respondToBatch);
-router.post('/batches/:id/pickup/start', authenticate, ctrl.startPickup);
-router.post('/batches/:id/pickup/:sellerId/confirm', authenticate, ctrl.confirmPickup);
-router.post('/batches/:id/transit/start', authenticate, ctrl.startTransit);
-router.post('/batches/:id/orders/:orderId/deliver', authenticate, ctrl.confirmDelivery);
+router.get('/mine', authenticate, authorize('PROVIDER'), ctrl.listMyAssignments);
+router.post('/batches/:id/respond', authenticate, authorize('PROVIDER'), ctrl.respondToBatch);
+router.post('/batches/:id/pickup/start', authenticate, authorize('PROVIDER'), ctrl.startPickup);
+router.post('/batches/:id/pickup/:sellerId/confirm', authenticate, authorize('PROVIDER'), ctrl.confirmPickup);
+router.post('/batches/:id/transit/start', authenticate, authorize('PROVIDER'), ctrl.startTransit);
+router.post('/batches/:id/orders/:orderId/deliver', authenticate, authorize('PROVIDER'), ctrl.confirmDelivery);
+router.post('/batches/:id/deliver-all', authenticate, authorize('PROVIDER'), ctrl.deliverAllBatchOrders);
 
 module.exports = router;

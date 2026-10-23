@@ -4,6 +4,7 @@ const assignmentsRepo = require('../repositories/assignments.repository');
 const providersRepo = require('../../providers/repositories/providers.repository');
 const providersService = require('../../providers/services/providers.service');
 const deliveriesRepo = require('../../delivery-fulfillment/repositories/delivery.repository');
+const requestsRepo = require('../../delivery-fulfillment/repositories/delivery-request.repository');
 const trackingRepo = require('../../tracking/repositories/tracking.repository');
 const { transitionDeliveryStatus } = require('../../delivery-fulfillment/services/delivery-status.service');
 const {
@@ -92,10 +93,32 @@ function buildPickupPlan(deliveries) {
         sellerName: d.origin && d.origin.shopName ? d.origin.shopName : d.sellerId,
         shopName: d.origin ? d.origin.shopName || '' : '',
         address: d.origin || null,
+        contactPhone: d.origin?.contactPhone || '',
+        contactName: d.origin?.contactName || '',
         orderIds: [],
+        items: [],
+        discrepancies: [],
+        notes: '',
       });
     }
-    bySeller.get(key).orderIds.push(d.orderId);
+    const stop = bySeller.get(key);
+    stop.orderIds.push(d.orderId);
+    if (Array.isArray(d.items) && d.items.length > 0) {
+      d.items.forEach((item) => {
+        stop.items.push({
+          orderId: d.orderId,
+          productId: item.productId || item._id,
+          name: item.name || 'Item',
+          quantity: Number(item.quantity) || 1,
+          collectedQuantity: Number(item.quantity) || 1,
+          unit: item.unit || 'pcs',
+          condition: item.condition || 'good',
+          image: item.image || (Array.isArray(item.images) ? item.images[0] : '') || '',
+          images: Array.isArray(item.images) ? item.images : (item.image ? [item.image] : []),
+          value: Number(item.value) || 0,
+        });
+      });
+    }
   });
   return [...bySeller.values()].map((stop, index) => ({
     sequence: index + 1,
@@ -198,6 +221,12 @@ async function createBatch({ deliveryIds, providerId, serviceId, routeId, notes,
   for (const id of ids) {
     const delivery = await deliveriesRepo.findById(id);
     assertDeliveryEligible(delivery);
+    if (!delivery.items || delivery.items.length === 0) {
+      const req = await requestsRepo.findByOrderId(delivery.orderId).catch(() => null);
+      if (req && Array.isArray(req.items) && req.items.length > 0) {
+        delivery.items = req.items;
+      }
+    }
     deliveries.push(delivery);
   }
 
@@ -436,7 +465,7 @@ async function startPickup(id, actor) {
 }
 
 /** Confirm pickup for a whole seller stop. */
-async function confirmPickupStop(id, sellerId, actor) {
+async function confirmPickupStop(id, sellerId, actor, verificationData = {}) {
   const batch = await getBatch(id);
   if (batch.status === 'picked_up' && batch.pickupPlan.every((s) => s.completed)) {
     await syncDeliveryStatuses(batch);
@@ -450,6 +479,32 @@ async function confirmPickupStop(id, sellerId, actor) {
 
   stop.completed = true;
   stop.completedAt = new Date();
+
+  if (verificationData && typeof verificationData === 'object') {
+    if (Array.isArray(verificationData.discrepancies)) {
+      stop.discrepancies = verificationData.discrepancies;
+    }
+    if (verificationData.collectedQuantities && typeof verificationData.collectedQuantities === 'object') {
+      for (const item of (stop.items || [])) {
+        const key = String(item.productId || item.name);
+        if (verificationData.collectedQuantities[key] !== undefined) {
+          item.collectedQuantity = Number(verificationData.collectedQuantities[key]);
+        }
+      }
+    }
+    if (verificationData.condition) {
+      for (const item of (stop.items || [])) {
+        if (typeof verificationData.condition === 'string') {
+          item.condition = verificationData.condition;
+        } else if (verificationData.condition[String(item.productId || item.name)]) {
+          item.condition = verificationData.condition[String(item.productId || item.name)];
+        }
+      }
+    }
+    if (verificationData.notes) {
+      stop.notes = String(verificationData.notes);
+    }
+  }
 
   // Mark the orders collected at this stop as picked up.
   for (const orderId of stop.orderIds) {

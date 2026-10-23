@@ -10,8 +10,9 @@
 const assert = require('assert');
 const mongoose = require('mongoose');
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
+const { testDbUri } = require('../../../shared/utils/testDb');
 
-const DB_URL = process.env.MONGODB_URI_TEST || 'mongodb://localhost:27017/ariti_commerce_shops_test';
+const DB_URL = process.env.MONGODB_URI_TEST || testDbUri('ariti_commerce_shops_test');
 
 process.env.MONGODB_URI = DB_URL;
 

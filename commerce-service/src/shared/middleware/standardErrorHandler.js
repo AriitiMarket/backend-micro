@@ -104,7 +104,21 @@ function standardErrorHandler(err, req, res, next) {
     const { statusCode, response } = formatErrorResponse(err);
     return res.status(statusCode).json(response);
   }
-  
+
+  // Multer upload errors. `err.name === 'MulterError'` and `err.code` carries the
+  // specific limit (LIMIT_FILE_SIZE, LIMIT_FILE_COUNT, …). Without this branch a
+  // file over the 5MB cap fell through to the generic 500 handler, so an
+  // oversized upload looked like a server fault instead of a client error.
+  if (err && err.name === 'MulterError') {
+    const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+    const status = tooLarge ? 413 : 400;
+    const message = tooLarge
+      ? 'File too large: the maximum size is 5MB'
+      : `Upload failed: ${err.message || err.code}`;
+    const { response } = formatErrorResponse(new ApiError(message, status, tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_ERROR'));
+    return res.status(status).json(response);
+  }
+
   // Generic errors
   const { statusCode, response } = formatErrorResponse(
     new ApiError(

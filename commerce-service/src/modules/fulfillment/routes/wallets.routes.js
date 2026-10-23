@@ -248,6 +248,16 @@ router.post(
   }
 );
 
+// ADMIN: Release pending balance to available balance
+router.post(
+  '/admin/wallets/:walletId/release',
+  authenticate,
+  authorize('ADMIN'),
+  async (req, res) => {
+    await walletsController.releasePending(req, res);
+  }
+);
+
 // ADMIN: Export wallet data
 router.get(
   '/admin/wallets/export',

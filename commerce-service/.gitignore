@@ -35,6 +35,14 @@ public/uploads/
 media/
 assets/uploads/
 
+# The `media/` rule above targets RUNTIME upload folders, but it also matches
+# the source directories named `media` — `src/modules/media` (the upload routes
+# mounted at /media) and `src/shared/media` (the upload/CDN managers). Those
+# are application source and have to stay tracked, otherwise a fresh checkout
+# crashes on `require('../modules/media/routes/media.routes')`.
+!src/modules/media/
+!src/shared/media/
+
 # --- OS & editor ---
 .DS_Store
 Thumbs.db

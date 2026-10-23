@@ -39,7 +39,6 @@ class PaymentLedgerService {
       // Get payment to verify it exists and has orderId
       const payment = await paymentRepository.findById(paymentId);
       if (!payment) {
-        await session.abortTransaction();
         throw new ApiError('Payment not found', 404);
       }
 
@@ -73,7 +72,9 @@ class PaymentLedgerService {
       await session.commitTransaction();
       return ledgerEntry;
     } catch (err) {
-      await session.abortTransaction();
+      if (session?.inTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
       throw err;
     } finally {
       await session.endSession();
