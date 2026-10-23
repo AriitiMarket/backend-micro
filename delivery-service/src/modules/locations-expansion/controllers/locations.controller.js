@@ -1,6 +1,11 @@
+const mongoose = require('mongoose');
 const svc = require('../services/locations.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
+
+function isValidId(id) {
+  return id && id !== 'undefined' && id !== 'null' && mongoose.isValidObjectId(id);
+}
 
 async function createLocation(req, res, next) {
   try {
@@ -12,7 +17,13 @@ async function createLocation(req, res, next) {
 }
 
 async function getLocation(req, res, next) {
-  try { return ok(res, { location: await svc.getLocation(req.params.id) }); }
+  try {
+    const { id } = req.params;
+    if (!isValidId(id)) {
+      return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Location not found', errors: [] });
+    }
+    return ok(res, { location: await svc.getLocation(id) });
+  }
   catch (err) { return next(err); }
 }
 
@@ -44,7 +55,12 @@ async function activateLocation(req, res, next) {
 }
 
 async function getChildren(req, res, next) {
-  try { const c = await svc.getChildren(req.params.id); return ok(res, { children: c, count: c.length }); }
+  try {
+    const { id } = req.params;
+    if (!isValidId(id)) return ok(res, { children: [], count: 0 });
+    const c = await svc.getChildren(id);
+    return ok(res, { children: c, count: c.length });
+  }
   catch (err) { return next(err); }
 }
 
@@ -53,7 +69,12 @@ async function getLocations(req, res, next) {
     const { type, parentId, q, status, serviceable, port, expansionStatus, page = 1, limit = 50 } = req.query;
     const filter = {};
     if (type) filter.type = type;
-    if (parentId) filter.parentId = parentId;
+    if (parentId && parentId !== 'undefined' && parentId !== 'null') {
+      if (!isValidId(parentId)) {
+        return ok(res, { locations: [], count: 0, total: 0, page: 1, limit: 50, totalPages: 0 });
+      }
+      filter.parentId = parentId;
+    }
     if (status === 'active') filter.isActive = true;
     else if (status === 'inactive') filter.isActive = false;
     else if (status !== 'all') filter.isActive = true;
@@ -90,7 +111,12 @@ async function searchLocations(req, res, next) {
 }
 
 async function getAncestors(req, res, next) {
-  try { const a = await svc.getAncestors(req.params.id); return ok(res, { ancestors: a, count: a.length }); }
+  try {
+    const { id } = req.params;
+    if (!isValidId(id)) return ok(res, { ancestors: [], count: 0 });
+    const a = await svc.getAncestors(id);
+    return ok(res, { ancestors: a, count: a.length });
+  }
   catch (err) { return next(err); }
 }
 

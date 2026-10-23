@@ -154,12 +154,24 @@ async function setPortStatus(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+const mongoose = require('mongoose');
+
+function isValidId(id) {
+  return id && id !== 'undefined' && id !== 'null' && mongoose.isValidObjectId(id);
+}
+
 async function getPublicPorts(req, res, next) {
   try {
     const { zoneId, locationId, status = 'active' } = req.query;
     const filter = { status };
-    if (zoneId) filter.zoneId = zoneId;
-    if (locationId) filter.locationId = locationId;
+    if (zoneId && zoneId !== 'undefined' && zoneId !== 'null') {
+      if (!isValidId(zoneId)) return ok(res, { ports: [], count: 0 });
+      filter.zoneId = zoneId;
+    }
+    if (locationId && locationId !== 'undefined' && locationId !== 'null') {
+      if (!isValidId(locationId)) return ok(res, { ports: [], count: 0 });
+      filter.locationId = locationId;
+    }
     const ports = await svc.getPorts(filter, { limit: 100 });
     return ok(res, {
       ports: ports.map((p) => ({
@@ -181,6 +193,9 @@ async function getPublicPorts(req, res, next) {
 async function getPortsByZone(req, res, next) {
   try {
     const { zoneId } = req.params;
+    if (!isValidId(zoneId)) {
+      return ok(res, { ports: [], count: 0 });
+    }
     const ports = await svc.getPorts({ zoneId, status: 'active' }, { limit: 100 });
     return ok(res, {
       ports: ports.map((p) => ({
