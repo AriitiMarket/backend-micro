@@ -27,7 +27,18 @@ const ENDPOINT_PERMISSIONS = {
   'POST /auth/revoke': ['*'],
   'POST /auth/register': ['*'],
   'POST /auth/register/:role': ['*'],
+  'POST /auth/register/BUYER': ['*'],
+  'POST /auth/register/SELLER': ['*'],
+  'POST /auth/register/PROVIDER': ['*'],
+  'POST /auth/register/buyer': ['*'],
+  'POST /auth/register/seller': ['*'],
+  'POST /auth/register/provider': ['*'],
   'POST /auth/verify-2fa': ['*'],
+  'POST /auth/resend-2fa-code': ['*'],
+  'POST /auth/forgot-password': ['*'],
+  'GET /auth/verify-reset-token': ['*'],
+  'POST /auth/verify-reset-token': ['*'],
+  'POST /auth/reset-password': ['*'],
   'GET /user/getuser': ['*'],
 
   // ── User 2FA Management ──
@@ -90,64 +101,172 @@ const ENDPOINT_PERMISSIONS = {
   'GET /admin/users': ['*'],
   'GET /admin/users/:id': ['*'],
   'PUT /admin/users/:id/status': ['*'],
+  'POST /admin/users/:id/reset-2fa': ['users.manage'],
+  'PUT /admin/users/:id/role': ['admin_roles.manage'],
+  'PUT /admin/users/:id/scope': ['users.manage'],
+  'GET /admin/users/:id/scope': ['users.view'],
+  'GET /admin/stats': ['*'],
+  'GET /admin/pending-stats': ['*'],
   'GET /admin/sellers': ['*'],
   'GET /admin/sellers/:id': ['*'],
   'GET /admin/businesses': ['*'],
   'GET /admin/businesses/:id': ['*'],
+  'GET /admin/businesses/:id/stats': ['*'],
   'POST /admin/businesses/:id/approve': ['*'],
   'POST /admin/businesses/:id/reject': ['*'],
   'GET /admin/shops': ['*'],
+  'GET /admin/shops/:id': ['*'],
   'GET /shop/admin/shops': ['*'],
   'GET /shop/admin/shops/pending': ['*'],
+  'POST /shop/admin/shops/:id/approve': ['*'],
+  'POST /shop/admin/shops/:id/reject': ['*'],
+  'POST /shop/admin/shops/:id/suspend': ['*'],
+  'POST /shop/admin/shops/:id/activate': ['*'],
+  'PUT /shop/admin/shops/:id/coverage': ['*'],
+  'PATCH /shop/admin/shops/:id/public': ['*'],
   'GET /order/admin': ['*'],
   'GET /order/admin/:id': ['*'],
   'GET /admin/orders': ['*'],
+  'GET /admin/orders/:id': ['*'],
+  'PATCH /admin/orders/:id': ['*'],
+  'PUT /admin/orders/:id/status': ['*'],
+  'GET /admin/orders/:id/pickup-delivery': ['*'],
+  'GET /admin/operations': ['*'],
+  'GET /admin/operations/:stage': ['*'],
   'PATCH /order/admin/:id': ['*'],
   'GET /disputes': ['*'],
+  'GET /disputes/:id': ['*'],
   'PATCH /disputes/:id/status': ['*'],
+  'POST /disputes/:id/resolve': ['*'],
+  'POST /disputes/:id/message': ['*'],
+  'GET /disputes/:id/messages': ['*'],
 
-  // ── Delivery Operations (both roles) ──
+  // ── Delivery Operations & Providers (both roles) ──
   'GET /delivery/actor': ['*'],
   'GET /delivery/actor/:id': ['*'],
   'POST /delivery/actor/:id/approve': ['*'],
   'PUT /delivery/actor/:id/status': ['*'],
+  'GET /delivery/provider': ['*'],
+  'GET /delivery/provider/:id': ['*'],
+  'GET /delivery/provider/:id/detail': ['*'],
+  'POST /delivery/provider': ['*'],
+  'PUT /delivery/provider/:id': ['*'],
+  'PUT /delivery/provider/:id/status': ['*'],
+  'POST /delivery/provider/:id/approve': ['*'],
+  'POST /delivery/provider/:id/reject': ['*'],
+  'GET /delivery/partner': ['*'],
+  'GET /delivery/partner/:id': ['*'],
   'GET /delivery/operation/dashboard': ['*'],
   'GET /delivery/operation/:stage': ['*'],
   'GET /delivery/port': ['*'],
   'GET /delivery/service': ['*'],
   'GET /delivery/request': ['*'],
   'GET /delivery/delivery': ['*'],
+  'GET /delivery/route': ['locations.view'],
+  'POST /delivery/route': ['locations.manage'],
+  'GET /delivery/hub': ['locations.view'],
+  'POST /delivery/hub': ['locations.manage'],
+  'GET /delivery/tracking/:id': ['*'],
+  'GET /delivery/tracking/:id/latest': ['*'],
+  'GET /delivery/tracking/nearby': ['*'],
+  'GET /delivery/dispatch': ['*'],
+  'POST /delivery/dispatch': ['*'],
+  'GET /delivery/assignment': ['*'],
+  'POST /delivery/assignment': ['*'],
+  'GET /delivery/payouts': ['*'],
+  'GET /delivery/provider-payouts': ['*'],
 
   // ── Analytics & Reports (both roles) ──
   'GET /analytics/stats': ['*'],
   'GET /analytics/growth': ['*'],
   'GET /analytics/orders-by-type': ['*'],
+  'GET /analytics/sales-by-type': ['*'],
+  'GET /analytics/pending-approvals': ['*'],
+  'GET /analytics/recent-activity': ['*'],
+  'GET /analytics/dashboard-users': ['*'],
+  'GET /analytics/sales-over-time': ['*'],
+  'GET /analytics/orders-by-status': ['*'],
+  'GET /analytics/category-activity': ['*'],
+  'GET /analytics/product-stats': ['*'],
+  'GET /analytics/dispute-stats': ['*'],
+  'GET /analytics/delivery-stats': ['*'],
+  'GET /analytics/rider-performance': ['*'],
+  'GET /analytics/shop-stats': ['*'],
+  'GET /analytics/seller/stats': ['*'],
   'GET /admin/growth-analytics': ['*'],
   'GET /admin/platform/stats': ['*'],
   'GET /admin/platform/pending': ['*'],
   'GET /admin/platform/hierarchy': ['*'],
 
-  // ── Catalog (both roles) ──
+  // ── Catalog & Reviews (both roles) ──
   'GET /category': ['*'],
+  'POST /category': ['commerce.manage'],
+  'PUT /category/:id': ['commerce.manage'],
+  'DELETE /category/:id': ['commerce.manage'],
   'GET /sector': ['*'],
+  'POST /sector': ['commerce.manage'],
+  'PUT /sector/:id': ['commerce.manage'],
+  'DELETE /sector/:id': ['commerce.manage'],
   'GET /order/admin/reviews/pending': ['*'],
+  'POST /order/admin/reviews/:id/approve': ['*'],
+  'POST /order/admin/reviews/:id/reject': ['*'],
+  'GET /review/admin/pending': ['*'],
+  'POST /review/admin/:id/approve': ['*'],
+  'POST /review/admin/:id/reject': ['*'],
 
-  // ── Products & Catalog (both roles) ──
+  // ── Products & Catalog (both roles & public) ──
+  'GET /product/public/all': ['*'],
+  'GET /product/public/:id': ['*'],
+  'GET /product/search': ['*'],
+  'GET /product/get-product/:id': ['*'],
   'GET /product/get-all-products': ['*'],
+  'GET /product/get-all-products-shop/:id': ['*'],
   'GET /product/:id': ['*'],
   'POST /product': ['*'],
   'PUT /product/:id': ['*'],
   'DELETE /product/:id': ['*'],
+  'GET /shop/public/all': ['*'],
+  'GET /shop/public/:id': ['*'],
+  'GET /shop/get-all-shops': ['*'],
+  'GET /shop/get-shop-info/:id': ['*'],
+  'GET /shop/getseller': ['*'],
+  'GET /category/active/product': ['*'],
+  'GET /category/active/:id': ['*'],
+  'GET /category/all': ['*'],
+  'GET /category/tree': ['*'],
+  'GET /review/get-product-reviews/:id': ['*'],
+  'GET /review/get-shop-reviews/:id': ['*'],
+  'GET /review/get-my-reviews': ['*'],
 
-  // ── Payments (both roles) ──
+  // ── Payments & Financials (both roles) ──
   'GET /payment/get-all-payments': ['*'],
   'GET /payment/:id': ['*'],
+  'GET /payment/admin/reconciliation': ['*'],
+  'GET /payment/admin/allocations': ['*'],
+  'GET /payment/admin/ledger': ['*'],
+  'POST /payment/admin/reconciliation/:id/resolve': ['*'],
 
   // ── Seller Applications (both roles) ──
   'GET /seller-application': ['*'],
   'GET /seller-application/:id': ['*'],
   'POST /seller-application': ['*'],
   'PATCH /seller-application/:id/status': ['*'],
+  'POST /seller-application/:id/approve': ['*'],
+  'POST /seller-application/:id/reject': ['*'],
+  'POST /seller-application/:id/request-information': ['*'],
+  'POST /seller-application/:id/suspend': ['*'],
+
+  // ── Coupons, Promotions & Events (both roles) ──
+  'GET /coupon': ['*'],
+  'POST /coupon': ['*'],
+  'PUT /coupon/:id': ['*'],
+  'DELETE /coupon/:id': ['*'],
+  'GET /promotion': ['*'],
+  'POST /promotion': ['*'],
+  'PUT /promotion/:id': ['*'],
+  'DELETE /promotion/:id': ['*'],
+  'GET /event': ['*'],
+  'POST /event': ['*'],
 
   // ── Requests (both roles) ──
   'GET /request/admin': ['*'],
@@ -177,6 +296,9 @@ function normalizePathForMatching(method, path) {
   if (pathOnly.startsWith('/api')) {
     pathOnly = pathOnly.slice(4) || '/';
   }
+
+  // Normalize /auth/register/:role (e.g. /auth/register/SELLER, /auth/register/BUYER, /auth/register/PROVIDER)
+  pathOnly = pathOnly.replace(/\/auth\/register\/([^\/]+)/i, '/auth/register/:role');
 
   // Replace various ID formats with :id
   // - UUIDs: /[a-f0-9\-]{36}
@@ -214,14 +336,35 @@ function enforcePermissions(req, res, next) {
   const token = req.token || {};
   const userPermissions = Array.isArray(token.permissions) ? token.permissions : [];
 
+  // Super admin wildcard check first: SUPER_ADMIN has full permissions across all platform endpoints
+  if (userPermissions.includes('*')) {
+    return next();
+  }
+
   // Construct the endpoint key
   const endpointKey = normalizePathForMatching(req.method, req.path);
 
   // Look up required permissions
   const requiredPermissions = ENDPOINT_PERMISSIONS[endpointKey];
 
-  // If endpoint is not in the map, deny by default (fail-secure)
+  // If endpoint is not in the map, fail-secure for admin / privileged surfaces.
+  // Normal customer, seller, or unmapped public endpoints pass through to downstream services.
   if (!requiredPermissions) {
+    const isAdminSurface = endpointKey.startsWith('GET /admin') ||
+      endpointKey.startsWith('POST /admin') ||
+      endpointKey.startsWith('PUT /admin') ||
+      endpointKey.startsWith('PATCH /admin') ||
+      endpointKey.startsWith('DELETE /admin') ||
+      endpointKey.includes('/settings') ||
+      endpointKey.includes('/delivery/location') ||
+      endpointKey.includes('/delivery/zone') ||
+      endpointKey.includes('/delivery/route') ||
+      endpointKey.includes('/delivery/hub');
+
+    if (!isAdminSurface) {
+      return next();
+    }
+
     if (env.nodeEnv === 'development') {
       console.warn(`[enforcePermissions] Unmapped endpoint: ${endpointKey}`);
     }

@@ -416,6 +416,55 @@ async function checkRoleAccessStatus(req, res, next) {
   }
 }
 
+const passwordResetService = require('../services/passwordReset.service');
+
+async function forgotPassword(req, res, next) {
+  try {
+    const { email, clientType } = req.body || {};
+    const ipAddress = req.ip || req.headers['x-forwarded-for'];
+    const userAgent = req.headers['user-agent'];
+    const origin = req.headers.origin || req.headers.referer;
+
+    const result = await passwordResetService.requestPasswordReset({
+      email,
+      clientType,
+      origin,
+      ipAddress,
+      userAgent,
+    });
+    return ok(res, result, result.message);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function verifyResetToken(req, res, next) {
+  try {
+    const token = req.query.token || req.body?.token;
+    const result = await passwordResetService.verifyResetToken(token);
+    if (!result.valid) {
+      return fail(res, result.message, 400, 'INVALID_RESET_TOKEN');
+    }
+    return ok(res, result, 'Reset token is valid');
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function resetPassword(req, res, next) {
+  try {
+    const { token, newPassword, confirmPassword } = req.body || {};
+    const result = await passwordResetService.resetPassword({
+      token,
+      newPassword,
+      confirmPassword,
+    });
+    return ok(res, result, result.message);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   register,
   registerWithRole,
@@ -428,4 +477,7 @@ module.exports = {
   getCurrentUser,
   switchRole,
   checkRoleAccessStatus,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword,
 };

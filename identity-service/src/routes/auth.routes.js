@@ -66,6 +66,12 @@ router.post('/auth/token', authController.tokenExchange);
 router.post('/auth/refresh', authController.refreshToken);
 router.post('/auth/revoke', authController.revokeToken);
 
+// ── Password Reset & Account Recovery ──────────────────────────────────────
+router.post('/auth/forgot-password', authController.forgotPassword);
+router.get('/auth/verify-reset-token', authController.verifyResetToken);
+router.post('/auth/verify-reset-token', authController.verifyResetToken);
+router.post('/auth/reset-password', authController.resetPassword);
+
 // ─ Resource endpoints ─────────────────────────────────────────────────────
 router.get('/user/getuser', authenticate, authController.getCurrentUser);
 router.post('/user/logout', authController.logoutUser);

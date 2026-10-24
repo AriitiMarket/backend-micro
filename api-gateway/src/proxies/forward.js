@@ -67,13 +67,15 @@ function forward(req, res, targetUrl) {
   const targetPath = query ? rewrittenPath + '?' + query : rewrittenPath;
 
   // Use parsed body if available (express.json()), otherwise read from stream
-  const hasParsedBody = req.body && Object.keys(req.body).length > 0;
-  let body;
   let bodyPromise;
 
-  if (hasParsedBody) {
-    body = Buffer.from(JSON.stringify(req.body));
-    bodyPromise = Promise.resolve(body);
+  if (req.body !== undefined && req.body !== null) {
+    const serialized = typeof req.body === 'string' || Buffer.isBuffer(req.body)
+      ? req.body
+      : JSON.stringify(req.body);
+    bodyPromise = Promise.resolve(Buffer.isBuffer(serialized) ? serialized : Buffer.from(serialized));
+  } else if (req.readableEnded) {
+    bodyPromise = Promise.resolve(Buffer.alloc(0));
   } else {
     // Buffer the request body so we can forward it after async JWT verification.
     const bodyChunks = [];

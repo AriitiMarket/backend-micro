@@ -49,7 +49,11 @@ async function updatePassword(payload) {
     throw err;
   }
   const hash = await passwordUtils.hashPassword(payload.newPassword);
-  return usersRepository.updatePassword({ id: payload.userId, hash: hash });
+  const result = await usersRepository.updatePassword({ id: payload.userId, hash: hash });
+  // Invalidate all active sessions & refresh tokens on password change for security
+  const refreshTokensRepo = require('../repositories/refreshTokens.repository');
+  await refreshTokensRepo.revokeAllForUser(payload.userId);
+  return result;
 }
 
 async function updateAddress(payload) {

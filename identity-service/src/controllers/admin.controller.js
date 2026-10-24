@@ -90,4 +90,20 @@ async function getPendingStats(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { listUsers, getUser, setRole, setUserStatus, setAdminScope, getAdminScope, listSellers, getSeller, getDashboardStats, getPendingStats };
+async function resetUser2FA(req, res, next) {
+  try {
+    const pool = await require('../config/database').getPool();
+    const twoFactorService = require('../services/twoFactor.service');
+    const authService = require('../services/auth.service');
+
+    await twoFactorService.disable2FA(pool, req.params.id);
+    await authService.revokeAllUserTokens(req.params.id);
+
+    const { audit2FA } = require('../services/auditLog.service');
+    audit2FA.disabled(req.params.id);
+
+    return ok(res, { success: true }, 'User 2FA has been disabled and all sessions terminated.');
+  } catch (err) { return next(err); }
+}
+
+module.exports = { listUsers, getUser, setRole, setUserStatus, setAdminScope, getAdminScope, listSellers, getSeller, getDashboardStats, getPendingStats, resetUser2FA };
