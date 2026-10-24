@@ -125,6 +125,7 @@ function toUser(row) {
     twoFactorEnabled: Boolean(row.two_factor_enabled),
     twoFactorType: row.two_factor_type || null,
     twoFactorDestination: row.two_factor_destination || null,
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }

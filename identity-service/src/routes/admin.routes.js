@@ -15,6 +15,7 @@ router.get('/admin/users', authenticate, authorize('ADMIN'), requirePermission('
 router.get('/admin/users/:id', authenticate, authorize('ADMIN'), requirePermission('users.view'), adminController.getUser);
 router.put('/admin/users/:id/role', authenticate, authorize('ADMIN'), requirePermission('users.manage'), adminController.setRole);
 router.put('/admin/users/:id/status', authenticate, authorize('ADMIN'), requirePermission('users.manage'), adminController.setUserStatus);
+router.post('/admin/users/:id/reset-2fa', authenticate, authorize('ADMIN'), requirePermission('users.manage'), adminController.resetUser2FA);
 router.put('/admin/users/:id/scope', authenticate, authorize('ADMIN'), requirePermission('users.manage'), adminController.setAdminScope);
 router.get('/admin/users/:id/scope', authenticate, authorize('ADMIN'), requirePermission('users.view'), adminController.getAdminScope);
 

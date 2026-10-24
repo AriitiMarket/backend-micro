@@ -111,6 +111,10 @@ const AUTH_ENDPOINTS = [
   '/api/auth/register/:role',
   '/api/auth/token',
   '/api/auth/refresh',
+  '/api/auth/verify-2fa',
+  '/api/auth/resend-2fa-code',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
 ];
 for (const endpoint of AUTH_ENDPOINTS) {
   app.use(endpoint, authLimiter);

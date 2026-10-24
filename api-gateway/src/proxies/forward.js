@@ -68,28 +68,18 @@ function forward(req, res, targetUrl) {
 
   // Use the body express.json() already parsed (the raw bytes are captured by
   // the parser's `verify` hook), otherwise read it from the stream.
-  //
-  // The raw buffer matters: a JSON body of `{}` parses to an empty object, and
-  // `Object.keys({}).length` is 0 — reading the body by its parsed size would
-  // fall through to the stream branch, but the stream was ALREADY drained by
-  // express.json(), so the 'end' event never fired again and the request hung
-  // forever. Every admin action that posts `{}` (approve a provider, approve a
-  // seller application, …) hung exactly that way.
   const captured = req.rawBody && req.rawBody.length > 0 ? req.rawBody : null;
-  const parsedBody = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)
-    ? req.body
-    : null;
-  const hasParsedBody = parsedBody !== null && Object.keys(parsedBody).length > 0;
-
-  let body;
   let bodyPromise;
 
   if (captured) {
-    body = captured;
-    bodyPromise = Promise.resolve(body);
-  } else if (hasParsedBody) {
-    body = Buffer.from(JSON.stringify(parsedBody));
-    bodyPromise = Promise.resolve(body);
+    bodyPromise = Promise.resolve(captured);
+  } else if (req.body !== undefined && req.body !== null) {
+    const serialized = typeof req.body === 'string' || Buffer.isBuffer(req.body)
+      ? req.body
+      : JSON.stringify(req.body);
+    bodyPromise = Promise.resolve(Buffer.isBuffer(serialized) ? serialized : Buffer.from(serialized));
+  } else if (req.readableEnded) {
+    bodyPromise = Promise.resolve(Buffer.alloc(0));
   } else {
     // Buffer the request body so we can forward it after async JWT verification.
     const bodyChunks = [];

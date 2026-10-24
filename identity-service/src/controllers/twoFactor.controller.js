@@ -52,7 +52,6 @@ async function setup2FA(req, res, next) {
     });
 
     // EMAIL or SMS — OTP was sent to the user
-    // CRITICAL: In production, NEVER return tempOTP in response
     const responsePayload = {
       method: result.method,
       backupCodes: result.backupCodes || [],
@@ -61,12 +60,6 @@ async function setup2FA(req, res, next) {
         ? 'A verification code has been sent to your email. Please enter it to complete setup.'
         : 'A verification code has been sent to your phone. Please enter it to complete setup.',
     };
-
-    // Only include tempOTP in development/testing
-    if (process.env.NODE_ENV !== 'production') {
-      responsePayload.tempOTP = result.otp;
-      responsePayload._warning = 'tempOTP included for testing only. Remove in production!';
-    }
 
     return ok(res, responsePayload, `${method} 2FA setup initiated.`);
   } catch (err) {
@@ -335,11 +328,12 @@ async function regenerateBackupCodes(req, res, next) {
 
     // Generate new backup codes
     const newCodes = twoFactorService.generateBackupCodes();
+    const hashedCodes = newCodes.map((c) => twoFactorService.hashBackupCode(c));
 
-    // Update in database
+    // Update in database with hashed codes
     await pool.query(
       'UPDATE users SET backup_codes = $1 WHERE id = $2',
-      [newCodes, userId]
+      [hashedCodes, userId]
     );
 
     audit2FA.backupCodesRegenerated(userId);

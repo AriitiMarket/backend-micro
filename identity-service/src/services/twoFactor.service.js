@@ -10,18 +10,59 @@ let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch (e) { nodemailer = null; }
 // const twilio = require('twilio'); // For SMS OTP (optional)
 
+// ── Cryptographic Helpers ──
+
+const ENCRYPTION_SECRET = process.env.ENCRYPTION_KEY || process.env.JWT_SECRET || 'aritii-market-identity-2fa-encryption-key-32b!';
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(ENCRYPTION_SECRET).digest(); // 32 bytes
+
+function encryptSecret(text) {
+  if (!text) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return `enc:v1:${iv.toString('hex')}:${authTag}:${encrypted}`;
+}
+
+function decryptSecret(encryptedText) {
+  if (!encryptedText) return null;
+  if (!encryptedText.startsWith('enc:v1:')) {
+    // Backward compatibility with unencrypted base32 secrets
+    return encryptedText;
+  }
+  try {
+    const parts = encryptedText.split(':');
+    const iv = Buffer.from(parts[2], 'hex');
+    const authTag = Buffer.from(parts[3], 'hex');
+    const ciphertext = parts[4];
+    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    console.error('Failed to decrypt 2FA secret:', err.message);
+    return null;
+  }
+}
+
+function hashBackupCode(code) {
+  return crypto.createHash('sha256').update(String(code).trim().toUpperCase()).digest('hex');
+}
+
 // ── OTP Generation ──
 
 function generateOTP(length = 6) {
-  return Math.floor(Math.random() * Math.pow(10, length))
-    .toString()
-    .padStart(length, '0');
+  const min = Math.pow(10, length - 1);
+  const max = Math.pow(10, length);
+  return crypto.randomInt(min, max).toString();
 }
 
 function generateBackupCodes(count = 10) {
   const codes = [];
   for (let i = 0; i < count; i++) {
-    // Increased entropy: 8 hex chars (32-bit) instead of 4 (24-bit)
+    // Increased entropy: 8 hex chars (32-bit)
     const code = crypto.randomBytes(4).toString('hex').toUpperCase();
     codes.push(`${code.slice(0, 4)}-${code.slice(4)}`);
   }
@@ -48,14 +89,16 @@ async function setupTOTP(email, appName = 'Ariiti') {
   };
 }
 
-function verifyTOTP(secret, code) {
-  if (!secret || !code) return false;
+function verifyTOTP(storedSecret, code) {
+  if (!storedSecret || !code) return false;
+  const rawSecret = decryptSecret(storedSecret);
+  if (!rawSecret) return false;
 
   const verified = speakeasy.totp.verify({
-    secret: secret,
+    secret: rawSecret,
     encoding: 'base32',
     token: code,
-    window: 1, // Reduced from 2 to 1 (±30 seconds instead of ±60 seconds)
+    window: 1, // ±30 seconds
   });
 
   return verified;
@@ -151,10 +194,15 @@ async function setupTwoFA(method, email, phoneNumber = null) {
 // ── Verification ──
 
 function verifyOTP(storedOTP, providedOTP, expiresAt) {
+  if (!storedOTP || !providedOTP) {
+    return { valid: false, message: 'Invalid OTP code.' };
+  }
   if (new Date() > expiresAt) {
     return { valid: false, message: 'OTP expired. Request a new one.' };
   }
-  if (storedOTP !== providedOTP) {
+  const a = Buffer.from(String(storedOTP).trim());
+  const b = Buffer.from(String(providedOTP).trim());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
     return { valid: false, message: 'Invalid OTP code.' };
   }
   return { valid: true, message: 'OTP verified.' };
@@ -163,6 +211,14 @@ function verifyOTP(storedOTP, providedOTP, expiresAt) {
 // ── Database Operations ──
 
 async function enable2FA(pool, userId, method, secretOrOTP, backupCodes, phoneNumber = null, destination = null) {
+  // Encrypt secret if method is TOTP
+  const secretToSave = method === 'TOTP' && secretOrOTP ? encryptSecret(secretOrOTP) : secretOrOTP;
+  
+  // Hash backup codes before storing in PostgreSQL
+  const hashedBackupCodes = Array.isArray(backupCodes)
+    ? backupCodes.map((c) => hashBackupCode(c))
+    : [];
+
   const result = await pool.query(
     `UPDATE users SET 
       two_factor_enabled = true,
@@ -174,7 +230,7 @@ async function enable2FA(pool, userId, method, secretOrOTP, backupCodes, phoneNu
       two_factor_setup_at = NOW()
     WHERE id = $5
     RETURNING id, email, two_factor_enabled, two_factor_type`,
-    [secretOrOTP, method, phoneNumber, backupCodes, userId, destination]
+    [secretToSave, method, phoneNumber, hashedBackupCodes, userId, destination]
   );
 
   return result.rows[0];
@@ -231,7 +287,7 @@ async function get2FAStatus(pool, userId) {
 
 // ── Backup Codes ──
 
-async function verifyBackupCode(pool, userId, code) {
+async function verifyBackupCode(pool, userId, candidateCode) {
   const result = await pool.query(
     'SELECT backup_codes FROM users WHERE id = $1',
     [userId]
@@ -240,7 +296,14 @@ async function verifyBackupCode(pool, userId, code) {
   if (!result.rows[0]) return { valid: false, message: 'User not found' };
 
   const backupCodes = result.rows[0].backup_codes || [];
-  const codeIndex = backupCodes.indexOf(code);
+  const normalizedCandidate = String(candidateCode).trim().toUpperCase();
+  const candidateHash = hashBackupCode(normalizedCandidate);
+
+  // Support both SHA-256 hashed backup codes and legacy unhashed codes
+  let codeIndex = backupCodes.indexOf(candidateHash);
+  if (codeIndex === -1) {
+    codeIndex = backupCodes.indexOf(normalizedCandidate);
+  }
 
   if (codeIndex === -1) {
     return { valid: false, message: 'Invalid backup code' };
@@ -322,4 +385,7 @@ module.exports = {
   storePending2FA,
   getPending2FA,
   clearPending2FA,
+  encryptSecret,
+  decryptSecret,
+  hashBackupCode,
 };
