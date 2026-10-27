@@ -54,7 +54,22 @@ const app = express();
 app.use(requestId);
 // Token-based only: no cookies, therefore no credentialed CORS and no CSRF
 // surface. `credentials` stays false on purpose.
-app.use(cors({ origin: [env.corsOrigin, 'http://localhost:8000'], credentials: false }));
+const commerceCorsOrigins = (env.corsOrigin || '*').split(',').map((o) => o.trim()).filter(Boolean);
+const allowAllCommerceCors = commerceCorsOrigins.includes('*') || commerceCorsOrigins.length === 0;
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowAllCommerceCors) return callback(null, true);
+    if (commerceCorsOrigins.includes(origin) || origin === 'http://localhost:8000' || origin === 'http://localhost:3000') {
+      return callback(null, true);
+    }
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+  credentials: false,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 

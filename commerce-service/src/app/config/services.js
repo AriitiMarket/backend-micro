@@ -17,8 +17,12 @@
 'use strict';
 
 function cleanUrl(value) {
-  const raw = String(value == null ? '' : value).trim();
-  return raw ? raw.replace(/\/+$/, '') : '';
+  let raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = raw.includes('onrender.com') ? `https://${raw}` : `http://${raw}`;
+  }
+  return raw.replace(/\/+$/, '');
 }
 
 /**

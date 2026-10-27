@@ -17,8 +17,12 @@
 const { loadCredentials, describeCredentials } = require('../shared/internal-auth');
 
 function cleanUrl(value) {
-  const raw = String(value == null ? '' : value).trim();
-  return raw ? raw.replace(/\/+$/, '') : '';
+  let raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = raw.includes('onrender.com') ? `https://${raw}` : `http://${raw}`;
+  }
+  return raw.replace(/\/+$/, '');
 }
 
 const SELF = String(process.env.INTERNAL_SERVICE_NAME || 'gateway').trim().toLowerCase();
@@ -27,15 +31,15 @@ const services = {
   self: SELF,
   identity: {
     name: 'identity',
-    url: cleanUrl(process.env.IDENTITY_SERVICE_URL) || 'http://localhost:3001',
+    url: cleanUrl(process.env.IDENTITY_SERVICE_URL) || 'http://localhost:3003',
   },
   commerce: {
     name: 'commerce',
-    url: cleanUrl(process.env.COMMERCE_SERVICE_URL) || 'http://localhost:3002',
+    url: cleanUrl(process.env.COMMERCE_SERVICE_URL) || 'http://localhost:3001',
   },
   delivery: {
     name: 'delivery',
-    url: cleanUrl(process.env.DELIVERY_SERVICE_URL) || 'http://localhost:3003',
+    url: cleanUrl(process.env.DELIVERY_SERVICE_URL) || 'http://localhost:3002',
   },
 };
 

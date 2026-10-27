@@ -1,0 +1,184 @@
+# ==============================================================================
+# Render Blueprint Specification (render.yaml) for Aritii Market Microservices
+# Compatible with both Free Tier and Starter/Standard Paid Tiers
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. API Gateway (Public Edge Entrypoint)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: aritii-gateway
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free # Change to "starter" for dedicated instances
+    region: oregon
+    healthCheckPath: /health/live
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: SERVICE_NAME
+        value: api-gateway
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: IDENTITY_SERVICE_URL
+        fromService:
+          name: aritii-identity
+          type: web
+          property: host
+      - key: COMMERCE_SERVICE_URL
+        fromService:
+          name: aritii-commerce
+          type: web
+          property: host
+      - key: DELIVERY_SERVICE_URL
+        fromService:
+          name: aritii-delivery
+          type: web
+          property: host
+      - fromGroup: aritii-cluster-secrets
+
+  # ----------------------------------------------------------------------------
+  # 2. Identity Service (Auth, Users, RS256 Tokens, Audit Logs)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: aritii-identity
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free # Change to "starter" for dedicated instances or "pserv" on paid plan
+    region: oregon
+    healthCheckPath: /health/live
+    envVars:
+      - key: PORT
+        value: 3003
+      - key: SERVICE_NAME
+        value: identity-service
+      - key: INTERNAL_SERVICE_NAME
+        value: identity
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aritii-postgres
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: API_GATEWAY_URL
+        fromService:
+          name: aritii-gateway
+          type: web
+          property: host
+      - key: COMMERCE_SERVICE_URL
+        fromService:
+          name: aritii-commerce
+          type: web
+          property: host
+      - key: DELIVERY_SERVICE_URL
+        fromService:
+          name: aritii-delivery
+          type: web
+          property: host
+      - fromGroup: aritii-cluster-secrets
+
+  # ----------------------------------------------------------------------------
+  # 3. Commerce Service (Products, Shops, Orders, Wallets)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: aritii-commerce
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /health/live
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: SERVICE_NAME
+        value: commerce-service
+      - key: INTERNAL_SERVICE_NAME
+        value: commerce
+      - key: NODE_ENV
+        value: production
+      - key: API_GATEWAY_URL
+        fromService:
+          name: aritii-gateway
+          type: web
+          property: host
+      - key: IDENTITY_SERVICE_URL
+        fromService:
+          name: aritii-identity
+          type: web
+          property: host
+      - key: DELIVERY_SERVICE_URL
+        fromService:
+          name: aritii-delivery
+          type: web
+          property: host
+      - fromGroup: aritii-cluster-secrets
+
+  # ----------------------------------------------------------------------------
+  # 4. Delivery Service (Zones, Logistics, Rider Dispatch)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: aritii-delivery
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /health/live
+    envVars:
+      - key: PORT
+        value: 3002
+      - key: SERVICE_NAME
+        value: delivery-service
+      - key: INTERNAL_SERVICE_NAME
+        value: delivery
+      - key: NODE_ENV
+        value: production
+      - key: API_GATEWAY_URL
+        fromService:
+          name: aritii-gateway
+          type: web
+          property: host
+      - key: IDENTITY_SERVICE_URL
+        fromService:
+          name: aritii-identity
+          type: web
+          property: host
+      - key: COMMERCE_SERVICE_URL
+        fromService:
+          name: aritii-commerce
+          type: web
+          property: host
+      - fromGroup: aritii-cluster-secrets
+
+# ------------------------------------------------------------------------------
+# Managed PostgreSQL Database
+# ------------------------------------------------------------------------------
+databases:
+  - name: aritii-postgres
+    databaseName: aritii_identity
+    user: postgres
+    plan: free # Free for 30 days on Render. For permanent free tier, use Neon.
+    region: oregon
+
+# ------------------------------------------------------------------------------
+# Shared Cluster Secrets & Variables
+# ------------------------------------------------------------------------------
+envVarGroups:
+  - name: aritii-cluster-secrets
+    envVars:
+      - key: INTERNAL_SERVICE_TOKENS
+        generateValue: false # Set via Render Dashboard using ./scripts/generate-tokens.sh
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        generateValue: false # Set to your MongoDB Atlas connection string (M0 Free Tier)
+      - key: CLOUDINARY_URL
+        generateValue: false

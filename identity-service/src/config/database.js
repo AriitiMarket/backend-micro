@@ -5,8 +5,24 @@ const env = require('./env');
 let pool = null;
 let initPromise = null;
 
+function resolveSSL(databaseUrl) {
+  if (process.env.DATABASE_SSL === 'true' || process.env.PGSSLMODE === 'require') return true;
+  if (process.env.DATABASE_SSL === 'false' || process.env.PGSSLMODE === 'disable') return false;
+  if (!databaseUrl) return undefined;
+  try {
+    const parsed = new URL(databaseUrl);
+    const sslmode = parsed.searchParams.get('sslmode');
+    if (sslmode === 'require' || sslmode === 'verify-full' || sslmode === 'verify-ca') return true;
+    if (sslmode === 'disable') return false;
+    if (parsed.hostname && (parsed.hostname.endsWith('.neon.tech') || parsed.hostname.includes('render.com'))) {
+      return true;
+    }
+  } catch (_e) {}
+  return undefined;
+}
+
 function createPool() {
-  const p = new Pool({
+  const poolConfig = {
     connectionString: env.databaseUrl,
     // Abort a *single* connection attempt after this long (default 30s). The old
     // hard-coded 5s was shorter than a cold-boot DNS/TCP handshake, which is what
@@ -20,7 +36,14 @@ function createPool() {
     max: env.dbPoolMax,
     // The HTTP listener owns the event loop; never let an idle pool exit on us.
     allowExitOnIdle: false,
-  });
+  };
+
+  const ssl = resolveSSL(env.databaseUrl);
+  if (ssl !== undefined) {
+    poolConfig.ssl = ssl;
+  }
+
+  const p = new Pool(poolConfig);
 
   // CRITICAL: a pg Pool emits 'error' when a client breaks while idle (postgres
   // restart, network partition). With no listener, Node promotes that to an

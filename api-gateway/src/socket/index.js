@@ -12,10 +12,22 @@ const REQUEST_ID_PATTERN = /^[0-9a-zA-Z_-]{1,64}$/;
 const MAX_SUBSCRIBED_REQUESTS = 50;
 
 module.exports = function attachSocket(server, corsOrigins) {
+  const allowWildcard = !corsOrigins
+    || corsOrigins === '*'
+    || (Array.isArray(corsOrigins) && (corsOrigins.includes('*') || corsOrigins.length === 0));
+
   const io = new Server(server, {
     cors: {
-      // corsOrigin may be a list — Socket.io needs an array, not a joined string.
-      origin: Array.isArray(corsOrigins) ? corsOrigins : [corsOrigins],
+      origin: allowWildcard
+        ? (origin, callback) => callback(null, true)
+        : (origin, callback) => {
+            if (!origin) return callback(null, true);
+            const origins = Array.isArray(corsOrigins) ? corsOrigins : [corsOrigins];
+            if (origins.includes(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+              return callback(null, true);
+            }
+            return callback(null, false);
+          },
       methods: ['GET', 'POST'],
       credentials: false,
     },

@@ -110,7 +110,7 @@ const env = {
   cloudinaryName: process.env.CLOUDINARY_NAME,
   cloudinaryKey: process.env.CLOUDINARY_API_KEY,
   cloudinarySecret: process.env.CLOUDINARY_API_SECRET,
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:8000',
+  corsOrigin: process.env.CORS_ORIGIN || '*',
 };
 
 module.exports = env;
