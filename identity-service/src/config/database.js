@@ -455,34 +455,13 @@ async function initSchema(p) {
     );
   }
 
-  // Seed default system roles.
+  // Seed default system roles (2-role system).
   const defaultRoles = [
     {
       name: 'SUPER_ADMIN',
       display_name: 'Super Admin',
       description: 'Full system access with all permissions',
       permissions: defaultPermissions.map(p => p.key),
-      is_system: true,
-    },
-    {
-      name: 'OPERATIONAL_ADMIN',
-      display_name: 'Operational Admin',
-      description: 'Runs daily orders, delivery, and dispute operations without access to RBAC, platform settings, or financial configuration',
-      permissions: [
-        'dashboard.view',
-        'users.view',
-        'businesses.view',
-        'shops.view',
-        'locations.view',
-        'orders.view',
-        'orders.manage',
-        'delivery.view',
-        'delivery.manage',
-        'disputes.view',
-        'disputes.manage',
-        'reports.view',
-        'audit.view',
-      ],
       is_system: true,
     },
     {
@@ -506,28 +485,11 @@ async function initSchema(p) {
       ],
       is_system: true,
     },
-    {
-      name: 'SELLER_ADMIN',
-      display_name: 'Seller Admin',
-      description: 'Manages sellers, businesses, shops, and commerce',
-      permissions: ['dashboard.view', 'users.view', 'businesses.view', 'businesses.manage', 'shops.view', 'shops.manage', 'commerce.view', 'commerce.manage', 'orders.view', 'orders.manage', 'disputes.view', 'disputes.manage', 'reports.view'],
-      is_system: true,
-    },
-    {
-      name: 'RIDER_ADMIN',
-      display_name: 'Rider Admin',
-      description: 'Manages riders, delivery operations, and zones',
-      permissions: ['dashboard.view', 'users.view', 'delivery.view', 'delivery.manage', 'locations.view', 'orders.view', 'disputes.view', 'reports.view'],
-      is_system: true,
-    },
-    {
-      name: 'CUSTOMER_ADMIN',
-      display_name: 'Customer Admin',
-      description: 'Manages customers, orders, and dispute resolution',
-      permissions: ['dashboard.view', 'users.view', 'users.manage', 'orders.view', 'orders.manage', 'disputes.view', 'disputes.manage', 'reports.view', 'businesses.view', 'shops.view'],
-      is_system: true,
-    },
   ];
+
+  // Purge legacy/obsolete system roles if present
+  await p.query(`DELETE FROM admin_roles WHERE name IN ('OPERATIONAL_ADMIN', 'SELLER_ADMIN', 'RIDER_ADMIN', 'CUSTOMER_ADMIN');`);
+
   for (const role of defaultRoles) {
     await p.query(
       `INSERT INTO admin_roles (name, display_name, description, permissions, is_system)
