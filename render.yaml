@@ -164,7 +164,7 @@ services:
 databases:
   - name: aritii-postgres
     databaseName: aritii_identity
-    user: postgres
+    user: aritii_admin
     plan: free # Free for 30 days on Render. For permanent free tier, use Neon.
     region: oregon
 
@@ -175,10 +175,10 @@ envVarGroups:
   - name: aritii-cluster-secrets
     envVars:
       - key: INTERNAL_SERVICE_TOKENS
-        generateValue: false # Set via Render Dashboard using ./scripts/generate-tokens.sh
+        value: "gateway:b72dbd5f759e48ad6be2a3ecff5c5fca73a3cc11c87ac1b2bf9e2bdec7df937e,identity:ebafbc968029b105f034157348829e30de0f6432ade5a90a387c398682f8fd33,commerce:cf2be93d0835646b96a8e608cc9850dc9ac3d0b4e4aa2a44522e3b92b8083ccb,delivery:119638986e747c20b9b972a90a8353490971c5bb631a4558db5b22e8940e9113"
       - key: JWT_SECRET
         generateValue: true
       - key: MONGODB_URI
-        generateValue: false # Set to your MongoDB Atlas connection string (M0 Free Tier)
+        value: "mongodb+srv://placeholder:placeholder@cluster0.mongodb.net/?retryWrites=true&w=majority"
       - key: CLOUDINARY_URL
-        generateValue: false
+        value: ""
