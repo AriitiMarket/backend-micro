@@ -41,6 +41,20 @@ async function connectWithRetry() {
       dbReady = true;
       loadApp();
       console.log('[identity] database connected after ' + attempts + ' attempt(s)');
+
+      // Auto-seed initial platform data if no admin exists
+      try {
+        const pool = await getPool();
+        const { rows } = await pool.query("SELECT COUNT(*) AS count FROM users WHERE role = 'ADMIN'");
+        if (parseInt(rows[0].count, 10) === 0) {
+          console.log('[identity] No admin users found — running initial platform seed...');
+          const { seed } = require('./seed/seed-all');
+          await seed({ reset: false });
+          console.log('[identity] Initial platform seed completed successfully.');
+        }
+      } catch (seedErr) {
+        console.warn('[identity] Auto-seed check failed (non-fatal):', seedErr.message);
+      }
       // Start the abandoned-onboarding sweep only once the schema is known to be
       // up. Loaded lazily so a transient require error can never abort startup —
       // the job is an optimization, not something the API depends on.
