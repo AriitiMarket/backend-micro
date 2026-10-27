@@ -6,16 +6,20 @@ let pool = null;
 let initPromise = null;
 
 function resolveSSL(databaseUrl) {
-  if (process.env.DATABASE_SSL === 'true' || process.env.PGSSLMODE === 'require') return true;
   if (process.env.DATABASE_SSL === 'false' || process.env.PGSSLMODE === 'disable') return false;
+  if (process.env.DATABASE_SSL === 'true' || process.env.PGSSLMODE === 'require') {
+    return { rejectUnauthorized: false };
+  }
   if (!databaseUrl) return undefined;
   try {
     const parsed = new URL(databaseUrl);
     const sslmode = parsed.searchParams.get('sslmode');
-    if (sslmode === 'require' || sslmode === 'verify-full' || sslmode === 'verify-ca') return true;
+    if (sslmode === 'require' || sslmode === 'verify-full' || sslmode === 'verify-ca') {
+      return { rejectUnauthorized: false };
+    }
     if (sslmode === 'disable') return false;
     if (parsed.hostname && (parsed.hostname.endsWith('.neon.tech') || parsed.hostname.includes('render.com'))) {
-      return true;
+      return { rejectUnauthorized: false };
     }
   } catch (_e) {}
   return undefined;
