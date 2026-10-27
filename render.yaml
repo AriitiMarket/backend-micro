@@ -179,6 +179,6 @@ envVarGroups:
       - key: JWT_SECRET
         generateValue: true
       - key: MONGODB_URI
-        value: "mongodb+srv://placeholder:placeholder@cluster0.mongodb.net/?retryWrites=true&w=majority"
+        value: "mongodb+srv://sebsibeyihunebelay_db_user:26Bq8Dht5Zi1JQFp@cluster0.d7dovwz.mongodb.net/?retryWrites=true&w=majority"
       - key: CLOUDINARY_URL
         value: ""

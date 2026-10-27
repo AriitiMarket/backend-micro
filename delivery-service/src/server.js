@@ -47,6 +47,17 @@ async function start() {
     ),
   }));
 
+  const server = app.listen(env.port, () => {
+    console.log(`[delivery] Listening on http://localhost:${env.port}`);
+  });
+  const shutdown = () => {
+    server.close(() => {
+      require('mongoose').connection.close(false).then(() => process.exit(0));
+    });
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
   await connectWithRetry();
   console.log('[delivery] Database ready');
   const deliveryOutbox = require('./modules/delivery-fulfillment/services/delivery-outbox.service');
@@ -67,17 +78,6 @@ async function start() {
       assignmentsService.expireStaleOffers().catch((e) => console.warn('[assignments] expiry sweep:', e.message));
     }, 60 * 1000).unref();
   }
-
-  const server = app.listen(env.port, () => {
-    console.log(`[delivery] Listening on http://localhost:${env.port}`);
-  });
-  const shutdown = () => {
-    server.close(() => {
-      require('mongoose').connection.close(false).then(() => process.exit(0));
-    });
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
 }
 
 start().catch((err) => {

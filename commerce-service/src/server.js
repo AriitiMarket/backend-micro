@@ -51,10 +51,11 @@ async function start() {
     ),
   }));
 
-  await connectWithRetry();
   app.listen(env.port, () => {
     console.log('[commerce] Service listening on http://localhost:' + env.port);
   });
+
+  await connectWithRetry();
   const orderService = require('./modules/fulfillment/services/orders.service');
   let handoffSweepRunning = false;
   const handoffSweep = async () => {
