@@ -20,7 +20,22 @@ function cleanUrl(value) {
   let raw = String(value == null ? '' : value).trim();
   if (!raw) return '';
   if (!/^https?:\/\//i.test(raw)) {
-    raw = raw.includes('onrender.com') ? `https://${raw}` : `http://${raw}`;
+    if (raw.includes('onrender.com') || (process.env.RENDER && !raw.includes('.') && !raw.includes('localhost'))) {
+      if (!raw.includes('.')) raw = `${raw}.onrender.com`;
+      raw = `https://${raw}`;
+    } else {
+      raw = `http://${raw}`;
+    }
+  } else if (process.env.RENDER && !raw.includes('localhost')) {
+    try {
+      const u = new URL(raw);
+      if (!u.hostname.includes('.')) {
+        u.hostname = `${u.hostname}.onrender.com`;
+        u.protocol = 'https:';
+        u.port = '';
+        raw = u.toString();
+      }
+    } catch (_) {}
   }
   return raw.replace(/\/+$/, '');
 }

@@ -25,20 +25,11 @@ services:
       - key: CORS_ORIGIN
         value: "*"
       - key: IDENTITY_SERVICE_URL
-        fromService:
-          name: aritii-identity
-          type: web
-          property: host
+        value: https://aritii-identity.onrender.com
       - key: COMMERCE_SERVICE_URL
-        fromService:
-          name: aritii-commerce
-          type: web
-          property: host
+        value: https://aritii-commerce.onrender.com
       - key: DELIVERY_SERVICE_URL
-        fromService:
-          name: aritii-delivery
-          type: web
-          property: host
+        value: https://aritii-delivery.onrender.com
       - fromGroup: aritii-cluster-secrets
 
   # ----------------------------------------------------------------------------
@@ -68,20 +59,11 @@ services:
       - key: DATABASE_SSL
         value: "true"
       - key: API_GATEWAY_URL
-        fromService:
-          name: aritii-gateway
-          type: web
-          property: host
+        value: https://aritii-gateway.onrender.com
       - key: COMMERCE_SERVICE_URL
-        fromService:
-          name: aritii-commerce
-          type: web
-          property: host
+        value: https://aritii-commerce.onrender.com
       - key: DELIVERY_SERVICE_URL
-        fromService:
-          name: aritii-delivery
-          type: web
-          property: host
+        value: https://aritii-delivery.onrender.com
       - fromGroup: aritii-cluster-secrets
 
   # ----------------------------------------------------------------------------
@@ -105,20 +87,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: API_GATEWAY_URL
-        fromService:
-          name: aritii-gateway
-          type: web
-          property: host
+        value: https://aritii-gateway.onrender.com
       - key: IDENTITY_SERVICE_URL
-        fromService:
-          name: aritii-identity
-          type: web
-          property: host
+        value: https://aritii-identity.onrender.com
       - key: DELIVERY_SERVICE_URL
-        fromService:
-          name: aritii-delivery
-          type: web
-          property: host
+        value: https://aritii-delivery.onrender.com
       - fromGroup: aritii-cluster-secrets
 
   # ----------------------------------------------------------------------------
@@ -142,20 +115,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: API_GATEWAY_URL
-        fromService:
-          name: aritii-gateway
-          type: web
-          property: host
+        value: https://aritii-gateway.onrender.com
       - key: IDENTITY_SERVICE_URL
-        fromService:
-          name: aritii-identity
-          type: web
-          property: host
+        value: https://aritii-identity.onrender.com
       - key: COMMERCE_SERVICE_URL
-        fromService:
-          name: aritii-commerce
-          type: web
-          property: host
+        value: https://aritii-commerce.onrender.com
       - fromGroup: aritii-cluster-secrets
 
 # ------------------------------------------------------------------------------
