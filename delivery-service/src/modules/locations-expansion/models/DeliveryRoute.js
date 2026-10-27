@@ -33,6 +33,5 @@ routeSchema.index({ destinationLocationId: 1 });
 routeSchema.index({ status: 1 });
 routeSchema.index({ providerId: 1 });
 routeSchema.index({ priority: 1 });
-routeSchema.index({ code: 1 }, { sparse: true });
 
 module.exports = mongoose.model('DeliveryRoute', routeSchema);

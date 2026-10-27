@@ -21,7 +21,6 @@ const trackingEventSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-trackingEventSchema.index({ deliveryId: 1 });
 trackingEventSchema.index({ deliveryId: 1, timestamp: 1 });
 trackingEventSchema.index({ providerId: 1 });
 trackingEventSchema.index({ location: '2dsphere' }, { sparse: true });
