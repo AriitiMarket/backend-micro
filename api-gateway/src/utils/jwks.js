@@ -1,5 +1,6 @@
 // JWKS client — fetches and caches the Identity Service's public keys for RS256 verification.
 const http = require('http');
+const https = require('https');
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 
@@ -10,7 +11,8 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 function fetchJWKS() {
   return new Promise((resolve, reject) => {
     const url = `${env.identityServiceUrl}/.well-known/jwks.json`;
-    http.get(url, { timeout: 5000 }, (res) => {
+    const transport = url.startsWith('https:') ? https : http;
+    transport.get(url, { timeout: 5000 }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
