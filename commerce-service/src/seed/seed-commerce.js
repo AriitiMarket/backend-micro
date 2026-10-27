@@ -127,11 +127,27 @@ async function getSellerUserId(email, fallbackId) {
 
 async function seed({ reset = false } = {}) {
   try {
-    await mongoose.connect(MONGO_URI);
-    console.log('Connected to MongoDB:', MONGO_URI);
+    let dbName = process.env.COMMERCE_MONGODB_DB_NAME || process.env.MONGODB_DB_NAME;
+    if (!dbName) {
+      const match = String(MONGO_URI).match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/);
+      if (match && match[1] && match[1] !== 'test' && match[1] !== 'admin') {
+        dbName = match[1];
+      } else {
+        dbName = 'aritii_commerce';
+      }
+    }
+    await mongoose.connect(MONGO_URI, { dbName });
+    console.log(`Connected to MongoDB database "${mongoose.connection.name}"`);
 
-    const locationsCol = mongoose.connection.db.collection('locations');
-    const zonesCol = mongoose.connection.db.collection('zones');
+    const deliveryDb = mongoose.connection.client.db('aritii_delivery');
+    const localLocationCount = await mongoose.connection.db.collection('locations').countDocuments().catch(() => 0);
+    const locationsCol = localLocationCount > 0
+      ? mongoose.connection.db.collection('locations')
+      : deliveryDb.collection('locations');
+    const localZoneCount = await mongoose.connection.db.collection('zones').countDocuments().catch(() => 0);
+    const zonesCol = localZoneCount > 0
+      ? mongoose.connection.db.collection('zones')
+      : deliveryDb.collection('zones');
 
     // ── Fetch Delivery Locations & Zones ─────────────────────────────────────
     const locEthiopia = await locationsCol.findOne({ code: 'ET' });

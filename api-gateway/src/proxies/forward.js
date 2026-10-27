@@ -132,10 +132,11 @@ function forward(req, res, targetUrl) {
       if (body.length > 0) headers['Content-Length'] = body.length;
       const traceId = req.id || req.headers['x-request-id'];
       if (traceId) headers['X-Request-ID'] = traceId;
-      // Preserve the public Host so OIDC discovery advertises the gateway
-      // issuer/endpoints, not the internal service hostname.
-      if (req.headers.host) headers.Host = req.headers.host;
-      if (req.headers['x-forwarded-host']) headers['X-Forwarded-Host'] = req.headers['x-forwarded-host'];
+      // Upstream Host header MUST match the target service so virtual-host / reverse-proxy
+      // routers (like Render and Cloudflare) don't route the request back to the gateway.
+      // The public host is preserved in X-Forwarded-Host for downstream OIDC/discovery.
+      headers.host = parsed.host;
+      if (req.headers.host) headers['X-Forwarded-Host'] = req.headers['x-forwarded-host'] || req.headers.host;
       if (req.headers['x-forwarded-proto']) headers['X-Forwarded-Proto'] = req.headers['x-forwarded-proto'];
 
       const clientIp = (req.ip || (req.socket && req.socket.remoteAddress) || '').replace(/^.*:/, '');
