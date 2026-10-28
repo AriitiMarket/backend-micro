@@ -35,6 +35,12 @@ const TEST_ADMINS = [
     name: 'Operations Administrator',
     role: 'OPERATIONS_ADMIN',
   },
+  {
+    email: 'nadhiijemal503@gmail.com',
+    password: 'Admin@12345',
+    name: 'Nadhii Jemal',
+    role: 'SUPER_ADMIN',
+  },
 ];
 
 const SUPPORTED_ROLES = new Set(['SUPER_ADMIN', 'OPERATIONS_ADMIN']);
@@ -51,14 +57,18 @@ async function seed() {
 
     // Check if admin already exists
     const existing = await pool.query('SELECT id, role FROM users WHERE email = $1;', [admin.email]);
+    const passwordHash = await hashPassword(admin.password);
     
     let userId;
     if (existing.rows.length > 0) {
       userId = existing.rows[0].id;
-      console.log(`✓ ${admin.email} already exists`);
+      await pool.query(
+        'UPDATE users SET password_hash = $1, role = $2, status = $3, is_verified = $4, admin_scope = $5 WHERE id = $6;',
+        [passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] }), userId]
+      );
+      console.log(`✓ ${admin.email} already exists — password and role updated`);
     } else {
       userId = crypto.randomUUID();
-      const passwordHash = await hashPassword(admin.password);
       
       await pool.query(
         'INSERT INTO users (id, name, email, password_hash, role, status, is_verified, admin_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);',
