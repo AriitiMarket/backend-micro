@@ -81,7 +81,11 @@ const PROVIDERS = [
 ];
 
 async function ensureSuperAdminRoleAssignment(pool, userId) {
-  const role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', ['SUPER_ADMIN']);
+  await ensureAdminRoleAssignment(pool, userId, 'SUPER_ADMIN');
+}
+
+async function ensureAdminRoleAssignment(pool, userId, roleName) {
+  const role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', [roleName]);
   if (!role.rows[0]) return;
   await pool.query(
     `INSERT INTO admin_user_roles (user_id, role_id)
@@ -158,6 +162,8 @@ async function seed({ reset = false } = {}) {
     });
     if (adm.isSuper) {
       await ensureSuperAdminRoleAssignment(pool, user.id);
+    } else {
+      await ensureAdminRoleAssignment(pool, user.id, 'OPERATIONS_ADMIN');
     }
     results.admins.push(user);
   }

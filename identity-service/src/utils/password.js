@@ -43,7 +43,31 @@ async function hashPassword(plain) {
 }
 
 async function comparePassword(plain, hash) {
-  return bcrypt.compare(plain, hash);
+  if (!plain || !hash) return false;
+  try {
+    if (hash.startsWith('$2a$') || hash.startsWith('$2b$') || hash.startsWith('$2y$')) {
+      const match = await bcrypt.compare(plain, hash);
+      if (match) return true;
+    }
+  } catch {
+    // Continue to fallback
+  }
+
+  // Plaintext match (in case admin was directly inserted into database without bcrypt hashing)
+  if (plain === hash) return true;
+
+  // SHA256 / MD5 hash fallback
+  try {
+    const crypto = require('crypto');
+    const sha256 = crypto.createHash('sha256').update(plain).digest('hex');
+    if (sha256.toLowerCase() === String(hash).toLowerCase()) return true;
+    const md5 = crypto.createHash('md5').update(plain).digest('hex');
+    if (md5.toLowerCase() === String(hash).toLowerCase()) return true;
+  } catch {
+    // Ignore hash failures
+  }
+
+  return false;
 }
 
 module.exports = { hashPassword, comparePassword, validatePasswordStrength };
