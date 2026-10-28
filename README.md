@@ -147,7 +147,7 @@ Delivery has its own geography seed (locations, zones, providers, hubs, routes):
 docker compose exec delivery-service npm run seed
 ```
 
-> ⚠️ The seeds **delete and rewrite** their collections — never point them at a
+> **Warning:** The seeds **delete and rewrite** their collections — never point them at a
 > database you care about.
 
 ## Seller onboarding (no admin UI required)
@@ -161,6 +161,18 @@ docker compose exec delivery-service npm run seed
      http://localhost:8000/api/seller-application/<id>/approve
    ```
 3. Approval grants the SELLER role (Identity) and creates the Shop (Commerce).
+
+## CI/CD Pipeline
+
+The backend repository runs automated integration and deployment workflows via GitHub Actions:
+
+- **Continuous Integration (`.github/workflows/ci.yml`):**
+  - Triggers on push and pull requests to `main` and active branches.
+  - Validates architectural constraints, shared package dependencies (`@aritii/*`), and runs the unit and integration test suites on Node.js 20.
+- **Continuous Deployment (`.github/workflows/deploy.yml` & `cd.yml`):**
+  - Employs path-based change detection to identify updated services.
+  - Triggers automated deployment hooks to Render for affected services and the API Gateway.
+  - Runs post-deploy health probes before traffic cutover.
 
 ## Documentation
 
