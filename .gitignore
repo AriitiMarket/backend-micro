@@ -9,6 +9,10 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# Keys and certificates
+*.pem
+identity-service/src/config/keys/private.pem
+
 # Build outputs
 dist/
 build/

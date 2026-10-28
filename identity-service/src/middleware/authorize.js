@@ -28,7 +28,17 @@
 //     the gateway as `x-user-role-statuses`.
 // The response is written directly rather than delegated to an errorHandler so
 // the failure body is identical everywhere.
-const LEGACY_ROLE_ALIASES = { CUSTOMER: 'BUYER' };
+const LEGACY_ROLE_ALIASES = {
+  CUSTOMER: 'BUYER',
+  SUPER_ADMIN: 'ADMIN',
+  OPERATIONS_ADMIN: 'ADMIN',
+  OPERATIONAL_ADMIN: 'ADMIN',
+  OPS_ADMIN: 'ADMIN',
+  OPSADMIN: 'ADMIN',
+  OS_ADMIN: 'ADMIN',
+  OSADMIN: 'ADMIN',
+  OPERATIONS: 'ADMIN',
+};
 
 // Membership statuses that block a gate, mapped to the platform's canonical
 // authorization codes. Anything else (ACTIVE, or no status at all) is usable.

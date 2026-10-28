@@ -71,15 +71,16 @@ app.get('/health/ready', async (req, res) => {
   });
 });
 
-// Aggregated report — every downstream service the gateway routes to. Always
-// answers 200 (it is a report, not a gate) so existing uptime tooling keeps
-// working; use /health/ready for the machine signal and /health/live for
-// "is the process up".
+// Aggregated health check for gateway and downstream services.
+// Returns 200 when all downstream dependencies are healthy, 503 when degraded.
 app.get('/health', async (req, res) => {
   try {
     const report = await checkAll(DOWNSTREAMS, env.healthProbeTimeoutMs);
-    res.status(200).json({
-      success: true, code: 'HEALTHY', status: 'healthy',
+    const statusCode = report.ready ? 200 : 503;
+    res.status(statusCode).json({
+      success: report.ready,
+      code: report.ready ? 'HEALTHY' : 'NOT_READY',
+      status: report.ready ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
       services: report.services,
       unavailable: availability.snapshot(),

@@ -116,9 +116,30 @@ async function runMigrations(db) {
   return changed;
 }
 
+function resolveDatabaseName(rawUri, defaultDbName, explicitDbName) {
+  if (explicitDbName && explicitDbName.trim()) {
+    return explicitDbName.trim();
+  }
+  if (!rawUri) return defaultDbName;
+  const match = String(rawUri).match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/);
+  if (match && match[1] && match[1].trim()) {
+    const parsed = match[1].trim();
+    if (parsed !== 'test' && parsed !== 'admin' && parsed !== '') {
+      return parsed;
+    }
+  }
+  return defaultDbName;
+}
+
 async function connectDatabase() {
-  await mongoose.connect(env.mongodbUri);
-  console.log(`[commerce] MongoDB connected: ${env.mongodbUri}`);
+  const dbName = resolveDatabaseName(
+    env.mongodbUri,
+    'aritii_commerce',
+    process.env.COMMERCE_MONGODB_DB_NAME || process.env.MONGODB_DB_NAME
+  );
+  await mongoose.connect(env.mongodbUri, { dbName });
+  const maskedUri = String(env.mongodbUri).replace(/:([^:@]+)@/, ':****@');
+  console.log(`[commerce] MongoDB connected to database "${mongoose.connection.name}" via ${maskedUri}`);
 
   const changed = await runMigrations(mongoose.connection.db);
   console.log(changed.length > 0

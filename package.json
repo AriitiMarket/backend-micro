@@ -10,6 +10,7 @@
     "test:gateway": "npm --prefix api-gateway test",
     "test:services": "npm --prefix identity-service test && npm --prefix commerce-service test && npm --prefix delivery-service test",
     "test:integration": "node --test tests/integration/*.test.js",
+    "seed": "node scripts/reset-and-seed.js",
     "up": "docker compose up -d --build",
     "down": "docker compose down",
     "logs": "docker compose logs -f"

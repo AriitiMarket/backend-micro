@@ -1,0 +1,164 @@
+name: Aritii Production Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment skipping change filters'
+        required: false
+        default: 'false'
+        type: string
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ============================================================================
+  # 1. Validation & Automated Tests
+  # ============================================================================
+  test:
+    name: Lint & Test Changed Services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Monorepo Root Dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Create Test Environment
+        run: |
+          cp .env.example .env
+          ./scripts/generate-tokens.sh >/dev/null 2>&1 || true
+          ./scripts/generate-keys.sh >/dev/null 2>&1 || true
+
+      - name: Run Architecture Guardrail Tests
+        run: npm run test:architecture
+
+      - name: Detect Changed Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            gateway:
+              - 'api-gateway/**'
+              - 'packages/**'
+              - 'package*.json'
+            identity:
+              - 'identity-service/**'
+              - 'packages/**'
+              - 'package*.json'
+            commerce:
+              - 'commerce-service/**'
+              - 'packages/**'
+              - 'package*.json'
+            delivery:
+              - 'delivery-service/**'
+              - 'packages/**'
+              - 'package*.json'
+
+      - name: Test API Gateway
+        if: steps.filter.outputs.gateway == 'true' || github.event.inputs.force_deploy == 'true'
+        run: npm run test:gateway
+
+      - name: Test Identity Service
+        if: steps.filter.outputs.identity == 'true' || github.event.inputs.force_deploy == 'true'
+        run: npm --prefix identity-service test
+
+      - name: Test Commerce Service Unit Tests
+        if: steps.filter.outputs.commerce == 'true' || github.event.inputs.force_deploy == 'true'
+        run: |
+          npm --prefix commerce-service test src/app/middleware/__tests__/authorize.test.js src/shared/__tests__/response.test.js src/shared/__tests__/internal-auth.test.js src/shared/__tests__/internal-client.test.js
+
+      - name: Test Delivery Service Unit Tests
+        if: steps.filter.outputs.delivery == 'true' || github.event.inputs.force_deploy == 'true'
+        run: |
+          npm --prefix delivery-service test src/shared/__tests__/*.test.js
+
+  # ============================================================================
+  # 2. Deployment to Production (Render and/or VPS Host)
+  # ============================================================================
+  deploy:
+    name: Deploy to Production
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------------
+      # Render Deployment via Deploy Hooks
+      # ------------------------------------------------------------------------
+      - name: Trigger Render Deployment (if hooks configured)
+        if: env.HAS_RENDER_HOOKS == 'true'
+        env:
+          HAS_RENDER_HOOKS: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' || secrets.RENDER_DEPLOY_HOOK_GATEWAY != '' }}
+          RENDER_HOOK_GATEWAY: ${{ secrets.RENDER_DEPLOY_HOOK_GATEWAY || secrets.RENDER_DEPLOY_HOOK_URL }}
+          RENDER_HOOK_IDENTITY: ${{ secrets.RENDER_DEPLOY_HOOK_IDENTITY }}
+          RENDER_HOOK_COMMERCE: ${{ secrets.RENDER_DEPLOY_HOOK_COMMERCE }}
+          RENDER_HOOK_DELIVERY: ${{ secrets.RENDER_DEPLOY_HOOK_DELIVERY }}
+        run: |
+          echo "=== Triggering Render Deployment via Deploy Hooks ==="
+          for HOOK in "${RENDER_HOOK_GATEWAY}" "${RENDER_HOOK_IDENTITY}" "${RENDER_HOOK_COMMERCE}" "${RENDER_HOOK_DELIVERY}"; do
+            if [ -n "${HOOK}" ]; then
+              echo "Calling Render Deploy Hook: ${HOOK:0:35}..."
+              curl -s -S -X POST "${HOOK}" || echo "Warning: Hook trigger failed"
+            fi
+          done
+          echo "=== Render deployment signals dispatched ==="
+
+      # ------------------------------------------------------------------------
+      # VPS / Azure VM Deployment via SSH (if host configured)
+      # ------------------------------------------------------------------------
+      - name: Execute Deployment on Remote Host via SSH
+        if: env.HAS_DEPLOY_HOST == 'true'
+        env:
+          HAS_DEPLOY_HOST: ${{ secrets.DEPLOY_HOST != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER || 'deploy' }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: true
+          envs: GITHUB_SHA
+          script: |
+            set -euo pipefail
+            DEPLOY_DIR="${{ secrets.DEPLOY_PATH || '/opt/aritii/backend-services' }}"
+
+            echo "=== Starting deployment on host $(hostname) in ${DEPLOY_DIR} ==="
+
+            if [ ! -d "${DEPLOY_DIR}" ]; then
+              echo "Creating deployment directory: ${DEPLOY_DIR}"
+              sudo mkdir -p "${DEPLOY_DIR}"
+              sudo chown -R $USER:$USER "${DEPLOY_DIR}"
+              git clone https://github.com/${{ github.repository }}.git "${DEPLOY_DIR}"
+            fi
+
+            cd "${DEPLOY_DIR}"
+
+            # Synchronize codebase to latest commit on main
+            echo "Fetching latest revision from origin/main..."
+            git fetch --prune origin main
+            git reset --hard origin/main
+
+            # Make deployment scripts executable
+            chmod +x scripts/*.sh
+
+            # Execute production deployment script with health check validation
+            echo "Executing production deploy script..."
+            ./scripts/deploy.sh
+
+            echo "=== Deployment to $(hostname) successfully completed ==="

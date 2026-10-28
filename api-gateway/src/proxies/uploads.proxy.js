@@ -4,11 +4,13 @@
 // Identity Service (user avatar uploads). This keeps ALL media behind the
 // single public gateway entry point instead of exposing service ports.
 const http = require('http');
+const https = require('https');
 const env = require('../config/env');
 
 function fetchFrom(base, targetPath, onResponse) {
   const url = new URL(base);
-  const req = http.request(
+  const transport = url.protocol === 'https:' ? https : http;
+  const req = transport.request(
     {
       hostname: url.hostname,
       port: url.port || (url.protocol === 'https:' ? 443 : 80),

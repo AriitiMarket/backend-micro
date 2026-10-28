@@ -70,3 +70,11 @@ test('comparePassword rejects wrong password', async () => {
   assert.equal(await comparePassword('IncorrectPass123!', hash), false);
 });
 
+test('comparePassword supports plaintext and sha256 fallbacks', async () => {
+  assert.equal(await comparePassword('PlainPass123', 'PlainPass123'), true);
+  assert.equal(await comparePassword('PlainPass123', 'OtherPass'), false);
+  const crypto = require('crypto');
+  const sha = crypto.createHash('sha256').update('PlainPass123').digest('hex');
+  assert.equal(await comparePassword('PlainPass123', sha), true);
+});
+

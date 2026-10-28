@@ -124,6 +124,16 @@ stub('src/modules/operations/repositories/assignments.repository.js', {
     return { modifiedCount: 0 };
   },
 });
+stub('src/modules/delivery-fulfillment/repositories/delivery-request.repository.js', {
+  async findByOrderId() { return null; },
+});
+stub('src/shared/utils/audit-client.js', {
+  sendAudit: async () => null,
+  getAdminFromReq: () => ({ adminId: null, adminName: 'Admin', ipAddress: null }),
+  getActorFromReq: () => ({ actor: { id: 'admin1', name: 'Admin', role: 'admin' } }),
+  ACTIONS: {},
+  LEVELS: {},
+});
 
 const svc = require(path.join(ROOT, 'src/modules/operations/services/assignmentBatches.service.js'));
 
@@ -140,6 +150,7 @@ function reset() {
 function seedDelivery(orderId, sellerId, status = 'pending', zoneId = 'zone1') {
   const d = {
     _id: oid(), orderId, sellerId, status,
+    items: [{ title: 'Item', quantity: 1 }],
     destination: { zoneId },
     origin: { shopName: `Shop ${sellerId}` },
   };

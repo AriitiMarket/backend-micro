@@ -142,6 +142,14 @@ router.get('/order/:orderId', authenticate, authorize(['BUYER', 'SELLER', 'ADMIN
   ordersController.getOrderDetails(req, res, next);
 });
 
+// Get delivery linked to order
+router.get('/:id/delivery', authenticate, authorize(['BUYER', 'SELLER', 'ADMIN']), (req, res, next) => {
+  ordersController.getOrderDelivery(req, res, next);
+});
+router.get('/order/:orderId/delivery', authenticate, authorize(['BUYER', 'SELLER', 'ADMIN']), (req, res, next) => {
+  ordersController.getOrderDelivery(req, res, next);
+});
+
 // Approve refund (seller/business)
 router.put('/order-refund-success/:orderId', authenticate, authorize(['SELLER', 'ADMIN']), (req, res, next) => {
   ordersController.approveRefund(req, res, next);

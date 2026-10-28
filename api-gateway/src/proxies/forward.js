@@ -10,6 +10,7 @@
 //   * cap the buffered body size and stream the upstream response back
 // No cookies. No server sessions. Pure token-based.
 const http = require('http');
+const https = require('https');
 const { verifyToken } = require('../utils/jwks');
 const env = require('../config/env');
 const { outbound, serviceNameForUrl } = require('../config/services');
@@ -129,13 +130,22 @@ function forward(req, res, targetUrl) {
       const headers = {};
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
       if (body.length > 0) headers['Content-Length'] = body.length;
-      if (req.id) headers['X-Request-ID'] = req.id;
-      // Preserve the public Host so OIDC discovery advertises the gateway
-      // issuer/endpoints, not the internal service hostname.
-      if (req.headers.host) headers.Host = req.headers.host;
-      if (req.headers['x-forwarded-host']) headers['X-Forwarded-Host'] = req.headers['x-forwarded-host'];
+      const traceId = req.id || req.headers['x-request-id'];
+      if (traceId) headers['X-Request-ID'] = traceId;
+      // Upstream Host header MUST match the target service so virtual-host / reverse-proxy
+      // routers (like Render and Cloudflare) don't route the request back to the gateway.
+      // The public host is preserved in X-Forwarded-Host for downstream OIDC/discovery.
+      headers.host = parsed.host;
+      if (req.headers.host) headers['X-Forwarded-Host'] = req.headers['x-forwarded-host'] || req.headers.host;
       if (req.headers['x-forwarded-proto']) headers['X-Forwarded-Proto'] = req.headers['x-forwarded-proto'];
-      if (req.headers['x-forwarded-for']) headers['X-Forwarded-For'] = req.headers['x-forwarded-for'];
+
+      const clientIp = (req.ip || (req.socket && req.socket.remoteAddress) || '').replace(/^.*:/, '');
+      const existingXff = req.headers['x-forwarded-for'];
+      if (existingXff) {
+        headers['X-Forwarded-For'] = `${existingXff}, ${clientIp || '127.0.0.1'}`;
+      } else if (clientIp) {
+        headers['X-Forwarded-For'] = clientIp;
+      }
 
       // Cluster credentials: ALWAYS injected by the gateway, never taken from
       // the client. The caller is identified as `gateway` and signed with the
@@ -171,7 +181,8 @@ function forward(req, res, targetUrl) {
         }
       }
 
-      const proxyReq = http.request({
+      const transport = parsed.protocol === 'https:' ? https : http;
+      const proxyReq = transport.request({
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: targetPath,

@@ -5,44 +5,35 @@ services:
     container_name: aritii-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: aritii_identity
+      POSTGRES_DB: ${POSTGRES_DB:-aritii_identity}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - aritii-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d aritii_identity"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aritii_identity}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 15s
 
-  # MongoDB Database
+  # MongoDB Database (Single-Node Replica Set rs0)
   mongodb:
     image: mongo:7
     container_name: aritii-mongodb
     restart: unless-stopped
-    # A single-node replica set. The commerce and delivery services write
-    # inside transactions, and MongoDB only supports those on a replica set
-    # member — a standalone rejects them with "Transaction numbers are only
-    # allowed on a replica set member or mongos". The healthcheck initiates
-    # the set on first boot.
-    #
-    # The key file is the replica set's internal authentication key: MongoDB
-    # refuses to start an AUTHORIZED replica set without one. It is generated
-    # by the mongo-keyfile service below and never committed.
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/keyfile/mongo-keyfile"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-admin123}
-      MONGO_INITDB_DATABASE: aritii
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-aritii}
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
       - mongo_keyfile:/keyfile:ro
-      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
     depends_on:
       mongo-keyfile:
         condition: service_completed_successfully
@@ -52,16 +43,14 @@ services:
       test:
         - "CMD-SHELL"
         - >-
-          mongosh --quiet -u admin -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin
-          --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongodb:27017"}]}).ok }'
-          | grep -q 1
+          mongosh --quiet -u ${MONGO_INITDB_ROOT_USERNAME:-admin} -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval
+          'try { const s = rs.status(); const h = db.hello(); if (s.ok === 1 && (s.myState === 1 || h.isWritablePrimary === true)) { quit(0); } } catch (e) { try { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongodb:27017"}]}); } catch (ie) {} } quit(1);'
       interval: 10s
-      timeout: 30s
+      timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 15s
 
-  # Writes the replica set's internal authentication key before MongoDB starts.
-  # It runs once and exits; MongoDB waits for it.
+  # Keyfile Generator for MongoDB Replica Set Auth
   mongo-keyfile:
     image: mongo:7
     container_name: aritii-mongo-keyfile
@@ -70,7 +59,9 @@ services:
       - bash
       - -c
       - >-
-        printf '%s' "$$(head -c 756 /dev/urandom | base64 | tr -d '\n')" > /keyfile/mongo-keyfile &&
+        if [ ! -s /keyfile/mongo-keyfile ]; then
+          head -c 756 /dev/urandom | base64 | tr -d '\r\n' > /keyfile/mongo-keyfile;
+        fi &&
         chmod 400 /keyfile/mongo-keyfile &&
         chown 999:999 /keyfile/mongo-keyfile
     volumes:
@@ -78,7 +69,7 @@ services:
     networks:
       - aritii-network
 
-  # Redis Cache
+  # Redis Cache & Pub/Sub
   redis:
     image: redis:latest
     container_name: aritii-redis
@@ -93,24 +84,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
 
   # Commerce Service
   commerce-service:
     build:
       context: .
       dockerfile: Dockerfile
+      target: commerce-service
     container_name: aritii-commerce
     restart: unless-stopped
     expose:
       - "3001"
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
       SERVICE_NAME: commerce-service
       INTERNAL_SERVICE_NAME: commerce
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
       GATEWAY_URL: http://api-gateway:3000
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       CLOUDINARY_URL: ${CLOUDINARY_URL:-}
@@ -124,37 +117,34 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      # Source code mount for development hot-reload (disable in production)
-      - ./commerce-service:/app/commerce-service
-      - /app/commerce-service/node_modules
-      - ./packages:/app/packages
-      - /app/node_modules
+      - commerce_uploads:/app/commerce-service/src/uploads
     networks:
       - aritii-network
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
   # Delivery Service
   delivery-service:
     build:
       context: .
       dockerfile: Dockerfile
+      target: delivery-service
     container_name: aritii-delivery
     restart: unless-stopped
     expose:
       - "3002"
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3002
       SERVICE_NAME: delivery-service
       INTERNAL_SERVICE_NAME: delivery
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
       GATEWAY_URL: http://api-gateway:3000
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       API_GATEWAY_URL: http://api-gateway:3000
@@ -166,39 +156,37 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./delivery-service:/app/delivery-service
-      - /app/delivery-service/node_modules
-      - ./packages:/app/packages
-      - /app/node_modules
     networks:
       - aritii-network
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
   # Identity Service
   identity:
     build:
       context: .
       dockerfile: Dockerfile
+      target: identity-service
     container_name: aritii-identity
     restart: unless-stopped
     expose:
       - "3003"
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3003
       SERVICE_NAME: identity-service
       INTERNAL_SERVICE_NAME: identity
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/aritii_identity
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-aritii_identity}
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
       API_GATEWAY_URL: http://api-gateway:3000
       COMMERCE_SERVICE_URL: http://commerce-service:3001
       DELIVERY_SERVICE_URL: http://delivery-service:3002
@@ -211,46 +199,40 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./identity-service:/app/identity-service
-      # Inject the RS256 JWT signing key pair at runtime. It is deliberately
-      # excluded from the image by identity-service/.dockerignore (never bake
-      # secrets into an image); the app reads it at /app/src/config/keys/private.pem.
-      - ./identity-service/src/config/keys/private.pem:/app/src/config/keys/private.pem:ro
-      - ./identity-service/src/config/keys/public.pem:/app/src/config/keys/public.pem:ro
-      - /app/identity-service/node_modules
-      - ./packages:/app/packages
-      - /app/node_modules
+      - identity_uploads:/app/identity-service/src/uploads
+      - identity_keys:/app/identity-service/src/config/keys
     networks:
       - aritii-network
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3003/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
-  # API Gateway
+  # API Gateway (Public Entry Point)
   api-gateway:
     build:
       context: .
       dockerfile: Dockerfile
+      target: api-gateway
     container_name: aritii-gateway
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
       SERVICE_NAME: api-gateway
       INTERNAL_SERVICE_NAME: gateway
       INTERNAL_SERVICE_TOKENS: '${INTERNAL_SERVICE_TOKENS:?INTERNAL_SERVICE_TOKENS must be set - copy .env.example to .env}'
-      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_PASSWORD:-admin123}@mongodb:27017/aritii?authSource=admin&replicaSet=rs0
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       COMMERCE_SERVICE_URL: http://commerce-service:3001
       DELIVERY_SERVICE_URL: http://delivery-service:3002
       IDENTITY_SERVICE_URL: http://identity:3003
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:4000,http://127.0.0.1:4000,http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       mongodb:
@@ -263,19 +245,14 @@ services:
         condition: service_healthy
       identity:
         condition: service_healthy
-    volumes:
-      - ./api-gateway:/app/api-gateway
-      - /app/api-gateway/node_modules
-      - ./packages:/app/packages
-      - /app/node_modules
     networks:
       - aritii-network
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
 volumes:
   postgres_data:
@@ -287,6 +264,12 @@ volumes:
   mongo_keyfile:
     driver: local
   redis_data:
+    driver: local
+  commerce_uploads:
+    driver: local
+  identity_uploads:
+    driver: local
+  identity_keys:
     driver: local
 
 networks:

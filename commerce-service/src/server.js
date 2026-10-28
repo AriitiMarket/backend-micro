@@ -51,10 +51,19 @@ async function start() {
     ),
   }));
 
-  await connectWithRetry();
-  app.listen(env.port, () => {
+  const server = app.listen(env.port, () => {
     console.log('[commerce] Service listening on http://localhost:' + env.port);
   });
+  const shutdown = () => {
+    server.close(() => {
+      require('mongoose').connection.close(false).then(() => process.exit(0));
+    });
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  await connectWithRetry();
+  console.log('[commerce] Database ready');
   const orderService = require('./modules/fulfillment/services/orders.service');
   let handoffSweepRunning = false;
   const handoffSweep = async () => {

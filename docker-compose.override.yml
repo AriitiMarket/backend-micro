@@ -1,0 +1,67 @@
+# ==============================================================================
+# Development Override for Aritii Market Platform
+# ==============================================================================
+# Automatically merged on top of docker-compose.yml during `docker compose up`.
+# Provides local source mounts for hot-reload, debugging ports, and dev env flags.
+#
+# DO NOT deploy this file to production. In production run:
+#   docker compose -f docker-compose.yml up -d
+# ==============================================================================
+
+services:
+  # Expose database ports for local management (pgAdmin, Compass, redis-cli)
+  postgres:
+    ports:
+      - "5432:5432"
+
+  mongodb:
+    ports:
+      - "27017:27017"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  commerce-service:
+    environment:
+      NODE_ENV: development
+    volumes:
+      # Source directory bind mounts for development hot reload
+      - ./commerce-service:/app/commerce-service
+      - /app/commerce-service/node_modules
+      - ./packages:/app/packages
+      - /app/node_modules
+    ports:
+      - "3001:3001"
+
+  delivery-service:
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./delivery-service:/app/delivery-service
+      - /app/delivery-service/node_modules
+      - ./packages:/app/packages
+      - /app/node_modules
+    ports:
+      - "3002:3002"
+
+  identity:
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./identity-service:/app/identity-service
+      - ./identity-service/src/config/keys:/app/identity-service/src/config/keys
+      - /app/identity-service/node_modules
+      - ./packages:/app/packages
+      - /app/node_modules
+    ports:
+      - "3003:3003"
+
+  api-gateway:
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./api-gateway:/app/api-gateway
+      - /app/api-gateway/node_modules
+      - ./packages:/app/packages
+      - /app/node_modules

@@ -13,6 +13,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const availability = require('./serviceAvailability');
 
 const READY_PATH = '/health/ready';
@@ -26,7 +27,8 @@ function probe(baseUrl, path, timeoutMs) {
     } catch (_err) {
       return resolve({ reachable: false, statusCode: 0, error: 'invalid url' });
     }
-    const req = http.get(
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const req = transport.get(
       {
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),

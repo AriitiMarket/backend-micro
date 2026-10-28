@@ -6,6 +6,7 @@
 
 const ordersService = require('../services/orders.service');
 const orderStateService = require('../services/orderState.service');
+const orderDeliveryService = require('../services/orderDelivery.service');
 const returnsService = require('../services/returns.service');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const { isSeller, isAdmin } = require('../../../shared/utils/roles');
@@ -374,6 +375,24 @@ class OrdersController {
       res.json({
         success: true,
         order
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get delivery linked to an order
+   * GET /order/:id/delivery
+   */
+  async getOrderDelivery(req, res, next) {
+    try {
+      const orderId = req.params.id || req.params.orderId;
+      const delivery = await orderDeliveryService.getByOrderId(orderId);
+      return res.status(200).json({
+        success: true,
+        delivery: delivery || null,
+        linked: Boolean(delivery),
       });
     } catch (err) {
       next(err);

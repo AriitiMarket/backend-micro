@@ -60,9 +60,11 @@ async function seed() {
     const passwordHash = await hashPassword(admin.password);
     
     let userId;
+    const passwordHash = await hashPassword(admin.password);
     if (existing.rows.length > 0) {
       userId = existing.rows[0].id;
       await pool.query(
+<<<<<<< HEAD
         'UPDATE users SET password_hash = $1, role = $2, status = $3, is_verified = $4, admin_scope = $5 WHERE id = $6;',
         [passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] }), userId]
       );
@@ -70,11 +72,21 @@ async function seed() {
     } else {
       userId = crypto.randomUUID();
       
+=======
+        `UPDATE users
+         SET name = $1, password_hash = $2, role = 'ADMIN', status = 'active', is_verified = true,
+             admin_scope = $3::jsonb, updated_at = NOW()
+         WHERE id = $4;`,
+        [admin.name, passwordHash, JSON.stringify({ locations: ['*'], services: ['*'] }), userId]
+      );
+      console.log(`✓ Updated: ${admin.email}`);
+    } else {
+      userId = crypto.randomUUID();
+>>>>>>> 0847c52aa0e53a3ccf1f0a7dbbbb44ef1afe861e
       await pool.query(
         'INSERT INTO users (id, name, email, password_hash, role, status, is_verified, admin_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);',
         [userId, admin.name, admin.email, passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] })]
       );
-      
       console.log(`✓ Created: ${admin.email}`);
     }
 
@@ -98,12 +110,36 @@ async function seed() {
 }
 
 async function ensureAdminRoleAssignment(pool, userId, roleName) {
-  const role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', [roleName]);
+  let role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', [roleName]);
   
   if (!role.rows[0]) {
-    throw new Error(
-      `${roleName} role not found in admin_roles table. Run migration first: node src/migrations/002-migrate-roles.js`
+    const defaultPerms = roleName === 'SUPER_ADMIN'
+      ? ['*']
+      : [
+          'dashboard.view',
+          'businesses.view',
+          'shops.view',
+          'locations.view',
+          'orders.view',
+          'orders.manage',
+          'delivery.view',
+          'delivery.manage',
+          'disputes.view',
+          'disputes.manage',
+          'reports.view',
+        ];
+    const inserted = await pool.query(
+      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system)
+       VALUES ($1, $2, $3, $4::jsonb, true)
+       RETURNING id;`,
+      [
+        roleName,
+        roleName === 'SUPER_ADMIN' ? 'Super Admin' : 'Operations Admin',
+        roleName === 'SUPER_ADMIN' ? 'Full system access' : 'Operations Administrator',
+        JSON.stringify(defaultPerms),
+      ]
     );
+    role = inserted;
   }
 
   // Remove stale role assignments
