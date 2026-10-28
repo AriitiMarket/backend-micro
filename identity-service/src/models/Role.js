@@ -29,6 +29,14 @@ const ROLES = Object.freeze({
 // Read-only map of pre-normalization spellings to their canonical value.
 const LEGACY_ROLE_ALIASES = Object.freeze({
   CUSTOMER: 'BUYER',
+  SUPER_ADMIN: 'ADMIN',
+  OPERATIONS_ADMIN: 'ADMIN',
+  OPERATIONAL_ADMIN: 'ADMIN',
+  OPS_ADMIN: 'ADMIN',
+  OPSADMIN: 'ADMIN',
+  OS_ADMIN: 'ADMIN',
+  OSADMIN: 'ADMIN',
+  OPERATIONS: 'ADMIN',
 });
 
 /**

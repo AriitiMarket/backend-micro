@@ -16,9 +16,28 @@
 //     temporary ALLOW_UNASSIGNED_ADMIN_WILDCARD switch exists only for a
 //     controlled migration of legacy accounts.
 const adminRolesRepo = require('../repositories/admin-roles.repository');
+const { normalizeRole } = require('../models/Role');
 
 const WILDCARD = '*';
 const UNRESTRICTED_ADMIN_ROLE = 'SUPER_ADMIN';
+const OPERATIONS_ADMIN_ROLE = 'OPERATIONS_ADMIN';
+
+const DEFAULT_OPERATIONS_PERMISSIONS = Object.freeze([
+  'dashboard.view',
+  'users.view',
+  'businesses.view',
+  'shops.view',
+  'locations.view',
+  'orders.view',
+  'orders.manage',
+  'delivery.view',
+  'delivery.manage',
+  'disputes.view',
+  'disputes.manage',
+  'reports.view',
+  'audit.view',
+]);
+
 // During migration, set this to "true" only if legacy ADMIN accounts must keep
 // access before they receive an explicit admin role assignment. New deployments
 // should leave it disabled: an ADMIN with no assignment must fail closed.
@@ -32,7 +51,21 @@ const ALLOW_UNASSIGNED_ADMIN_WILDCARD =
  * @returns {Promise<{ adminRoles: string[], permissions: string[], adminScope: object }>}
  */
 async function resolveAdminAuthorization(user) {
-  if (!user || user.role !== 'ADMIN') {
+  const rawRole = String(user?.role || '').trim().toUpperCase();
+  const normalizedRole = normalizeRole(rawRole);
+  const isOpsRole = [
+    'OPERATIONS_ADMIN',
+    'OPERATIONAL_ADMIN',
+    'OPS_ADMIN',
+    'OPSADMIN',
+    'OS_ADMIN',
+    'OSADMIN',
+    'OPERATIONS',
+  ].includes(rawRole);
+
+  const isAdminUser = normalizedRole === 'ADMIN' || isOpsRole || rawRole.endsWith('_ADMIN');
+
+  if (!user || !isAdminUser) {
     return { adminRoles: [], permissions: [], adminScope: {} };
   }
 
@@ -51,12 +84,21 @@ async function resolveAdminAuthorization(user) {
     throw error;
   }
 
-  if (!roles.length && ALLOW_UNASSIGNED_ADMIN_WILDCARD) {
-    return {
-      adminRoles: [UNRESTRICTED_ADMIN_ROLE],
-      permissions: [WILDCARD],
-      adminScope,
-    };
+  if (!roles.length) {
+    if (isOpsRole) {
+      return {
+        adminRoles: [OPERATIONS_ADMIN_ROLE],
+        permissions: [...DEFAULT_OPERATIONS_PERMISSIONS],
+        adminScope,
+      };
+    }
+    if (ALLOW_UNASSIGNED_ADMIN_WILDCARD || rawRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN') {
+      return {
+        adminRoles: [UNRESTRICTED_ADMIN_ROLE],
+        permissions: [WILDCARD],
+        adminScope,
+      };
+    }
   }
 
   const permissions = new Set();
@@ -64,8 +106,22 @@ async function resolveAdminAuthorization(user) {
     for (const key of role.permissions || []) permissions.add(key);
   }
 
+  const resolvedRoleNames = roles.map((role) => role.name).filter(Boolean);
+  if (
+    (isOpsRole || resolvedRoleNames.includes(OPERATIONS_ADMIN_ROLE)) &&
+    permissions.size === 0
+  ) {
+    for (const p of DEFAULT_OPERATIONS_PERMISSIONS) permissions.add(p);
+  }
+
+  if (isOpsRole && !resolvedRoleNames.length) {
+    resolvedRoleNames.push(OPERATIONS_ADMIN_ROLE);
+  }
+
   return {
-    adminRoles: roles.map((role) => role.name).filter(Boolean),
+    adminRoles: resolvedRoleNames.length
+      ? resolvedRoleNames
+      : (isOpsRole ? [OPERATIONS_ADMIN_ROLE] : [UNRESTRICTED_ADMIN_ROLE]),
     permissions: [...permissions],
     adminScope,
   };

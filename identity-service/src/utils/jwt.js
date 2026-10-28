@@ -47,7 +47,11 @@ function signAccessToken(user, authorization) {
   if (user.roleStatuses && Object.keys(user.roleStatuses).length > 0) {
     payload.role_statuses = user.roleStatuses;
   }
-  if (authorization && user.role === 'ADMIN') {
+  const isAdmin = user.role === 'ADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.role === 'OPERATIONS_ADMIN' ||
+    (typeof user.role === 'string' && user.role.toUpperCase().endsWith('_ADMIN'));
+  if (authorization && isAdmin) {
     payload.admin_roles = authorization.adminRoles || [];
     payload.permissions = authorization.permissions || [];
     payload.admin_scope = authorization.adminScope || {};

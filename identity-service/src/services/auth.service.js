@@ -260,7 +260,12 @@ async function resolveLoginRole(user, requestedRole) {
 
   // The admin console is a separate application with no actor role chooser: an
   // admin account always signs in as ADMIN.
-  if (primary === ROLES.ADMIN) return ROLES.ADMIN;
+  if (
+    primary === ROLES.ADMIN ||
+    (typeof user.role === 'string' && user.role.toUpperCase().endsWith('_ADMIN'))
+  ) {
+    return ROLES.ADMIN;
+  }
 
   const memberships = await userRolesRepo.listForUser(user.id);
   const held = memberships.map((m) => normalizeRole(m.role));

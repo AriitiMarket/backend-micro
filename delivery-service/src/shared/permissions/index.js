@@ -27,7 +27,17 @@ const CAPABILITY_ROLES = {
 // Read-only map of pre-normalization spellings, so a token minted before the
 // rename (or a legacy row) still answers instead of being locked out. Mirrors
 // LEGACY_ROLE_ALIASES in the canonical authorize() middleware.
-const LEGACY_ROLE_ALIASES = { CUSTOMER: 'BUYER' };
+const LEGACY_ROLE_ALIASES = {
+  CUSTOMER: 'BUYER',
+  SUPER_ADMIN: 'ADMIN',
+  OPERATIONS_ADMIN: 'ADMIN',
+  OPERATIONAL_ADMIN: 'ADMIN',
+  OPS_ADMIN: 'ADMIN',
+  OPSADMIN: 'ADMIN',
+  OS_ADMIN: 'ADMIN',
+  OSADMIN: 'ADMIN',
+  OPERATIONS: 'ADMIN',
+};
 
 function normalizeRole(role) {
   if (!role) return role;
