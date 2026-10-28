@@ -494,10 +494,9 @@ async function initSchema(p) {
     {
       name: 'OPERATIONS_ADMIN',
       display_name: 'Operations Admin',
-      description: 'Runs daily orders, delivery, and dispute operations without access to RBAC, platform settings, or financial configuration',
+      description: 'Runs daily orders, delivery, and dispute operations without access to RBAC, platform settings, financial configuration, transactions, or user management',
       permissions: [
         'dashboard.view',
-        'users.view',
         'businesses.view',
         'shops.view',
         'locations.view',
@@ -508,7 +507,6 @@ async function initSchema(p) {
         'disputes.view',
         'disputes.manage',
         'reports.view',
-        'audit.view',
       ],
       is_system: true,
     },

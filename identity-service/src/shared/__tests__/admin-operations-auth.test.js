@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { normalizeRole, ROLES, LEGACY_ROLE_ALIASES } = require('../../models/Role');
 const { resolveAdminAuthorization } = require('../../services/adminAuthorization.service');
+const { resolveLoginRole } = require('../../services/auth.service');
 const adminRolesRepo = require('../../repositories/admin-roles.repository');
 const authorize = require('../../middleware/authorize');
 
@@ -31,6 +32,8 @@ test('adminAuthorization.service: resolves unassigned operations admin with defa
     assert.ok(auth.permissions.includes('orders.view'));
     assert.ok(auth.permissions.includes('delivery.view'));
     assert.ok(auth.permissions.includes('dashboard.view'));
+    assert.equal(auth.permissions.includes('users.view'), false, 'Operations admin must NOT have users.view');
+    assert.equal(auth.permissions.includes('platform_settings.view'), false, 'Operations admin must NOT have platform_settings.view');
     assert.equal(auth.adminScope.locations[0], '*');
   } finally {
     adminRolesRepo.getUserRoles = original;
@@ -94,4 +97,45 @@ test('middleware/authorize: accepts OPERATIONS_ADMIN for authorize("ADMIN")', ()
   middleware(req, res, next);
   assert.equal(nextCalled, true, 'Operations admin should be authorized for ADMIN endpoints');
   assert.equal(statusResult, null);
+});
+
+test('auth.service: resolveLoginRole returns ADMIN for OPERATIONS_ADMIN account', async () => {
+  const user = { id: 'u-ops-1', role: 'OPERATIONS_ADMIN' };
+  const loginRole = await resolveLoginRole(user);
+  assert.equal(loginRole, 'ADMIN');
+});
+
+test('RBAC: operations admin is restricted from users, settings, transactions and commissions', async () => {
+  const original = adminRolesRepo.getUserRoles;
+  adminRolesRepo.getUserRoles = async () => [];
+
+  try {
+    const user = { id: 'ops-restricted-1', role: 'OPERATIONS_ADMIN' };
+    const auth = await resolveAdminAuthorization(user);
+    const forbiddenPermissions = [
+      'users.view',
+      'users.manage',
+      'platform_settings.view',
+      'platform_settings.manage',
+      'commissions.view',
+      'commissions.manage',
+      'transactions.view',
+      'transactions.manage',
+      'audit.view',
+      'audit.manage',
+      'admin_roles.view',
+      'admin_roles.manage',
+      '*',
+    ];
+
+    for (const forbidden of forbiddenPermissions) {
+      assert.equal(
+        auth.permissions.includes(forbidden),
+        false,
+        `OPERATIONS_ADMIN must NOT have permission: ${forbidden}`
+      );
+    }
+  } finally {
+    adminRolesRepo.getUserRoles = original;
+  }
 });

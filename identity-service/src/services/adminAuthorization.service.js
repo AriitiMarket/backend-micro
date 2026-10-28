@@ -24,7 +24,6 @@ const OPERATIONS_ADMIN_ROLE = 'OPERATIONS_ADMIN';
 
 const DEFAULT_OPERATIONS_PERMISSIONS = Object.freeze([
   'dashboard.view',
-  'users.view',
   'businesses.view',
   'shops.view',
   'locations.view',
@@ -35,7 +34,6 @@ const DEFAULT_OPERATIONS_PERMISSIONS = Object.freeze([
   'disputes.view',
   'disputes.manage',
   'reports.view',
-  'audit.view',
 ]);
 
 // During migration, set this to "true" only if legacy ADMIN accounts must keep
