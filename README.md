@@ -105,14 +105,53 @@ Tokens are short-lived (10 minutes) and refresh tokens rotate on every exchange.
 
 ---
 
+## Dockerization & Container Architecture
+
+The backend platform is fully containerized for both local development and production environments using multi-stage Docker builds and Docker Compose orchestration.
+
+### Container Stack & Components
+
+The `docker-compose.yml` environment provisions a complete self-contained infrastructure running 7 managed containers:
+
+| Container Name | Service | Base Image | Role & Configuration |
+| :--- | :--- | :--- | :--- |
+| `aritii-postgres` | PostgreSQL | `postgres:15-alpine` | Relational database for accounts, RBAC roles, and credentials. Persisted in `postgres_data`. |
+| `aritii-mongodb` | MongoDB Replica Set | `mongo:7` | Document database running single-node replica set (`rs0`) to support multi-document ACID transactions. Persisted in `mongodb_data`. |
+| `aritii-mongo-keyfile` | Keyfile Generator | `mongo:7` | One-shot init container generating secure base64 keyfile for replica set authentication. |
+| `aritii-redis` | Redis Cache | `redis:latest` | In-memory key-value store for session caching and rate limiting. Persisted in `redis_data`. |
+| `aritii-identity` | Identity Service | `node:20-bookworm-slim` | Authentication, OAuth 2.1, and RBAC service. Depends on healthy PostgreSQL, MongoDB, and Redis. |
+| `aritii-commerce` | Commerce Service | `node:20-bookworm-slim` | Multi-shop, catalog, cart, and order processing. Depends on healthy MongoDB and Redis. |
+| `aritii-delivery` | Delivery Service | `node:20-bookworm-slim` | Logistics, zones, routing, and tracking. Depends on healthy MongoDB and Redis. |
+| `aritii-gateway` | API Gateway | `node:20-bookworm-slim` | Public reverse proxy and rate limiter. Sole service publishing port `8000:8000` to the host. |
+
+### Multi-Stage Dockerfile Highlights
+
+The root `Dockerfile` employs an optimized two-stage build architecture:
+- **Build Stage (`deps`):** Copies root and workspace manifests, resolves internal packages under `packages/`, and installs only production dependencies (`--omit=dev`).
+- **Runner Stage (`runner`):** Runs on lightweight Debian Bookworm Slim, installs `curl` for container health checks, creates permission-controlled upload volumes, and switches execution to a non-privileged `node` user.
+- **Service Targets:** Dedicated build targets exist for `api-gateway`, `identity-service`, `commerce-service`, and `delivery-service`.
+
+### Networking & Volume Isolation
+
+- **Internal Bridge Network:** All containers communicate across the dedicated `aritii-network` bridge. Identity, Commerce, and Delivery services do not bind to host ports, making them unreachable from outside the Docker network.
+- **Volume Persistence:** Data integrity is maintained across container restarts through named Docker volumes:
+  - `postgres_data`
+  - `mongodb_data` & `mongodb_config`
+  - `redis_data`
+  - `commerce_uploads` & `identity_uploads`
+  - `identity_keys`
+- **Health Checks & Startup Order:** Every service specifies active health checks (`curl` / `pg_isready` / `mongosh`). Downstream dependencies wait for upstream health before launching (`condition: service_healthy`).
+
+---
+
 ## Quick Start (Docker Compose)
 
 ### Prerequisites
 - Docker Engine >= 24.0
 - Docker Compose >= 2.0
-- Node.js >= 18 (for running test suites locally)
+- Node.js >= 18 (for running unit test suites locally)
 
-### Steps
+### Steps to Run
 
 1. **Configure Environment Variables:**
    ```bash
@@ -120,24 +159,48 @@ Tokens are short-lived (10 minutes) and refresh tokens rotate on every exchange.
    ```
 
 2. **Generate Internal Service Secrets:**
-   Generate distinct random secrets for the four services:
+   Generate distinct random 32-byte hex tokens for inter-service communication:
    ```bash
    openssl rand -hex 32   # Run 4 times: for gateway, identity, commerce, delivery
    ```
    Assign them to `INTERNAL_SERVICE_TOKENS` in your `.env` file.
 
-3. **Start All Services and Databases:**
+3. **Build and Launch All Containers:**
    ```bash
    docker compose up -d --build
    ```
 
-4. **Verify Container Health:**
+4. **Verify Container Health & Running Status:**
    ```bash
    docker compose ps
    curl http://localhost:8000/health
    ```
 
-API Gateway will be accessible at `http://localhost:8000`, with interactive Swagger documentation at `http://localhost:8000/api/docs`.
+5. **Access Application Endpoints:**
+   - Public API Gateway: `http://localhost:8000`
+   - Interactive Swagger API Documentation: `http://localhost:8000/api/docs`
+   - Gateway Health Endpoint: `http://localhost:8000/health`
+
+### Common Docker Operations
+
+```bash
+# View live logs for a specific service
+docker compose logs -f identity
+docker compose logs -f api-gateway
+
+# Execute seeding commands inside running containers
+docker compose exec identity node src/seed/seed-admin.js
+docker compose exec identity node src/seed/create-ops-admin.js
+
+# Rebuild an individual service image
+docker build --target identity-service -t aritii-identity:latest .
+
+# Stop the stack and preserve database volumes
+docker compose down
+
+# Stop the stack and wipe all database volumes (fresh start)
+docker compose down -v
+```
 
 ---
 
