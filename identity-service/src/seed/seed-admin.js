@@ -93,12 +93,36 @@ async function seed() {
 }
 
 async function ensureAdminRoleAssignment(pool, userId, roleName) {
-  const role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', [roleName]);
+  let role = await pool.query('SELECT id FROM admin_roles WHERE name = $1;', [roleName]);
   
   if (!role.rows[0]) {
-    throw new Error(
-      `${roleName} role not found in admin_roles table. Run migration first: node src/migrations/002-migrate-roles.js`
+    const defaultPerms = roleName === 'SUPER_ADMIN'
+      ? ['*']
+      : [
+          'dashboard.view',
+          'businesses.view',
+          'shops.view',
+          'locations.view',
+          'orders.view',
+          'orders.manage',
+          'delivery.view',
+          'delivery.manage',
+          'disputes.view',
+          'disputes.manage',
+          'reports.view',
+        ];
+    const inserted = await pool.query(
+      `INSERT INTO admin_roles (name, display_name, description, permissions, is_system)
+       VALUES ($1, $2, $3, $4::jsonb, true)
+       RETURNING id;`,
+      [
+        roleName,
+        roleName === 'SUPER_ADMIN' ? 'Super Admin' : 'Operations Admin',
+        roleName === 'SUPER_ADMIN' ? 'Full system access' : 'Operations Administrator',
+        JSON.stringify(defaultPerms),
+      ]
     );
+    role = inserted;
   }
 
   // Remove stale role assignments
