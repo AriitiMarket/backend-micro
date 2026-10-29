@@ -74,7 +74,7 @@ function forward(req, res, targetUrl) {
 
   if (captured) {
     bodyPromise = Promise.resolve(captured);
-  } else if (req.body !== undefined && req.body !== null) {
+  } else if (req._body && req.body !== undefined && req.body !== null) {
     const serialized = typeof req.body === 'string' || Buffer.isBuffer(req.body)
       ? req.body
       : JSON.stringify(req.body);

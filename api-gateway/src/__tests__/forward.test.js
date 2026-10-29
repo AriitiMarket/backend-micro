@@ -18,14 +18,20 @@ let stubMode = 'ok';
 let upstreamCalls = 0;
 let lastUpstreamHeaders = null;
 let lastUpstreamPath = null;
+let lastUpstreamBody = null;
 
 function stubHandler(req, res) {
   upstreamCalls += 1;
   lastUpstreamHeaders = req.headers;
   lastUpstreamPath = req.url;
-  if (stubMode === 'hang') return; // never answers: the gateway must time out
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true }));
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    lastUpstreamBody = Buffer.concat(chunks).toString('utf8');
+    if (stubMode === 'hang') return; // never answers: the gateway must time out
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
 }
 
 function startServer(handler) {
@@ -80,7 +86,9 @@ before(async () => {
   availability = require('../utils/serviceAvailability');
 
   edge = await startServer((req, res) => {
-    // Mirrors the gateway's requestId middleware: the proxy propagates `req.id`.
+    // Mirrors the gateway's express.json() + requestId middleware:
+    // express.json() defaults req.body to {} on every request even when non-JSON.
+    req.body = req.body || {};
     req.id = req.headers['x-request-id'] || 'edge-generated-id';
     forward(req, res, stubUrl);
   });
@@ -190,3 +198,38 @@ test('a successful response clears a failure mark (state is not sticky)', async 
   assert.equal(availability.isDown('delivery'), false);
   assert.deepEqual(availability.snapshot(), {});
 });
+
+test('forwards full multipart body from stream even when express.json defaults req.body to {}', async () => {
+  stubMode = 'ok';
+  upstreamCalls = 0;
+  lastUpstreamBody = null;
+
+  const boundary = '----WebKitFormBoundaryXYZ';
+  const multipartData = `--${boundary}\r\nContent-Disposition: form-data; name="productName"\r\n\r\nCoffee Beans\r\n--${boundary}--\r\n`;
+
+  await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: edge.address().port,
+        path: '/api/product/create-product',
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': Buffer.byteLength(multipartData),
+        },
+      },
+      (res) => {
+        res.resume();
+        res.on('end', resolve);
+      }
+    );
+    req.on('error', reject);
+    req.write(multipartData);
+    req.end();
+  });
+
+  assert.equal(upstreamCalls, 1);
+  assert.equal(lastUpstreamBody, multipartData, 'Upstream must receive the full multipart form data, not an empty JSON object');
+});
+
