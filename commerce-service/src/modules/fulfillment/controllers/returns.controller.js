@@ -1,21 +1,24 @@
 /**
- * Returns Controller
- * FIX #3: Unified returns/refunds workflow
- * FIX #6: Refund amount validation
- * FIX #15: Backend support for seller returns dashboard
+ * Returns Controller — manages buyer return requests, seller return review & approval, refunds, and admin statistics.
  */
+'use strict';
 
 const returnsService = require('../services/returns.service');
+const { isAdmin } = require('../../../shared/utils/roles');
 
 class ReturnsController {
   /**
-   * Request return (buyer initiated)
+   * Request a return for items from a delivered order (buyer action).
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId } and body { items, reason, comments }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async requestReturn(req, res, next) {
     try {
       const { orderId } = req.params;
       const buyerId = req.user?.id || req.user?._id;
-      const { items, reason, comments } = req.body;
+      const { items, reason, comments } = req.body || {};
 
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'items array required' });
@@ -29,18 +32,21 @@ class ReturnsController {
         role: req.user?.role,
       });
 
-      res.status(201).json({
+      return res.status(201).json({
         message: 'Return request created',
         return: returnRecord,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Approve return (seller action)
-   * FIX #3: Triggers inventory restoration
+   * Approve a return request and trigger inventory restoration (seller action).
+   * 
+   * @param {import('express').Request} req - Express request with params { returnId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async approveReturn(req, res, next) {
     try {
@@ -52,23 +58,26 @@ class ReturnsController {
         role: req.user?.role,
       });
 
-      res.json({
+      return res.json({
         message: 'Return approved',
         return: returnRecord,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Process refund
-   * FIX #6: Validates refund amount does not exceed order total
+   * Process refund against an approved return with amount validation.
+   * 
+   * @param {import('express').Request} req - Express request with params { returnId } and body { amount, method, notes }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async processRefund(req, res, next) {
     try {
       const { returnId } = req.params;
-      const { amount, method, notes } = req.body;
+      const { amount, method, notes } = req.body || {};
 
       const result = await returnsService.processRefund(returnId, {
         amount,
@@ -81,23 +90,27 @@ class ReturnsController {
         role: req.user?.role,
       });
 
-      res.json({
+      return res.json({
         message: 'Refund processed successfully',
         refund: result,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Reject return (seller action)
+   * Reject a return request with explanation (seller action).
+   * 
+   * @param {import('express').Request} req - Express request with params { returnId } and body { reason }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async rejectReturn(req, res, next) {
     try {
       const { returnId } = req.params;
       const sellerId = req.user?.id || req.user?._id;
-      const { reason } = req.body;
+      const { reason } = req.body || {};
 
       const returnRecord = await returnsService.rejectReturn(returnId, {
         sellerId,
@@ -105,17 +118,21 @@ class ReturnsController {
         role: req.user?.role,
       });
 
-      res.json({
+      return res.json({
         message: 'Return rejected',
         return: returnRecord,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get return details
+   * Retrieve full details of a specific return request.
+   * 
+   * @param {import('express').Request} req - Express request with params { returnId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getReturn(req, res, next) {
     try {
@@ -125,87 +142,99 @@ class ReturnsController {
         role: req.user?.role,
       });
 
-      res.json(returnRecord);
+      return res.json(returnRecord);
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get seller returns dashboard (FIX #15 backend)
-   * Shows pending, approved, inspecting, completed counts
+   * Retrieve summary return status counters for a seller's shop dashboard.
+   * 
+   * @param {import('express').Request} req - Express request with params { shopId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getSellerReturnsDashboard(req, res, next) {
     try {
       const { shopId } = req.params;
       const result = await returnsService.getSellerReturnsDashboard(shopId);
-      res.json({ success: true, data: { shopId, ...result } });
+      return res.json({ success: true, data: { shopId, ...result } });
     } catch (err) {
-      next(err);
-    }
-  }
-/**
-   * ADMIN: GET /api/admin/returns/list
-   * List all returns with pagination and filters
-   */
-  async listReturns(req, res, next) {
-    try {
-      const { role } = req.user || {};
-      const { page = 1, limit = 20, status, buyerId, sellerId } = req.query;
-
-      if (!isAdmin(role)) {
-        return res.status(403).json({
-          error: 'Admin access required',
-          code: 'ADMIN_ONLY'
-        });
-      }
-
-      const result = await returnsService.listReturns({
-        page: parseInt(page),
-        limit: parseInt(limit),
-        status,
-        buyerId,
-        sellerId
-      });
-
-      res.json({
-        success: true,
-        data: result
-      });
-    } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * ADMIN: GET /api/admin/returns/stats
-   * Get returns statistics
+   * Admin: List returns with pagination and status/participant filtering.
+   * GET /api/admin/returns/list
+   * 
+   * @param {import('express').Request} req - Express request with query { page, limit, status, buyerId, sellerId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
-  async getStats(req, res, next) {
+  async listReturns(req, res, next) {
     try {
-      const { role } = req.user || {};
-      const { startDate, endDate } = req.query;
-
-      if (!isAdmin(role)) {
+      if (!isAdmin(req.user)) {
         return res.status(403).json({
           error: 'Admin access required',
-          code: 'ADMIN_ONLY'
+          code: 'ADMIN_ONLY',
         });
       }
 
-      const stats = await returnsService.getStats({
-        startDate,
-        endDate
+      const { status, buyerId, sellerId } = req.query || {};
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+
+      const result = await returnsService.listReturns({
+        page,
+        limit,
+        status,
+        buyerId,
+        sellerId,
       });
 
-      res.json({
+      return res.json({
         success: true,
-        data: stats
+        data: result,
       });
     } catch (err) {
-      next(err);
+      return next(err);
+    }
+  }
+
+  /**
+   * Admin: Retrieve platform-wide return metrics and statistics.
+   * GET /api/admin/returns/stats
+   * 
+   * @param {import('express').Request} req - Express request with query { startDate, endDate }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
+   */
+  async getStats(req, res, next) {
+    try {
+      if (!isAdmin(req.user)) {
+        return res.status(403).json({
+          error: 'Admin access required',
+          code: 'ADMIN_ONLY',
+        });
+      }
+
+      const { startDate, endDate } = req.query || {};
+      const stats = await returnsService.getStats({
+        startDate,
+        endDate,
+      });
+
+      return res.json({
+        success: true,
+        data: stats,
+      });
+    } catch (err) {
+      return next(err);
     }
   }
 }
 
 module.exports = new ReturnsController();
+
