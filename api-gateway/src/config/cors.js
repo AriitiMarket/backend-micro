@@ -1,3 +1,5 @@
+// Central CORS configuration for the API Gateway.
+// Controls allowed origins across all public HTTP endpoints and preflight OPTIONS.
 const env = require('./env');
 
 // CORS_ORIGIN may be a comma-separated list, or the literal '*' for wildcard.
@@ -6,6 +8,13 @@ const origins = rawOrigin.split(',').map((o) => o.trim()).filter(Boolean);
 const allowWildcard = origins.includes('*') || origins.length === 0;
 
 module.exports = {
+  /**
+   * Evaluates incoming request origin against allowed origin rules.
+   * Allows same-origin, configured domains, wildcard, and local development ports.
+   * 
+   * @param {string|undefined} origin - Origin header value sent by the browser
+   * @param {function(Error|null, boolean=): void} callback - CORS evaluation callback
+   */
   origin: (origin, callback) => {
     // Same-origin / non-browser callers send no Origin header.
     if (!origin) return callback(null, true);

@@ -1,3 +1,10 @@
+/**
+ * 404 Route Not Found middleware.
+ * Returns standard platform JSON error structure when a request path matches no registered route.
+ * 
+ * @param {import('express').Request} req - Express request object
+ * @param {import('express').Response} res - Express response object
+ */
 function notFound(req, res) {
   res.status(404).json({
     success: false,
@@ -7,8 +14,16 @@ function notFound(req, res) {
   });
 }
 
-// Standardized downstream error mapping. The response keeps the frontend-compatible
-// { success, message, errors } contract and additionally includes a stable `code`.
+/**
+ * Standardized downstream error mapping middleware.
+ * Formats errors into a unified { success: false, code, message, errors } response envelope
+ * while mapping system error codes (e.g. ECONNREFUSED, ETIMEDOUT) to stable platform codes.
+ * 
+ * @param {Error & { statusCode?: number, code?: string, errors?: any[] }} err - Caught error object
+ * @param {import('express').Request} req - Express request object
+ * @param {import('express').Response} res - Express response object
+ * @param {import('express').NextFunction} next - Express next middleware function
+ */
 function errorHandler(err, req, res, next) {
   // Respect a status already chosen by contract/validation errors.
   const status = err.statusCode || 502;

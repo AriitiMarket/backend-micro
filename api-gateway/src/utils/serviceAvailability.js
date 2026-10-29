@@ -19,21 +19,37 @@ const DOWN_TTL_MS = parseInt(process.env.GATEWAY_UNAVAILABLE_TTL_MS, 10) > 0
 const downUntil = new Map();
 const lastFailure = new Map();
 
-/** Record an observed failure for `service` (no-op for an unknown service). */
+/**
+ * Record an observed failure for a downstream microservice.
+ * Starts a short failure window (DOWN_TTL_MS) where the gateway fails fast.
+ * 
+ * @param {string} service - Canonical service name ('identity', 'commerce', 'delivery')
+ * @param {string} [reason='unavailable'] - Diagnostic error message or reason
+ */
 function markDown(service, reason) {
   if (!service) return;
   downUntil.set(service, Date.now() + DOWN_TTL_MS);
   lastFailure.set(service, { reason: reason || 'unavailable', at: new Date().toISOString() });
 }
 
-/** Clear the failure state — called whenever a call actually succeeds. */
+/**
+ * Clear the failure state for a downstream service when an HTTP call succeeds.
+ * Restores the service to healthy rotation immediately without waiting for TTL expiry.
+ * 
+ * @param {string} service - Canonical service name
+ */
 function markUp(service) {
   if (!service) return;
   downUntil.delete(service);
   lastFailure.delete(service);
 }
 
-/** True while the service is inside its failure window. */
+/**
+ * Check whether a downstream service is currently inside its temporary failure window.
+ * 
+ * @param {string} service - Canonical service name
+ * @returns {boolean} True if the service is marked down, false if healthy or unknown (fail-open)
+ */
 function isDown(service) {
   if (!service) return false;
   const until = downUntil.get(service);
@@ -45,7 +61,12 @@ function isDown(service) {
   return true;
 }
 
-/** Diagnostic view for /health and tests. */
+/**
+ * Diagnostic snapshot of downstream services availability status.
+ * Used by /health, /health/ready, and testing endpoints.
+ * 
+ * @returns {Record<string, { down: boolean, reason: string, since: string }>}
+ */
 function snapshot() {
   const out = {};
   for (const service of lastFailure.keys()) {
@@ -58,6 +79,10 @@ function snapshot() {
   return out;
 }
 
+/**
+ * Reset all service availability memory state.
+ * Typically called during test teardown.
+ */
 function reset() {
   downUntil.clear();
   lastFailure.clear();
