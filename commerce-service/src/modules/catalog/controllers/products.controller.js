@@ -1,3 +1,6 @@
+// Catalog Products Controller — handles buyer catalog browsing & search, plus seller product lifecycle, inventory, and visibility.
+'use strict';
+
 const productService = require('../services/products.service');
 const { ok, created } = require('../../../shared/utils/response');
 const { sendAudit, getAdminFromReq } = require('../../../shared/utils/audit-client');
@@ -13,6 +16,9 @@ const { isAdmin } = require('../../../shared/utils/roles');
  * truncates the image. A string that is itself a data payload is therefore
  * kept whole. Repeated multipart fields arrive as an array and are never
  * split.
+ * 
+ * @param {string|string[]} raw - Raw image URL or array from request body
+ * @returns {string[]} Sanitized array of individual image strings
  */
 function parseImageUrls(raw) {
   if (Array.isArray(raw)) return raw.filter(Boolean).map((u) => String(u).trim()).filter(Boolean);
@@ -28,11 +34,21 @@ function parseImageUrls(raw) {
  * http(s) URLs, data:image URIs, and real storage keys / /uploads paths
  * (audit: raw imageUrls was an XSS / javascript:-URI vector).
  * Returns null when the value is not an acceptable image reference.
+ * 
+ * @param {string} raw - Image string candidate
+ * @returns {string|null} Safe image reference or null
  */
 function sanitizeImageUrl(raw) {
   return sanitizeImageReference(raw);
 }
 
+/**
+ * Create a new product under the seller's shop.
+ * 
+ * @param {import('express').Request} req - Express request with multipart files or body imageUrls
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function createProduct(req, res, next) {
   try {
     const files = req.files || [];
@@ -47,11 +63,29 @@ async function createProduct(req, res, next) {
     const sellerId = req.user ? req.user.id : (req.body.sellerId || null);
     const product = await productService.createProduct({ ...req.body, images, sellerId }, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_CREATED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: product.id || product._id, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_CREATED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: product.id || product._id,
+      ipAddress,
+    });
     return created(res, { product });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Retrieve all products belonging to a specific shop.
+ * 
+ * @param {import('express').Request} req - Express request with params { id: shopId }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function getShopProducts(req, res, next) {
   try {
     // Guard the raw path segment first. A non-ObjectId (e.g. an identity UUID
@@ -74,9 +108,18 @@ async function getShopProducts(req, res, next) {
       requester,
     });
     return ok(res, { products });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Retrieve details of a single product by ID.
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function getProduct(req, res, next) {
   try {
     // Only the admin console may see reviews that are still pending/rejected;
@@ -90,9 +133,18 @@ async function getProduct(req, res, next) {
       return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found', errors: [] });
     }
     return ok(res, { product });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Update an existing product's metadata, images, and pricing.
+ * 
+ * @param {import('express').Request} req - Express request with params { id } and update fields
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function updateProduct(req, res, next) {
   try {
     const files = req.files || [];
@@ -119,11 +171,31 @@ async function updateProduct(req, res, next) {
     delete payload.clearImages;
     const product = await productService.updateProduct(req.params.id, { ...payload, images: newImages, keepExisting: keep, clearImages }, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_UPDATED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, newValue: req.body, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_UPDATED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      newValue: req.body,
+      ipAddress,
+    });
     return ok(res, { product });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Retrieve a paginated list of catalog products.
+ * Supports operator filters for administration and buyer filtering.
+ * 
+ * @param {import('express').Request} req - Express request with query parameters
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function getAllProducts(req, res, next) {
   try {
     // Buyer-facing by default; the admin console passes includeInactive=true so a
@@ -133,6 +205,9 @@ async function getAllProducts(req, res, next) {
     // on the query string: any signed-in buyer can send `?includeInactive=true`,
     // and reviews are moderated, so neither may be self-granted.
     const isOperator = req.user && isAdmin(req.user);
+
+    const parsedPage = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
 
     const result = await productService.getAllProducts({
       includeInactive: isOperator && req.query.includeInactive === 'true',
@@ -152,12 +227,12 @@ async function getAllProducts(req, res, next) {
         priceMax: req.query.priceMax,
         dateFrom: req.query.dateFrom,
         stockFilter: req.query.stockFilter,
-        page: req.query.page,
-        limit: req.query.limit,
+        page: parsedPage,
+        limit: parsedLimit,
       } : null,
       // Explicit pagination is honoured for EVERY caller (buyer, seller, admin).
       // Without it a non-admin list materialised the entire catalogue.
-      pagination: { page: req.query.page, limit: req.query.limit },
+      pagination: { page: parsedPage, limit: parsedLimit },
     });
     return ok(res, {
       products: result.products,
@@ -168,12 +243,18 @@ async function getAllProducts(req, res, next) {
       limit: result.limit,
       totalPages: result.totalPages,
     });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
 /**
- * Bulk visibility action for the admin console: POST /product/bulk
+ * Bulk visibility action for the admin console / seller dashboard: POST /product/bulk
  * body: { productIds: string[], action: 'activate' | 'deactivate' }
+ * 
+ * @param {import('express').Request} req - Express request
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
  */
 async function bulkProductAction(req, res, next) {
   try {
@@ -200,42 +281,100 @@ async function bulkProductAction(req, res, next) {
       });
       return ok(res, result, `${result.updated} product(s) updated`);
     }
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Delete a product by ID.
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function deleteProduct(req, res, next) {
   try {
     const result = await productService.deleteProduct(req.params.id, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_DELETED', level: 'WARNING', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_DELETED',
+      level: 'WARNING',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      ipAddress,
+    });
     return ok(res, result);
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
 /**
- * Seller (or admin) publishes their draft. Route admits SELLER + ADMIN; the
- * service re-checks ownership (admins bypass, sellers must own the shop) and
- * requires an approved shop for non-admin publishers. No approval queue.
+ * Seller (or admin) publishes their draft product.
+ * Route admits SELLER + ADMIN; the service re-checks ownership.
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
  */
 async function publishProduct(req, res, next) {
   try {
     const product = await productService.publishProduct(req.params.id, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_PUBLISHED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_PUBLISHED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      ipAddress,
+    });
     return ok(res, { product }, 'Product published');
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
-/** Seller moves their product back to draft (unpublishes it). */
+/**
+ * Seller moves their product back to draft (unpublishes it).
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function draftProduct(req, res, next) {
   try {
     const product = await productService.draftProduct(req.params.id, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_DRAFTED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_DRAFTED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      ipAddress,
+    });
     return ok(res, { product }, 'Product moved to draft');
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Submit a customer review for a product.
+ * 
+ * @param {import('express').Request} req - Express request with authenticated buyer
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function createReview(req, res, next) {
   try {
     // The author is rebuilt from the VERIFIED token claims. `req.body.user` is
@@ -246,21 +385,32 @@ async function createReview(req, res, next) {
       : null;
     const result = await productService.createReview({ ...req.body, user });
     return ok(res, result);
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Full-text and geographic search across catalog products.
+ * 
+ * @param {import('express').Request} req - Express request with query params { q, page, limit, zoneId, cityId }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function searchProducts(req, res, next) {
   try {
     const query = (req.query.q || '').trim();
     // FIX #7: Add zone and city filtering
     const { zoneId, cityId } = req.query;
-    
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+
     const result = await productService.searchProducts(query, {
       requester: req.user || null,
-      page: req.query.page,
-      limit: req.query.limit,
+      page,
+      limit,
       zoneId,
-      cityId
+      cityId,
     });
     return ok(res, {
       products: result.products,
@@ -271,67 +421,158 @@ async function searchProducts(req, res, next) {
       limit: result.limit,
       totalPages: result.totalPages,
     });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Add stock quantity to a product inventory.
+ * 
+ * @param {import('express').Request} req - Express request with params { id } and body { quantity, note }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function restockProduct(req, res, next) {
   try {
     const product = await productService.restockProduct(req.params.id, req.body.quantity, req.body.note, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_RESTOCKED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, details: { operation: 'restock', quantity: req.body.quantity }, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_RESTOCKED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      details: { operation: 'restock', quantity: req.body.quantity },
+      ipAddress,
+    });
     return ok(res, { product });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Adjust stock count upwards or downwards with audit trail.
+ * 
+ * @param {import('express').Request} req - Express request with params { id } and body { quantity, note }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function adjustStock(req, res, next) {
   try {
     const product = await productService.adjustStock(req.params.id, req.body.quantity, req.body.note, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
-    sendAudit({ action: 'PRODUCT_STOCK_ADJUSTED', level: 'INFO', adminId, adminName, module: 'commerce', targetEntity: 'product', targetId: req.params.id, details: { operation: 'adjust_stock', quantity: req.body.quantity }, ipAddress });
+    sendAudit({
+      action: 'PRODUCT_STOCK_ADJUSTED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      details: { operation: 'adjust_stock', quantity: req.body.quantity },
+      ipAddress,
+    });
     return ok(res, { product });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
+/**
+ * Retrieve stock ledger movement history for a product.
+ * 
+ * @param {import('express').Request} req - Express request with params { id } and query { limit }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
+ */
 async function getStockHistory(req, res, next) {
   try {
-    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50;
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const movements = await productService.getStockHistory(req.params.id, limit, req.user);
     return ok(res, { movements });
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
 /**
  * POST /product/archive/:id — reversible retirement. The row, its stock ledger
  * and its reviews survive; only the storefront listing disappears.
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
  */
 async function archiveProduct(req, res, next) {
   try {
     const product = await productService.archiveProduct(req.params.id, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
     sendAudit({
-      action: 'PRODUCT_ARCHIVED', level: 'WARNING', adminId, adminName,
-      module: 'commerce', targetEntity: 'product', targetId: req.params.id,
-      details: { operation: 'archive' }, ipAddress,
+      action: 'PRODUCT_ARCHIVED',
+      level: 'WARNING',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      details: { operation: 'archive' },
+      ipAddress,
     });
     return ok(res, { product }, 'Product archived');
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
 /**
  * POST /product/unarchive/:id — restore to DRAFT. Going live again stays a
  * deliberate separate publish action.
+ * 
+ * @param {import('express').Request} req - Express request with params { id }
+ * @param {import('express').Response} res - Express response
+ * @param {import('express').NextFunction} next - Express next error handler
  */
 async function unarchiveProduct(req, res, next) {
   try {
     const product = await productService.unarchiveProduct(req.params.id, req.user);
     const { adminId, adminName, ipAddress } = getAdminFromReq(req);
     sendAudit({
-      action: 'PRODUCT_UNARCHIVED', level: 'INFO', adminId, adminName,
-      module: 'commerce', targetEntity: 'product', targetId: req.params.id,
-      details: { operation: 'unarchive' }, ipAddress,
+      action: 'PRODUCT_UNARCHIVED',
+      level: 'INFO',
+      adminId,
+      adminName,
+      module: 'commerce',
+      targetEntity: 'product',
+      targetId: req.params.id,
+      details: { operation: 'unarchive' },
+      ipAddress,
     });
     return ok(res, { product }, 'Product restored as draft');
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 }
 
-module.exports = { createProduct, getShopProducts, getAllProducts, getProduct, updateProduct, deleteProduct, publishProduct, draftProduct, archiveProduct, unarchiveProduct, createReview, searchProducts, restockProduct, adjustStock, getStockHistory, bulkProductAction };
+module.exports = {
+  createProduct,
+  getShopProducts,
+  getAllProducts,
+  getProduct,
+  updateProduct,
+  deleteProduct,
+  publishProduct,
+  draftProduct,
+  archiveProduct,
+  unarchiveProduct,
+  createReview,
+  searchProducts,
+  restockProduct,
+  adjustStock,
+  getStockHistory,
+  bulkProductAction,
+};
+
