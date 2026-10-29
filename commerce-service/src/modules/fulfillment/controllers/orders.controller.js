@@ -1,45 +1,49 @@
 /**
- * Orders Controller
- * Integrates all fixes: pagination, ACID transactions, state machine,
- * delivery coverage, idempotency, and bulk actions
+ * Orders Controller — manages buyer checkout creation, seller fulfillment workflows, delivery linking, and refund lifecycles.
  */
+'use strict';
 
 const ordersService = require('../services/orders.service');
-const orderStateService = require('../services/orderState.service');
 const orderDeliveryService = require('../services/orderDelivery.service');
-const returnsService = require('../services/returns.service');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const { isSeller, isAdmin } = require('../../../shared/utils/roles');
 
 class OrdersController {
   /**
-   * Get all orders for a shop (with pagination)
-   * FIX #7: Server-side pagination
+   * Get all orders for a shop with pagination and status filtering.
+   * 
+   * @param {import('express').Request} req - Express request with params { shopId } and query { page, limit, status, sortBy, sortOrder }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getAllOrdersOfShop(req, res, next) {
     try {
       const { shopId } = req.params;
-      const { page, limit, status, sortBy, sortOrder } = req.query;
+      const { status, sortBy, sortOrder } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
 
       const result = await ordersService.getAllOrdersOfShop(shopId, {
-        page: parseInt(page) || 1,
-        limit: parseInt(limit) || 20,
+        page,
+        limit,
         status,
         sortBy,
         sortOrder,
       });
 
-      res.json(result);
+      return res.json(result);
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Confirm order (FIX #1, #10, #12)
-   * - ACID transaction
-   * - Idempotent (returns 200 if already confirmed)
-   * - Checks delivery coverage
+   * Confirm order with transactional consistency and delivery coverage check.
+   * Idempotent: returns 200 if already confirmed.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async confirmOrder(req, res, next) {
     try {
@@ -52,53 +56,63 @@ class OrdersController {
         userRole,
       });
 
-      res.json({
+      return res.json({
         message: 'Order confirmed successfully',
         order,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Buyer confirms receipt of a delivered order
+   * Buyer confirms receipt of a delivered order.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async confirmReceipt(req, res, next) {
     try {
       const { orderId } = req.params;
       const order = await ordersService.confirmReceipt(orderId, req.user);
-      res.json({
+      return res.json({
         success: true,
         message: 'Order receipt confirmed successfully',
         order,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Buyer confirms receipt of a consolidated order group
+   * Buyer confirms receipt of a consolidated order group.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderGroupId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async confirmReceiptGroup(req, res, next) {
     try {
       const { orderGroupId } = req.params;
       const order = await ordersService.confirmReceipt(orderGroupId, req.user);
-      res.json({
+      return res.json({
         success: true,
         message: 'Order group receipt confirmed successfully',
         order,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Update order status (FIX #4, #8)
-   * - State machine validation
-   * - Timeline tracking
+   * Update order status validated against fulfillment state machine transitions.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId } and body { status, reason }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async updateOrderStatus(req, res, next) {
     try {
@@ -121,43 +135,59 @@ class OrdersController {
         }
       );
 
-      res.json({
+      return res.json({
         message: 'Order status updated',
         order,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
+  /**
+   * Verify buyer pickup code for in-store or localized order fulfillment.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId } and body { code }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
+   */
   async verifyPickup(req, res, next) {
     try {
       const actorId = req.user?.id || req.user?._id;
       const order = await ordersService.verifyPickup(req.params.orderId, req.body?.code, actorId);
-      res.json({ message: 'Pickup verified', order });
-    } catch (err) { next(err); }
+      return res.json({ message: 'Pickup verified', order });
+    } catch (err) {
+      return next(err);
+    }
   }
 
   /**
-   * Get order timeline (FIX #8)
+   * Get full chronological event timeline for an order.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getOrderTimeline(req, res, next) {
     try {
       const { orderId } = req.params;
       const timeline = await ordersService.getOrderTimeline(orderId);
 
-      res.json({
+      return res.json({
         orderId,
         timeline,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Bulk order action (FIX #14 backend)
-   * Accept/reject/ship multiple orders at once
+   * Bulk order status modification (accept, reject, ship multiple orders).
+   * 
+   * @param {import('express').Request} req - Express request with body { orderIds, action }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async bulkOrderAction(req, res, next) {
     try {
@@ -182,17 +212,21 @@ class OrdersController {
         }
       );
 
-      res.json({
+      return res.json({
         message: `Bulk ${action} completed`,
         ...result,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Cancel order
+   * Cancel an order with specified cancellation reason.
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId } and body { reason }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async cancelOrder(req, res, next) {
     try {
@@ -202,37 +236,46 @@ class OrdersController {
       const order = await ordersService.cancelOrder(orderId, {
         userId,
         userRole: req.user?.role,
-        reason: req.body.reason || 'Cancelled by system',
+        reason: req.body?.reason || 'Cancelled by system',
       });
 
-      res.json({
+      return res.json({
         message: 'Order cancelled',
         order,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get available stock for product
+   * Get available non-reserved inventory stock for a product.
+   * 
+   * @param {import('express').Request} req - Express request with params { productId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getAvailableStock(req, res, next) {
     try {
       const { productId } = req.params;
       const available = await ordersService.getAvailableStock(productId);
 
-      res.json({
+      return res.json({
         productId,
         available,
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
-/**
-   * Create order (buyer)
+
+  /**
+   * Create checkout order from buyer cart.
    * POST /order/create-order
+   * 
+   * @param {import('express').Request} req - Express request with cart and checkout information
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async createOrder(req, res, next) {
     try {
@@ -266,7 +309,7 @@ class OrdersController {
         fulfilmentType,
       });
 
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: 'Order created successfully',
         // Mongoose omits the transient one-time code because it is not a
@@ -277,13 +320,17 @@ class OrdersController {
         }))
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get all orders for a buyer
+   * Get all orders for an authenticated buyer.
    * GET /order/get-all-orders/user/:userId
+   * 
+   * @param {import('express').Request} req - Express request with params { userId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getBuyerOrders(req, res, next) {
     try {
@@ -301,18 +348,22 @@ class OrdersController {
 
       const orders = await ordersService.getBuyerOrders(userId);
 
-      res.json({
+      return res.json({
         success: true,
         orders
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get all orders for a seller's shop
+   * Get all orders for a seller's shop.
    * GET /order/get-all-orders/seller/:sellerId
+   * 
+   * @param {import('express').Request} req - Express request with params { sellerId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getSellerOrders(req, res, next) {
     try {
@@ -332,18 +383,22 @@ class OrdersController {
 
       const orders = await ordersService.getSellerOrders(sellerId);
 
-      res.json({
+      return res.json({
         success: true,
         orders
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get detailed information about a specific order
+   * Get detailed information about a specific order.
    * GET /order/order/:orderId
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getOrderDetails(req, res, next) {
     try {
@@ -372,18 +427,22 @@ class OrdersController {
         return res.status(403).json({ error: 'You can only view your own orders', code: 'ORDER_ACCESS_DENIED' });
       }
 
-      res.json({
+      return res.json({
         success: true,
         order
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Get delivery linked to an order
+   * Get delivery linked to an order.
    * GET /order/:id/delivery
+   * 
+   * @param {import('express').Request} req - Express request with params { id }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async getOrderDelivery(req, res, next) {
     try {
@@ -395,13 +454,17 @@ class OrdersController {
         linked: Boolean(delivery),
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Approve refund for order (seller/business)
+   * Approve refund for order (seller/business).
    * PUT /order/order-refund-success/:orderId
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async approveRefund(req, res, next) {
     try {
@@ -415,19 +478,23 @@ class OrdersController {
         ...payload
       });
 
-      res.json({
+      return res.json({
         success: true,
         message: 'Refund approved successfully',
         order
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 
   /**
-   * Request refund for order (buyer)
+   * Request refund for order (buyer).
    * PUT /order/refund-order/:orderId
+   * 
+   * @param {import('express').Request} req - Express request with params { orderId }
+   * @param {import('express').Response} res - Express response
+   * @param {import('express').NextFunction} next - Express next error handler
    */
   async refundOrder(req, res, next) {
     try {
@@ -445,15 +512,16 @@ class OrdersController {
         ...payload
       });
 
-      res.json({
+      return res.json({
         success: true,
         message: 'Refund requested successfully',
         order
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 }
 
 module.exports = new OrdersController();
+
