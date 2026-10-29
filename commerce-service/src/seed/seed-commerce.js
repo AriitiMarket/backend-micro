@@ -8,6 +8,16 @@ const Category = require('../modules/catalog/models/Categories');
 const Shop = require('../modules/selling/models/Shops');
 const Product = require('../modules/catalog/models/Products');
 const Order = require('../modules/fulfillment/models/Orders');
+const OrderDelivery = require('../modules/fulfillment/models/OrderDeliveries');
+const SellerWallet = require('../modules/fulfillment/models/SellerWallet');
+const SellerApplication = require('../modules/selling/models/SellerApplications');
+const Cart = require('../modules/carts/models/Carts');
+const Wishlist = require('../modules/carts/models/Wishlists');
+const InventoryLedger = require('../modules/catalog/models/InventoryLedger');
+const StockMovement = require('../modules/catalog/models/StockMovements');
+const Conversation = require('../modules/chat/models/Conversation');
+const Message = require('../modules/chat/models/Message');
+const Request = require('../modules/requests/models/Requests');
 const { ORDER_STATUSES } = require('../modules/fulfillment/constants/orderStatuses');
 const { resolveShopBusinessId } = require('../modules/selling/services/business.service');
 const { identityClient } = require('../app/clients/identity.client');
@@ -177,12 +187,22 @@ async function seed({ reset = false } = {}) {
     }
 
     if (reset) {
-      console.log('\n── Reset requested: Clearing existing products, orders, and old shops ──');
+      console.log('\n── Reset requested: Clearing existing products, orders, shops, and auxiliary collections ──');
       await Order.deleteMany({});
+      await OrderDelivery.deleteMany({});
       await Product.deleteMany({});
       await Shop.deleteMany({});
+      await SellerApplication.deleteMany({});
+      await SellerWallet.deleteMany({});
       await Category.deleteMany({});
-      console.log('  ✓ Cleared commerce collections');
+      await Cart.deleteMany({});
+      await Wishlist.deleteMany({});
+      await InventoryLedger.deleteMany({});
+      await StockMovement.deleteMany({});
+      await Conversation.deleteMany({});
+      await Message.deleteMany({});
+      await Request.deleteMany({});
+      console.log('  ✓ Cleared all commerce collections');
     }
 
     // ── 1. Seed Categories ───────────────────────────────────────────────────
@@ -703,6 +723,27 @@ async function seed({ reset = false } = {}) {
         try {
           await identityClient.linkShopId(shop.ownerId, shop._id.toString());
         } catch (_) {}
+
+        try {
+          const existingWallet = await SellerWallet.findOne({ sellerId: String(shop.ownerId) });
+          if (!existingWallet) {
+            await SellerWallet.create({
+              sellerId: String(shop.ownerId),
+              currency: 'ETB',
+              status: 'ACTIVE',
+              availableBalance: 0,
+              pendingBalance: 0,
+              totalEarned: 0,
+              totalCommissionDeducted: 0,
+              totalRefunded: 0,
+              totalAdjusted: 0,
+              totalPaidOut: 0,
+            });
+            console.log(`  ✓ Initialized wallet for seller ${shop.ownerId}`);
+          }
+        } catch (wErr) {
+          console.warn(`  [wallet] Warning for seller ${shop.ownerId}:`, wErr.message);
+        }
       }
       shops.push(shop);
     }
