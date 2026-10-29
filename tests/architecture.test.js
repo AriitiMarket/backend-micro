@@ -40,7 +40,7 @@ function exists(relativePath) {
 }
 
 function relative(fullPath) {
-  return path.relative(ROOT, fullPath);
+  return path.relative(ROOT, fullPath).replace(/\\/g, '/');
 }
 
 test('the shared service-communication modules are byte-identical in every component', () => {
@@ -180,7 +180,7 @@ test('every service exposes liveness, readiness and a backwards-compatible probe
 });
 
 test('docker-compose keeps the backend private and only the gateway public', () => {
-  const compose = read('docker-compose.yml');
+  const compose = read('docker-compose.yml').replace(/\r\n/g, '\n');
 
   // Anchored on the 2-space service keys so a URL that merely contains a service
   // name (e.g. http://identity:8001) cannot be mistaken for a service block.
