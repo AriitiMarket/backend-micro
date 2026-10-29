@@ -72,20 +72,40 @@ async function createDeliveryRequest(data) {
 
 // --- Deliveries ---
 
+/**
+ * Fetch delivery details by associated order ID.
+ * @param {string} orderId - Associated order identifier
+ * @returns {Promise<{ status: number, body: any, ok: boolean, code: string, requestId: string }>}
+ */
 async function getDeliveryByOrderId(orderId) {
   return get('/internal/delivery/deliveries/order/' + encodeURIComponent(String(orderId)));
 }
 
+/**
+ * Fetch milestone tracking history for a delivery.
+ * @param {string} deliveryId - Delivery identifier
+ * @returns {Promise<{ status: number, body: any, ok: boolean, code: string, requestId: string }>}
+ */
 async function getDeliveryHistory(deliveryId) {
   return get('/internal/delivery/deliveries/' + encodeURIComponent(String(deliveryId)) + '/history');
 }
 
 // --- Internal reads (bounded, aggregate-friendly) ---
 
+/**
+ * Fetch delivery operations dashboard metrics.
+ * @param {object} [filter={}] - Query filter parameters
+ * @returns {Promise<{ status: number, body: any, ok: boolean, code: string, requestId: string }>}
+ */
 async function getInternalOperationsDashboard(filter = {}) {
   return get('/internal/delivery/operations/dashboard', { query: filter });
 }
 
+/**
+ * List internal deliveries with optional filters.
+ * @param {object} [filter={}] - Query filter parameters (status, provider, date)
+ * @returns {Promise<{ status: number, body: any, ok: boolean, code: string, requestId: string }>}
+ */
 async function listInternalDeliveries(filter = {}) {
   return get('/internal/delivery/deliveries', { query: filter });
 }
