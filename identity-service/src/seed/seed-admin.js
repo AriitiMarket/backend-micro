@@ -58,21 +58,11 @@ async function seed() {
     // Check if admin already exists
     const existing = await pool.query('SELECT id, role FROM users WHERE email = $1;', [admin.email]);
     const passwordHash = await hashPassword(admin.password);
-    
+
     let userId;
-    const passwordHash = await hashPassword(admin.password);
     if (existing.rows.length > 0) {
       userId = existing.rows[0].id;
       await pool.query(
-<<<<<<< HEAD
-        'UPDATE users SET password_hash = $1, role = $2, status = $3, is_verified = $4, admin_scope = $5 WHERE id = $6;',
-        [passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] }), userId]
-      );
-      console.log(`✓ ${admin.email} already exists — password and role updated`);
-    } else {
-      userId = crypto.randomUUID();
-      
-=======
         `UPDATE users
          SET name = $1, password_hash = $2, role = 'ADMIN', status = 'active', is_verified = true,
              admin_scope = $3::jsonb, updated_at = NOW()
@@ -82,10 +72,10 @@ async function seed() {
       console.log(`✓ Updated: ${admin.email}`);
     } else {
       userId = crypto.randomUUID();
->>>>>>> 0847c52aa0e53a3ccf1f0a7dbbbb44ef1afe861e
       await pool.query(
-        'INSERT INTO users (id, name, email, password_hash, role, status, is_verified, admin_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);',
-        [userId, admin.name, admin.email, passwordHash, 'ADMIN', 'active', true, JSON.stringify({ locations: ['*'], services: ['*'] })]
+        `INSERT INTO users (id, name, email, password_hash, role, status, is_verified, admin_scope)
+         VALUES ($1, $2, $3, $4, 'ADMIN', 'active', true, $5::jsonb);`,
+        [userId, admin.name, admin.email, passwordHash, JSON.stringify({ locations: ['*'], services: ['*'] })]
       );
       console.log(`✓ Created: ${admin.email}`);
     }
