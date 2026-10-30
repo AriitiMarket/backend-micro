@@ -57,6 +57,7 @@ async function authenticate(req, res, next) {
     };
     return next();
   } catch (err) {
+    console.error(`[authenticate] Token verification failed: ${err.message}`);
     return res.status(401).json({
       success: false,
       code: 'UNAUTHENTICATED',
