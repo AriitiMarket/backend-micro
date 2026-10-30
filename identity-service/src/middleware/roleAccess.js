@@ -61,6 +61,7 @@ async function checkRoleAccess(userId, requiredRole) {
   
   switch (status) {
     case MEMBERSHIP_STATUSES.ACTIVE:
+    case 'APPROVED':
       return { 
         allowed: true, 
         status: 'ACTIVE', 

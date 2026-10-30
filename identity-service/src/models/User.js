@@ -58,7 +58,7 @@ function capabilitiesFor(role, memberships = []) {
   for (const actorRole of ACTOR_ROLES) {
     const membershipStatus = statusByRole.get(actorRole);
     if (membershipStatus) {
-      if (membershipStatus === MEMBERSHIP_STATUSES.ACTIVE) capabilities.push(actorRole);
+      if (membershipStatus === MEMBERSHIP_STATUSES.ACTIVE || membershipStatus === 'APPROVED') capabilities.push(actorRole);
     } else if (primary === actorRole) {
       capabilities.push(actorRole);
     }
@@ -70,7 +70,10 @@ function capabilitiesFor(role, memberships = []) {
 /** Actor roles an account currently holds (ACTIVE memberships only). */
 function actorRolesFor(memberships = []) {
   return (Array.isArray(memberships) ? memberships : [])
-    .filter((m) => m && String(m.status || '').toUpperCase() === MEMBERSHIP_STATUSES.ACTIVE)
+    .filter((m) => {
+      const s = String(m?.status || '').toUpperCase();
+      return s === MEMBERSHIP_STATUSES.ACTIVE || s === 'APPROVED';
+    })
     .map((m) => normalizeRole(m.role));
 }
 

@@ -128,9 +128,9 @@ async function upsertUser(pool, { name, email, password, phone, role, sellerStat
   if (role === 'SELLER' || role === 'PROVIDER') {
     await pool.query(
       `INSERT INTO user_roles (user_id, role, status, source, onboarding_completed, onboarding_completed_at)
-       VALUES ($1, $2, 'APPROVED', 'ADMIN', true, NOW())
+       VALUES ($1, $2, 'ACTIVE', 'ADMIN', true, NOW())
        ON CONFLICT (user_id, role)
-       DO UPDATE SET status = 'APPROVED', onboarding_completed = true, updated_at = NOW();`,
+       DO UPDATE SET status = 'ACTIVE', onboarding_completed = true, updated_at = NOW();`,
       [userId, role]
     );
   }
