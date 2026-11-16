@@ -3,11 +3,12 @@ const usersService = require('../services/users.service');
 const usersRepository = require('../repositories/users.repository');
 const { ok } = require('../utils/response');
 const { resolveAvatar } = require('../config/imageRefs');
+const { toUserResponse } = require('../utils/user.mapper');
 
 async function getUserInfo(req, res, next) {
   try {
     const user = await usersService.getUserInfo({ userId: req.params.id });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -21,7 +22,7 @@ async function updateProfile(req, res, next) {
       email: req.body.email,
       phoneNumber: req.body.phoneNumber,
     });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -35,7 +36,7 @@ async function updatePassword(req, res, next) {
       newPassword: req.body.newPassword,
       confirmPassword: req.body.confirmPassword,
     });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -54,7 +55,7 @@ async function updateAddress(req, res, next) {
         addressType: req.body.addressType,
       },
     });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -63,7 +64,7 @@ async function updateAddress(req, res, next) {
 async function removeUserAddress(req, res, next) {
   try {
     const user = await usersService.removeAddress({ userId: req.user.id, addressId: req.params.id });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -85,7 +86,7 @@ async function updateAvatar(req, res, next) {
       publicId: avatar.publicId,
       url: avatar.url,
     });
-    return ok(res, { user: user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -110,7 +111,7 @@ async function findUserByEmail(req, res, next) {
     const email = String(req.params.email || '').trim();
     const user = email ? await usersRepository.findByEmailInsensitive(email) : null;
     // A miss is an answer, not an error: the caller turns it into "no match".
-    return ok(res, { user: user || null });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -123,7 +124,7 @@ async function findUsersByIds(req, res, next) {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     const users = await usersRepository.findDisplayByIds(ids);
-    return ok(res, { users });
+    return ok(res, { users: toUserResponse(users) });
   } catch (err) {
     return next(err);
   }
@@ -137,7 +138,7 @@ async function searchUsers(req, res, next) {
     const term = String(req.body?.term || '').trim();
     const limit = req.body?.limit;
     const users = await usersRepository.searchDirectory(term, limit);
-    return ok(res, { users });
+    return ok(res, { users: toUserResponse(users) });
   } catch (err) {
     return next(err);
   }

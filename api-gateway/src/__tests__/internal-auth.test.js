@@ -14,7 +14,7 @@ const {
   outboundCredentials,
   sharedFallbackAllowed,
   verifyInternalRequest,
-} = require('../shared/internal-auth');
+} = require('@packages/internal-auth');
 
 /** Minimal Express-like request stand-in (case-insensitive header lookup). */
 function fakeRequest(headers) {

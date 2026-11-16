@@ -3,12 +3,63 @@
  * Supports 3 methods: TOTP (Google Authenticator), Email OTP, SMS OTP
  */
 
-const speakeasy = require('speakeasy');
-const QRCode = require('qrcode');
+let speakeasy = null;
+try { speakeasy = require('speakeasy'); } catch (e) { speakeasy = null; }
+let QRCode = null;
+try { QRCode = require('qrcode'); } catch (e) { QRCode = null; }
 const crypto = require('crypto');
 let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch (e) { nodemailer = null; }
 // const twilio = require('twilio'); // For SMS OTP (optional)
+
+function base32Decode(base32) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(base32 || '').toUpperCase().replace(/=+$/, '');
+  let bits = '';
+  for (let i = 0; i < clean.length; i++) {
+    const val = alphabet.indexOf(clean[i]);
+    if (val === -1) continue;
+    bits += val.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.substring(i, i + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function base32Encode(buffer) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (let i = 0; i < buffer.length; i++) {
+    bits += buffer[i].toString(2).padStart(8, '0');
+  }
+  let output = '';
+  for (let i = 0; i < bits.length; i += 5) {
+    const chunk = bits.substring(i, i + 5);
+    output += alphabet[parseInt(chunk.padEnd(5, '0'), 2)];
+  }
+  return output;
+}
+
+function computeTOTP(secretBase32, timeSec = Math.floor(Date.now() / 1000), step = 30) {
+  if (speakeasy && typeof speakeasy.totp === 'function') {
+    return speakeasy.totp({ secret: secretBase32, encoding: 'base32', time: timeSec });
+  }
+  const counter = Math.floor(timeSec / step);
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(counter));
+  const key = base32Decode(secretBase32);
+  const hmac = crypto.createHmac('sha1', key).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const codeInt = (
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff)
+  ) % 1000000;
+  return codeInt.toString().padStart(6, '0');
+}
 
 // ── Cryptographic Helpers ──
 
@@ -72,20 +123,32 @@ function generateBackupCodes(count = 10) {
 // ── TOTP (Google Authenticator) ──
 
 async function setupTOTP(email, appName = 'Ariiti') {
-  const secret = speakeasy.generateSecret({
-    name: `${appName} (${email})`,
-    issuer: appName,
-    length: 32,
-  });
+  let secretBase32 = '';
+  let otpauth_url = '';
+  if (speakeasy && typeof speakeasy.generateSecret === 'function') {
+    const secret = speakeasy.generateSecret({
+      name: `${appName} (${email})`,
+      issuer: appName,
+      length: 32,
+    });
+    secretBase32 = secret.base32;
+    otpauth_url = secret.otpauth_url;
+  } else {
+    secretBase32 = base32Encode(crypto.randomBytes(20));
+    otpauth_url = `otpauth://totp/${encodeURIComponent(appName)}:${encodeURIComponent(email)}?secret=${secretBase32}&issuer=${encodeURIComponent(appName)}`;
+  }
 
-  const qrCode = await QRCode.toDataURL(secret.otpauth_url);
+  const qrCode = QRCode && typeof QRCode.toDataURL === 'function'
+    ? await QRCode.toDataURL(otpauth_url)
+    : `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg"><text>${otpauth_url}</text></svg>`;
+
   const backupCodes = generateBackupCodes();
 
   return {
-    secret: secret.base32,
+    secret: secretBase32,
     qrCode,
     backupCodes,
-    otpauth_url: secret.otpauth_url,
+    otpauth_url,
   };
 }
 
@@ -94,14 +157,24 @@ function verifyTOTP(storedSecret, code) {
   const rawSecret = decryptSecret(storedSecret);
   if (!rawSecret) return false;
 
-  const verified = speakeasy.totp.verify({
-    secret: rawSecret,
-    encoding: 'base32',
-    token: code,
-    window: 1, // ±30 seconds
-  });
+  const normalizedCode = String(code).trim();
+  if (!/^\d{6}$/.test(normalizedCode)) return false;
 
-  return verified;
+  // Constant-time comparison across the validity window [-1, 0, +1]
+  const window = 1;
+  const step = 30; // seconds
+  const currentEpoch = Math.floor(Date.now() / 1000);
+
+  for (let offset = -window; offset <= window; offset++) {
+    const expected = computeTOTP(rawSecret, currentEpoch + offset * step, step);
+    const a = Buffer.from(expected);
+    const b = Buffer.from(normalizedCode);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ── Email OTP ──
@@ -227,7 +300,12 @@ async function enable2FA(pool, userId, method, secretOrOTP, backupCodes, phoneNu
       phone_number = COALESCE($3, phone_number),
       backup_codes = $4,
       two_factor_destination = $6,
-      two_factor_setup_at = NOW()
+      two_factor_setup_at = NOW(),
+      two_factor_pending_secret = NULL,
+      two_factor_pending_method = NULL,
+      two_factor_pending_otp = NULL,
+      two_factor_pending_expires_at = NULL,
+      two_factor_pending_phone = NULL
     WHERE id = $5
     RETURNING id, email, two_factor_enabled, two_factor_type`,
     [secretToSave, method, phoneNumber, hashedBackupCodes, userId, destination]
@@ -299,10 +377,21 @@ async function verifyBackupCode(pool, userId, candidateCode) {
   const normalizedCandidate = String(candidateCode).trim().toUpperCase();
   const candidateHash = hashBackupCode(normalizedCandidate);
 
-  // Support both SHA-256 hashed backup codes and legacy unhashed codes
-  let codeIndex = backupCodes.indexOf(candidateHash);
-  if (codeIndex === -1) {
-    codeIndex = backupCodes.indexOf(normalizedCandidate);
+  // Support both SHA-256 hashed backup codes and legacy unhashed codes with constant-time comparison
+  let codeIndex = -1;
+  const candidateHashBuf = Buffer.from(candidateHash);
+  const normalizedCandidateBuf = Buffer.from(normalizedCandidate);
+
+  for (let i = 0; i < backupCodes.length; i++) {
+    const storedBuf = Buffer.from(String(backupCodes[i]));
+    if (storedBuf.length === candidateHashBuf.length && crypto.timingSafeEqual(storedBuf, candidateHashBuf)) {
+      codeIndex = i;
+      break;
+    }
+    if (storedBuf.length === normalizedCandidateBuf.length && crypto.timingSafeEqual(storedBuf, normalizedCandidateBuf)) {
+      codeIndex = i;
+      break;
+    }
   }
 
   if (codeIndex === -1) {
@@ -388,4 +477,7 @@ module.exports = {
   encryptSecret,
   decryptSecret,
   hashBackupCode,
+  computeTOTP,
+  base32Encode,
+  base32Decode,
 };

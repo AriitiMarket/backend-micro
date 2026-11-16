@@ -3,8 +3,8 @@ const availabilityService = require('./provider-availability.service');
 const capacityService = require('./provider-capacity.service');
 const coverageService = require('./provider-coverage.service');
 const eligibilityService = require('./provider-eligibility.service');
-const auditClient = require('../../../shared/utils/audit-client');
-const identityClient = require('../../../shared/utils/identity-client');
+const auditClient = require('../../../app/clients/audit.client');
+const identityClient = require('../../../app/clients/identity.client');
 const { badRequest } = require('../../../shared/errors');
 
 async function createProvider(data, actor) {

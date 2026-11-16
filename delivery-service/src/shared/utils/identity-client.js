@@ -1,3 +1,5 @@
+'use strict';
+
 // Service-to-service client for the Identity Service's /internal/* API.
 //
 // The Delivery Service never writes account roles into the identity database
@@ -10,7 +12,7 @@
 //
 // Like the audit client, this never throws into a request handler: a
 // provisioning failure is reported to the caller, not raised.
-const { createInternalClient } = require('../../shared/internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../../app/config/services');
 
 const client = createInternalClient({

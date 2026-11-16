@@ -12,7 +12,7 @@
 // proxies/forward.js): it always re-signs outbound traffic as itself.
 'use strict';
 
-const { verifyInternalRequest, loadCredentials } = require('../shared/internal-auth');
+const { verifyInternalRequest, loadCredentials } = require('@packages/internal-auth');
 
 const credentials = loadCredentials(process.env, 'gateway');
 

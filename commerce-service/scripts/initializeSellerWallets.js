@@ -9,7 +9,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const mongoose = require('mongoose');
 
-const SellerWallet = require('../src/modules/fulfillment/models/SellerWallet');
+const SellerWallet = require('../src/modules/finance/models/SellerWallet');
 const User = require('../src/modules/selling/models/User'); // Adjust if different
 
 async function initializeSellerWallets() {

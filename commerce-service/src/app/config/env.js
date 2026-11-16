@@ -9,7 +9,7 @@ module.exports = {
   production: process.env.NODE_ENV === 'production',
   mongodbUri: process.env.COMMERCE_MONGODB_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/ariti_commerce',
   // Service identity, peer URLs and the cluster credential live in
-  // ./services.js and ../../shared/internal-auth.js — the single source of truth
+  // ./services.js and @packages/internal-auth — the single source of truth
   // for service-to-service topology. Nothing here may duplicate them.
   corsOrigin: process.env.CORS_ORIGIN || '*',
   cloudinary: {

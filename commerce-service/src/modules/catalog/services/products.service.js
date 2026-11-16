@@ -2,9 +2,11 @@ const productRepository = require('../repositories/products.repository');
 const stockMovementRepository = require('../repositories/stockMovements.repository');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const sellerApplicationRepository = require('../../selling/repositories/sellerApplications.repository');
-const orderRepository = require('../../fulfillment/repositories/orders.repository');
+const orderRepository = require('../../orders/repositories/orders.repository');
 const identityClient = require('../../../app/clients/identity.client').identityClient;
 const settingsService = require('../../platform/services/settings.service');
+const reviewsService = require('./reviews.service');
+const productStockService = require('./productStock.service');
 const { validateCategory } = require('../../../shared/utils/categoryValidator');
 const { inactiveProductCategoryTitles } = require('../../../shared/utils/categoryVisibility');
 const { sanitizeImageReference } = require('../../../shared/utils/imageRefs');
@@ -1000,308 +1002,31 @@ class ProductService {
   }
 
   async restockProduct(id, quantity, note, requester) {
-    const product = await productRepository.findById(id);
-    if (!product) throw new ApiError('Product not found', 404);
-    await this.assertOwnership(product, requester);
-
-    const qty = Number(quantity);
-    if (!Number.isInteger(qty) || qty <= 0) throw new ApiError('Quantity must be a positive whole number', 400);
-
-    const stockBefore = product.stock || 0;
-    const updated = await productRepository.updateStock(id, qty);
-
-    await stockMovementRepository.create({
-      productId: id,
-      shopId: product.shopId,
-      sellerId: product.sellerId,
-      type: 'restock',
-      quantity: qty,
-      stockBefore,
-      stockAfter: updated.stock,
-      note: note || `Restocked ${qty} units`,
-    });
-
-    return updated;
+    return productStockService.restockProduct(id, quantity, note, requester);
   }
 
   async adjustStock(id, newQuantity, note, requester) {
-    const product = await productRepository.findById(id);
-    if (!product) throw new ApiError('Product not found', 404);
-    await this.assertOwnership(product, requester);
-
-    const target = Number(newQuantity);
-    if (!Number.isFinite(target) || target < 0 || !Number.isInteger(target)) {
-      throw new ApiError('Stock must be a whole number greater than or equal to 0', 400);
-    }
-    // Same reserved guard as `update-product`: setting the total to a value the
-    // open orders already hold would let the product be over-sold on
-    // confirmation. This endpoint used to skip the check entirely.
-    assertStockNotBelowReserved(target, product.reserved);
-
-    const stockBefore = product.stock || 0;
-    const delta = target - stockBefore;
-    if (delta === 0) return product;
-
-    const updated = await productRepository.updateStock(id, delta);
-
-    await stockMovementRepository.create({
-      productId: id,
-      shopId: product.shopId,
-      sellerId: product.sellerId,
-      type: 'adjustment',
-      quantity: delta,
-      stockBefore,
-      stockAfter: updated.stock,
-      note: note || `Adjusted from ${stockBefore} to ${target}`,
-    });
-
-    return updated;
+    return productStockService.adjustStock(id, newQuantity, note, requester);
   }
 
   async getStockHistory(id, limit = 50, requester = null) {
-    const product = await productRepository.findById(id);
-    if (!product) throw new ApiError('Product not found', 404);
-    await this.assertOwnership(product, requester);
-    const movements = await stockMovementRepository.findByProduct(id, limit);
-    return movements;
+    return productStockService.getStockHistory(id, limit, requester);
   }
 
-  /**
-   * Submit (or update) the caller's review of a product.
-   *
-   * The author is taken from the AUTHENTICATED identity only. It used to be read
-   * from the request body, which let a caller attribute their review to any user
-   * id; the controller now passes the trusted claims.
-   *
-   * One author has at most one review per product, so re-submitting updates the
-   * existing review rather than appending a duplicate — and it re-enters
-   * moderation, because an edited review must not keep its previous approval.
-   */
-  async createReview({ productId, orderId, user, rating, comment }) {
-    const product = await productRepository.findById(productId);
-    if (!product) throw new ApiError('Product not found', 404);
-
-    const reviewerId = resolveReviewerId(user);
-    if (!reviewerId) throw new ApiError('Authentication required', 401);
-    const ratingValue = Number(rating);
-    // Unbounded ratings (0, -3, 999) used to pass Number.isFinite and then
-    // poison the approved-only average that the storefront displays.
-    if (!Number.isFinite(ratingValue) || ratingValue < 1 || ratingValue > 5) {
-      throw new ApiError('Rating must be between 1 and 5', 400);
-    }
-    if (comment !== undefined && comment !== null && String(comment).length > 2000) {
-      throw new ApiError('Review comment must be at most 2000 chars', 400);
-    }
-
-    // Verified purchase: only a buyer with a non-cancelled order containing
-    // this product may review it — and never the product's own shop owner.
-    if (product.shop && product.shop.ownerId && String(product.shop.ownerId) === reviewerId) {
-      throw new ApiError('You cannot review your own product', 403);
-    }
-    const purchased = await orderRepository.existsOwnedOrder(reviewerId, productId);
-    if (!purchased) {
-      throw new ApiError('Only verified purchasers can review this product', 403);
-    }
-
-    // Every new/edited review re-enters moderation: an edited review must not
-    // keep its previous approval.
-    const review = {
-      user,
-      rating: ratingValue,
-      comment: comment !== undefined && comment !== null ? String(comment) : '',
-      productId,
-      moderationStatus: 'pending',
-      moderatedAt: null,
-      moderatedBy: null,
-      rejectionReason: null,
-    };
-    const existing = (product.reviews || []).find(
-      (rev) => reviewAuthorId(rev) === reviewerId
-    );
-
-    if (existing) {
-      existing.rating = review.rating;
-      existing.comment = review.comment;
-      existing.user = user;
-      existing.moderationStatus = 'pending';
-      existing.moderatedAt = null;
-      existing.moderatedBy = null;
-      existing.rejectionReason = null;
-    } else {
-      product.reviews.push(review);
-    }
-    product.ratings = averageApprovedRating(product.reviews);
-    await product.save({ validateBeforeSave: false });
-    if (orderId) {
-      // The order must belong to THIS reviewer and contain THIS product —
-      // otherwise any buyer could flip `isReviewed` on someone else's cart line.
-      const ownsOrder = await orderRepository.ownsOrderContaining(orderId, reviewerId, productId);
-      if (ownsOrder) {
-        await orderRepository.findByIdAndUpdate(orderId, {
-          $set: { 'cart.$[elem].isReviewed': true },
-        }, {
-          arrayFilters: [{ $or: [{ 'elem._id': productId }, { 'elem.productId': productId }] }],
-        });
-      }
-    }
-    return { message: 'Review submitted for moderation' };
+  async createReview(params) {
+    return reviewsService.createReview(params);
   }
 
-  /**
-   * Reviews awaiting moderation, newest product first.
-   *
-   * Reviews are embedded in product documents, so this pages over the REVIEWS
-   * (via $unwind) rather than over products — otherwise a single product with 50
-   * pending reviews would occupy one "page" row.
-   *
-   * Legacy reviews created before moderation existed have no `moderationStatus`
-   * and are treated as pending, matching the `{field: null}` semantics of an
-   * equality query on a missing field.
-   */
-  async listPendingReviews({ page = 1, limit = 10 } = {}) {
-    const safePage = Math.max(parseInt(page, 10) || 1, 1);
-    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
-
-    const pendingMatch = {
-      $or: [
-        { 'reviews.moderationStatus': 'pending' },
-        { 'reviews.moderationStatus': { $exists: false } },
-        { 'reviews.moderationStatus': null },
-      ],
-    };
-
-    const [result] = await productRepository.aggregate([
-      { $unwind: '$reviews' },
-      { $match: pendingMatch },
-      { $sort: { createdAt: -1, 'reviews._id': 1 } },
-      {
-        $facet: {
-          items: [
-            { $skip: (safePage - 1) * safeLimit },
-            { $limit: safeLimit },
-            {
-              $project: {
-                _id: 0,
-                reviewId: { $toString: '$reviews._id' },
-                productId: { $toString: '$_id' },
-                productName: '$name',
-                rating: '$reviews.rating',
-                comment: '$reviews.comment',
-                user: '$reviews.user',
-                status: { $ifNull: ['$reviews.moderationStatus', 'pending'] },
-                createdAt: '$reviews.createdAt',
-              },
-            },
-          ],
-          total: [{ $count: 'count' }],
-        },
-      },
-    ]);
-
-    const items = (result && result.items) || [];
-    const total = (result && result.total && result.total[0] && result.total[0].count) || 0;
-
-    return {
-      reviews: items,
-      total,
-      page: safePage,
-      limit: safeLimit,
-      totalPages: Math.ceil(total / safeLimit) || 0,
-    };
+  async listPendingReviews(options = {}) {
+    return reviewsService.listPendingReviews(options);
   }
 
-  /**
-   * Approves or rejects one review and recomputes the product's public rating
-   * from APPROVED reviews only, so moderation actually controls what is shown.
-   */
   async moderateReview(productId, reviewId, options) {
-    // Backward compatibility for the existing `/order/admin/reviews/:id/*`
-    // endpoint. New `/review/admin/:productId/:reviewId/*` calls are scoped.
-    if (options === undefined && reviewId && typeof reviewId === 'object') {
-      options = reviewId;
-      reviewId = productId;
-      productId = undefined;
-    }
-    const { action, reason, adminId } = options || {};
-    if (!['approve', 'reject'].includes(action)) {
-      throw new ApiError('action must be "approve" or "reject"', 400);
-    }
-    if (action === 'reject' && !String(reason || '').trim()) {
-      throw new ApiError('A rejection reason is required', 400);
-    }
-
-    const product = await productRepository.updateReviewModeration(reviewId, {
-      productId,
-      status: action === 'approve' ? 'approved' : 'rejected',
-      moderatedBy: adminId,
-      reason,
-    });
-    if (!product) throw new ApiError('Review not found', 404);
-
-    product.ratings = averageApprovedRating(product.reviews);
-    await product.save({ validateBeforeSave: false });
-
-    const review = product.reviews.id
-      ? product.reviews.id(reviewId)
-      : (product.reviews || []).find((rev) => String(rev._id) === String(reviewId));
-
-    return {
-      review: toReviewDto(product, review),
-      ratings: product.ratings,
-    };
+    return reviewsService.moderateReview(productId, reviewId, options);
   }
 }
 
-/**
- * Single review DTO shared by the pending list and the moderation responses, so
- * the console cannot receive two different shapes for the same record.
- */
-function toReviewDto(product, review) {
-  if (!review) return null;
-  return {
-    reviewId: String(review._id),
-    productId: String(product._id),
-    productName: product.name || null,
-    rating: review.rating,
-    comment: review.comment,
-    user: review.user || null,
-    status: review.moderationStatus || 'pending',
-    createdAt: review.createdAt || null,
-  };
-}
-
-/**
- * Public rating = mean of APPROVED reviews only. Returns 0 when nothing has been
- * approved, so an unmoderated product never advertises a rating.
- */
-function averageApprovedRating(reviews = []) {
-  const approved = reviews.filter(
-    (rev) => rev.moderationStatus === 'approved' && Number.isFinite(Number(rev.rating))
-  );
-  if (!approved.length) return 0;
-  const total = approved.reduce((sum, rev) => sum + Number(rev.rating), 0);
-  return total / approved.length;
-}
-
-/**
- * The author id of a candidate review.
- *
- * Accepts every shape the id is kept in across the app: `id` (commerce's
- * authenticate() claim), `sub` (the JWT subject) and `_id` (Mongo-ish clients).
- */
-function resolveReviewerId(user) {
-  if (!user) return null;
-  const raw = user.id || user.sub || user._id;
-  return raw ? String(raw) : null;
-}
-
-/** Same, for an author already stored on an embedded review. */
-function reviewAuthorId(review) {
-  const user = (review && review.user) || null;
-  if (!user) return null;
-  const raw = user._id || user.id || user.sub;
-  return raw ? String(raw) : null;
-}
+const { averageApprovedRating } = require('./reviews.service');
 
 /**
  * Project a product down to the reviews the public may see, as a plain object.

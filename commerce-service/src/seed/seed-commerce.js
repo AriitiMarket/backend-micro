@@ -7,9 +7,9 @@ const mongoose = require('mongoose');
 const Category = require('../modules/catalog/models/Categories');
 const Shop = require('../modules/selling/models/Shops');
 const Product = require('../modules/catalog/models/Products');
-const Order = require('../modules/fulfillment/models/Orders');
-const OrderDelivery = require('../modules/fulfillment/models/OrderDeliveries');
-const SellerWallet = require('../modules/fulfillment/models/SellerWallet');
+const Order = require('../modules/orders/models/Orders');
+const OrderDelivery = require('../modules/orders/models/OrderDeliveries');
+const SellerWallet = require('../modules/finance/models/SellerWallet');
 const SellerApplication = require('../modules/selling/models/SellerApplications');
 const Cart = require('../modules/carts/models/Carts');
 const Wishlist = require('../modules/carts/models/Wishlists');
@@ -18,10 +18,10 @@ const StockMovement = require('../modules/catalog/models/StockMovements');
 const Conversation = require('../modules/chat/models/Conversation');
 const Message = require('../modules/chat/models/Message');
 const Request = require('../modules/requests/models/Requests');
-const { ORDER_STATUSES } = require('../modules/fulfillment/constants/orderStatuses');
+const { ORDER_STATUSES } = require('../modules/orders/constants/orderStatuses');
 const { resolveShopBusinessId } = require('../modules/selling/services/business.service');
 const { identityClient } = require('../app/clients/identity.client');
-const orderDeliveryService = require('../modules/fulfillment/services/orderDelivery.service');
+const orderDeliveryService = require('../modules/orders/services/orderDelivery.service');
 
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://admin:admin123@mongodb:27017/aritii?authSource=admin&replicaSet=rs0';
 

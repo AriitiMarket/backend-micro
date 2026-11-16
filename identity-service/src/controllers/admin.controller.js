@@ -8,6 +8,7 @@ const twoFactorService = require('../services/twoFactor.service');
 const authService = require('../services/auth.service');
 const { audit2FA } = require('../services/auditLog.service');
 const { ok } = require('../utils/response');
+const { toUserResponse } = require('../utils/user.mapper');
 
 /**
  * List paginated users with optional filtering by role, status, search term, or specific IDs.
@@ -25,7 +26,7 @@ async function listUsers(req, res, next) {
 
     const result = await adminService.listUsers({ role, status, search, ids, limit: limitNum, offset });
     return ok(res, {
-      users: result.users || [],
+      users: toUserResponse(result.users) || [],
       total: result.total || 0,
       page: pageNum,
       limit: limitNum,
@@ -46,7 +47,7 @@ async function listUsers(req, res, next) {
 async function getUser(req, res, next) {
   try {
     const user = await adminService.getUser(req.params.id);
-    return ok(res, { user });
+    return ok(res, { user: toUserResponse(user) });
   } catch (err) {
     return next(err);
   }
@@ -64,7 +65,7 @@ async function setRole(req, res, next) {
     const adminId = req.user?.id || req.user?.sub || 'unknown';
     const adminName = req.user?.name || req.user?.email || 'Admin';
     const user = await adminService.setRole(req.params.id, req.body.role, adminId, adminName, req);
-    return ok(res, { user }, 'Role updated');
+    return ok(res, { user: toUserResponse(user) }, 'Role updated');
   } catch (err) {
     return next(err);
   }
@@ -82,7 +83,7 @@ async function setUserStatus(req, res, next) {
     const adminId = req.user?.id || req.user?.sub || 'unknown';
     const adminName = req.user?.name || req.user?.email || 'Admin';
     const user = await adminService.setUserStatus(req.params.id, req.body.status, adminId, adminName, req);
-    return ok(res, { user }, 'Status updated');
+    return ok(res, { user: toUserResponse(user) }, 'Status updated');
   } catch (err) {
     return next(err);
   }
@@ -102,7 +103,7 @@ async function setAdminScope(req, res, next) {
     const oldScope = await adminService.getAdminScope(req.params.id);
     const user = await adminService.setAdminScope(req.params.id, req.body.scope);
     await auditService.logAdminScopeChanged(adminId, adminName, req.params.id, oldScope, req.body.scope, req);
-    return ok(res, { user, scope: user.adminScope }, 'Admin scope updated');
+    return ok(res, { user: toUserResponse(user), scope: user.adminScope }, 'Admin scope updated');
   } catch (err) {
     return next(err);
   }
@@ -155,7 +156,7 @@ async function listSellers(req, res, next) {
 async function getSeller(req, res, next) {
   try {
     const seller = await adminService.getSeller(req.params.id);
-    return ok(res, { seller });
+    return ok(res, { seller: toUserResponse(seller) });
   } catch (err) {
     return next(err);
   }

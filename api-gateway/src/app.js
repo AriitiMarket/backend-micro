@@ -6,6 +6,7 @@ const corsConfig = require('./config/cors');
 const requestId = require('./middleware/requestId');
 const requestLogger = require('./middleware/requestLogger');
 const identify = require('./middleware/identify');
+const { jurisdictionMiddleware } = require('./middleware/jurisdiction');
 const authorizeRequest = require('./middleware/authorizeRequest');
 const enforcePermissions = require('./middleware/enforcePermissions');
 const { apiLimiter, authLimiter } = require('./middleware/rateLimiter');
@@ -26,19 +27,19 @@ const swaggerSpec = require('./swagger/swagger');
 const app = express();
 app.set('trust proxy', 1);
 
-// TLS is mandatory in production (OAuth 2.1); browsers are pinned to https.
+// 1) Request tracking & structured request logging
+app.use(requestId);
+app.use(requestLogger);
+
+// 2) Security headers & CORS
 app.use(enforceHttps);
 app.use(securityHeaders);
 app.use(cors(corsConfig));
-// The raw bytes are captured while the JSON parser reads them (body-parser's
-// `verify` hook) because the parser consumes the request stream: once it has
-// run there is nothing left to read, and the proxy needs the original bytes to
-// forward the body upstream — including the ones of an empty JSON object.
+
+// Raw bytes captured while body-parser JSON reads stream
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
-app.use(requestId);
-app.use(requestLogger);
 
 const DOWNSTREAMS = [services.identity, services.commerce, services.delivery];
 
@@ -125,6 +126,9 @@ for (const endpoint of AUTH_ENDPOINTS) {
 // authenticated ceiling can be applied.
 app.use('/api', identify, apiLimiter);
 
+// Administrative jurisdiction check
+app.use('/api', jurisdictionMiddleware);
+
 // Authorization — the single decision point for privileged routes. It runs after
 // the limiter (so an unauthenticated flood is still rate-limited) and before the
 // proxy, which only relays coarse identity downstream. Paths with no entry in
@@ -155,6 +159,13 @@ app.use('/.well-known', apiLimiter, (req, res, next) => {
 // Restore the full path (same pattern as /.well-known) so routes.js matches
 // its '/uploads' entry — do NOT prefix '/api' here, or matchTarget misses.
 app.use('/uploads', apiLimiter, (req, res, next) => {
+  req.url = `${req.baseUrl}${req.url}`;
+  next();
+}, routes);
+
+// Internal cluster routes (`/internal/*`) routed directly without /api prefix.
+// Carries internal cluster credentials for webhook ingestion and cross-service sync.
+app.use('/internal', (req, res, next) => {
   req.url = `${req.baseUrl}${req.url}`;
   next();
 }, routes);

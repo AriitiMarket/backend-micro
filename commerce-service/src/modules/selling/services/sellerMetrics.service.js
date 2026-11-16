@@ -3,10 +3,10 @@
  * Calculates key seller performance indicators with caching
  */
 
-const orderRepository = require('../../fulfillment/repositories/orders.repository');
-const returnsRepository = require('../../fulfillment/repositories/returns.repository');
+const orderRepository = require('../../orders/repositories/orders.repository');
+const returnsRepository = require('../../after-sales/repositories/returns.repository');
 const Product = require('../../catalog/models/Products');
-const SellerAllocation = require('../../fulfillment/models/SellerAllocation');
+const SellerAllocation = require('../../orders/models/SellerAllocation');
 
 function normalizedStatus(value) {
   return String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_');

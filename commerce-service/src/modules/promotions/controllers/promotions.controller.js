@@ -1,6 +1,6 @@
 const promotionsService = require('../services/promotions.service');
-const orderRepository = require('../../fulfillment/repositories/orders.repository');
-const { ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
+const orderRepository = require('../../orders/repositories/orders.repository');
+const { ORDER_STATUSES } = require('../../orders/constants/orderStatuses');
 const { ok, created } = require('../../../shared/utils/response');
 
 /**

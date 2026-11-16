@@ -152,7 +152,7 @@ before(async () => {
   Shop = require('../models/Shops');
   SellerApplication = require('../models/SellerApplications');
   Product = require('../../catalog/models/Products');
-  Order = require('../../fulfillment/models/Orders');
+  Order = require('../../orders/models/Orders');
 
   shopService = require('../services/shops.service');
   sellerAppService = require('../services/sellerApplications.service');
@@ -160,7 +160,7 @@ before(async () => {
   shopRepository = require('../repositories/shops.repository');
   sellerAppRepository = require('../repositories/sellerApplications.repository');
   productsService = require('../../catalog/services/products.service');
-  orderService = require('../../fulfillment/services/orders.service');
+  orderService = require('../../orders/services/orders.service');
   resolveHierarchyScope = require('../../../shared/utils/hierarchyScope').resolveHierarchyScope;
   identityClient = require('../../../app/clients/identity.client').identityClient;
   deliveryClient = require('../../../app/clients/delivery.client').deliveryClient;

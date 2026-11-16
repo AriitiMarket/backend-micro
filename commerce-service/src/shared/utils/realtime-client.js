@@ -12,7 +12,7 @@
 // of REST, so a down/slow gateway must never fail or delay a user action. The
 // gateway validates the shape and pushes `request:event` to the buyer's and
 // seller's user-rooms plus the per-request room.
-const { createInternalClient } = require('../internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../../app/config/services');
 
 const client = createInternalClient({

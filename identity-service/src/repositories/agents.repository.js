@@ -11,43 +11,43 @@ function isUuid(value) {
 }
 
 // Run a parameterized query but convert invalid-UUID input into a no-match (null) result.
-async function safeLookup(sql, id) {
+async function safeLookup(sql, id, client = null) {
   if (!isUuid(id)) return null;
-  const pool = await getPool();
+  const pool = client || (await getPool());
   const result = await pool.query(sql, [id]);
   return result.rows[0] ? toAgent(result.rows[0]) : null;
 }
 
-async function findById(id) {
-  return safeLookup(`SELECT ${AGENT_COLUMNS} FROM agents WHERE id = $1;`, id);
+async function findById(id, client = null) {
+  return safeLookup(`SELECT ${AGENT_COLUMNS} FROM agents WHERE id = $1;`, id, client);
 }
 
-async function findByUserId(userId) {
-  return safeLookup(`SELECT ${AGENT_COLUMNS} FROM agents WHERE user_id = $1;`, userId);
+async function findByUserId(userId, client = null) {
+  return safeLookup(`SELECT ${AGENT_COLUMNS} FROM agents WHERE user_id = $1;`, userId, client);
 }
 
-async function findAll() {
-  const pool = await getPool();
+async function findAll(client = null) {
+  const pool = client || (await getPool());
   const result = await pool.query(`SELECT ${AGENT_COLUMNS} FROM agents ORDER BY created_at DESC;`);
   return result.rows.map(toAgent);
 }
 
 async function create(opts) {
-  const pool = await getPool();
+  const pool = opts.client || (await getPool());
   const result = await pool.query(
     `INSERT INTO agents (user_id, sector_id, commission_rate)
      VALUES ($1, $2, $3) RETURNING id;`,
     [opts.userId, opts.sectorId || null, opts.commissionRate != null ? opts.commissionRate : 5.0]
   );
-  return findById(result.rows[0].id);
+  return findById(result.rows[0].id, opts.client);
 }
 
 async function updateFields(opts) {
-  const pool = await getPool();
+  const pool = opts.client || (await getPool());
   const id = opts.id;
   const fields = opts.fields;
   const keys = Object.keys(fields);
-  if (keys.length < 1) return findById(id);
+  if (keys.length < 1) return findById(id, opts.client);
   const assignments = keys.map(function (key, index) {
     return key + ' = $' + (index + 1);
   });
@@ -55,7 +55,7 @@ async function updateFields(opts) {
   values.push(id);
   const setSql = assignments.join(', ') + ', updated_at = NOW()';
   await pool.query('UPDATE agents SET ' + setSql + ' WHERE id = $' + values.length + ';', values);
-  return findById(id);
+  return findById(id, opts.client);
 }
 
 module.exports = {

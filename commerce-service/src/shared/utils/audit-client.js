@@ -9,7 +9,7 @@
 // using the shared internal client, so the caller is attributed as `commerce`
 // rather than `gateway`, and every dependency in the platform shares one
 // timeout/trace/logging policy.
-const { createInternalClient } = require('../internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../../app/config/services');
 
 const client = createInternalClient({

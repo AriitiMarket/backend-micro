@@ -1,5 +1,5 @@
 const svc = require('../services/provider-wallet.service');
-const Wallet = require('../models/ProviderWallet');
+const walletRepo = require('../repositories/providerWallet.repository');
 const providersRepo = require('../../providers/repositories/providers.repository');
 const { ok, created } = require('../../../shared/utils/response');
 const { isAdmin } = require('../../../shared/utils/access');
@@ -37,7 +37,11 @@ async function review(req, res, next, action) {
 
 async function listWallets(_req, res, next) {
   try {
-    const wallets = await Wallet.find({}).populate({ path: 'providerId', select: 'name phone identityUserId metadata' }).sort({ updatedAt: -1 }).limit(500).lean();
+    const wallets = await walletRepo.find({}, {
+      populate: { path: 'providerId', select: 'name phone identityUserId metadata' },
+      sort: { updatedAt: -1 },
+      limit: 500,
+    });
     return ok(res, { wallets });
   } catch (err) { return next(err); }
 }

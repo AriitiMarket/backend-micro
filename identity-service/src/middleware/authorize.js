@@ -38,6 +38,7 @@ const LEGACY_ROLE_ALIASES = {
   OS_ADMIN: 'ADMIN',
   OSADMIN: 'ADMIN',
   OPERATIONS: 'ADMIN',
+  SUPPORT_ADMIN: 'ADMIN',
 };
 
 // Membership statuses that block a gate, mapped to the platform's canonical

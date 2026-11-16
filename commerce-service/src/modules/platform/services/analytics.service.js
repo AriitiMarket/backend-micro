@@ -1,13 +1,13 @@
-const orderRepository = require('../../fulfillment/repositories/orders.repository');
+const orderRepository = require('../../orders/repositories/orders.repository');
 const shopRepository = require('../../selling/repositories/shops.repository');
 const productRepository = require('../../catalog/repositories/products.repository');
-const Dispute = require('../../fulfillment/models/Dispute');
+const Dispute = require('../../after-sales/models/Dispute');
 const StockMovement = require('../../catalog/models/StockMovements');
-const Payment = require('../../fulfillment/models/Payments');
+const Payment = require('../../finance/models/Payments');
 const hierarchyScope = require('../../../shared/utils/hierarchyScope');
 const { deliveryClient } = require('../../../app/clients/delivery.client');
 const { identityClient } = require('../../../app/clients/identity.client');
-const { normalizeStatus, ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
+const { normalizeStatus, ORDER_STATUSES } = require('../../orders/constants/orderStatuses');
 
 /**
  * Canonical status spellings that represent a completed (revenue-recognizing)

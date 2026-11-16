@@ -86,8 +86,8 @@ async function seedOrder({ product, quantity = 2, status = 'Delivered', paymentS
 describe('Best-selling products', () => {
   before(async () => {
     await mongoose.connect(DB_URL);
-    ORDER_STATUSES = require('../../fulfillment/constants/orderStatuses').ORDER_STATUSES;
-    Order = require('../../fulfillment/models/Orders');
+    ORDER_STATUSES = require('../../orders/constants/orderStatuses').ORDER_STATUSES;
+    Order = require('../../orders/models/Orders');
     Product = require('../models/Products');
     findBestSelling = require('../repositories/products.public.repository').findBestSelling;
     findDeals = require('../repositories/products.public.repository').findDeals;

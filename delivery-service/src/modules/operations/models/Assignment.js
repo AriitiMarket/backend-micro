@@ -35,7 +35,6 @@ const assignmentSchema = new mongoose.Schema({
   providerPortId: { type: mongoose.Schema.Types.ObjectId, ref: 'Port', default: null },
 }, { timestamps: true });
 
-assignmentSchema.index({ deliveryId: 1 });
 assignmentSchema.index({ providerId: 1 });
 assignmentSchema.index({ status: 1 });
 // Hard guarantee: a delivery can never hold two active assignments at once,

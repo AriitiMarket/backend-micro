@@ -29,7 +29,7 @@
 // caller in this service. Zone READS were later reintroduced (see the Zones
 // section below) because checkout revalidation and admin coverage writes need
 // the zone catalogue — reads only, never mutations.
-const { createInternalClient } = require('../../shared/internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../config/services');
 
 const client = createInternalClient({

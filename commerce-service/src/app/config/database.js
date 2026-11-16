@@ -68,7 +68,7 @@ async function runMigrations(db) {
   // cannot invent a mapping: a value it does not recognise is left alone (and
   // will still fail validation, loudly, which is the intent).
   if (existing.has('orders')) {
-    const { ORDER_STATUSES, STATUS_ALIASES } = require('../../modules/fulfillment/constants/orderStatuses');
+    const { ORDER_STATUSES, STATUS_ALIASES } = require('../../modules/orders/constants/orderStatuses');
     const canonical = new Set(Object.values(ORDER_STATUSES));
     const legacyToCanonical = { ...STATUS_ALIASES };
     // Spellings that normalize() resolves by title-casing rather than by table.

@@ -1,5 +1,5 @@
 // Media upload service — the thin wrapper that gives the existing
-// ImageUploadManager (shared/media/imageUploadManager.js) a configured
+// ImageUploadManager (imageUploadManager.js) a configured
 // singleton and a folder-safe entry point.
 //
 // The manager already decides Cloudinary vs local disk; this layer only:
@@ -7,7 +7,7 @@
 //   * sanitises the caller-supplied folder (Cloudinary public_id/folder are
 //     path segments, so anything outside [A-Za-z0-9_-/] is dropped),
 //   * normalises the manager's two result shapes into one `{ url, publicId }`.
-const ImageUploadManager = require('../../../shared/media/imageUploadManager');
+const ImageUploadManager = require('./imageUploadManager');
 const env = require('../../../app/config/env');
 
 // Same placeholder guard as app/config/upload.js: the default .env ships

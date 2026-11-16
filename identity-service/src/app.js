@@ -16,7 +16,7 @@ const adminRolesRoutes = require('./routes/admin-roles.routes');
 const auditRoutes = require('./routes/audit.routes');
 const twoFactorRoutes = require('./routes/twoFactor.routes');
 const gatewayOnly = require('./middleware/gatewayOnly');
-const { requestId } = require('./shared/request-context');
+const { requestId } = require('@packages/request-context');
 const { errorHandler } = require('./middleware/errorHandler');
 const { getPool } = require('./config/database');
 

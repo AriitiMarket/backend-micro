@@ -8,8 +8,8 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
 
-const { createInternalClient, ServiceCallError } = require('../internal-client');
-const { loadCredentials } = require('../internal-auth');
+const { createInternalClient, ServiceCallError } = require('@packages/service-client');
+const { loadCredentials } = require('@packages/internal-auth');
 
 const CREDENTIALS = loadCredentials({
   INTERNAL_SERVICE_NAME: 'commerce',

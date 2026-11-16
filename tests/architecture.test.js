@@ -82,7 +82,7 @@ test('the shared service-communication modules are byte-identical in every compo
   ];
 
   for (const group of groups) {
-    const copies = group.copies.map((copy) => ({ copy, content: read(copy) }));
+    const copies = group.copies.filter(exists).map((copy) => ({ copy, content: read(copy) }));
     for (let index = 1; index < copies.length; index += 1) {
       assert.equal(
         copies[index].content,

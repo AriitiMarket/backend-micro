@@ -23,7 +23,7 @@
 // as middleware/authorize.js).
 'use strict';
 
-const { verifyInternalRequest, loadCredentials } = require('../../shared/internal-auth');
+const { verifyInternalRequest, loadCredentials } = require('@packages/internal-auth');
 
 // Inbound verification only needs the credential set, not this component's own
 // name, so the file stays identical in every service.

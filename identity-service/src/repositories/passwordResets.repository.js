@@ -1,8 +1,8 @@
 // Password reset repository — single-use reset token lifecycle and management.
 const { getPool } = require('../config/database');
 
-async function createPasswordReset({ userId, tokenHash, expiresAt, ipAddress, userAgent }) {
-  const pool = await getPool();
+async function createPasswordReset({ userId, tokenHash, expiresAt, ipAddress, userAgent, client = null }) {
+  const pool = client || (await getPool());
   // Invalidate any existing unused reset tokens for this user first
   await pool.query(
     'UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
@@ -17,8 +17,8 @@ async function createPasswordReset({ userId, tokenHash, expiresAt, ipAddress, us
   return result.rows[0];
 }
 
-async function findValidReset(tokenHash) {
-  const pool = await getPool();
+async function findValidReset(tokenHash, client = null) {
+  const pool = client || (await getPool());
   const result = await pool.query(
     `SELECT pr.*, u.email, u.name, u.role, u.status
      FROM password_resets pr
@@ -31,16 +31,16 @@ async function findValidReset(tokenHash) {
   return result.rows[0] || null;
 }
 
-async function markUsed(id) {
-  const pool = await getPool();
+async function markUsed(id, client = null) {
+  const pool = client || (await getPool());
   await pool.query(
     'UPDATE password_resets SET used_at = NOW() WHERE id = $1',
     [id]
   );
 }
 
-async function invalidateAllForUser(userId) {
-  const pool = await getPool();
+async function invalidateAllForUser(userId, client = null) {
+  const pool = client || (await getPool());
   await pool.query(
     'UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
     [userId]

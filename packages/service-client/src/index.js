@@ -1,10 +1,12 @@
 /**
- * @aritii/service-client - Main Entry Point
+ * @packages/service-client - Main Entry Point
  */
+'use strict';
 
+const internalClient = require('./internal-client');
 const ServiceClient = require('./client');
 const {
-  ServiceCallError,
+  ServiceCallError: BaseServiceCallError,
   ServiceTimeoutError,
   ServiceUnavailableError,
   ServiceAuthError
@@ -12,17 +14,17 @@ const {
 const RetryStrategy = require('./retry');
 
 module.exports = {
-  // Main client
+  // Canonical internal client
+  ...internalClient,
+
+  // Object-oriented client and errors
   ServiceClient,
   createClient: (serviceName, baseUrl, authToken, options) =>
     new ServiceClient(serviceName, baseUrl, authToken, options),
 
-  // Errors
-  ServiceCallError,
   ServiceTimeoutError,
   ServiceUnavailableError,
   ServiceAuthError,
 
-  // Retry strategy
-  RetryStrategy
+  RetryStrategy,
 };

@@ -1,10 +1,16 @@
 {
-  "name": "@aritii/validators",
+  "name": "@packages/validators",
   "version": "1.0.0",
   "description": "Shared validation utilities and schemas",
   "main": "src/index.js",
-  "files": ["src/"],
-  "keywords": ["aritii", "validation", "schemas"],
+  "files": [
+    "src/"
+  ],
+  "keywords": [
+    "aritii",
+    "validation",
+    "schemas"
+  ],
   "author": "Aritii",
   "license": "MIT"
 }

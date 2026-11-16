@@ -31,7 +31,7 @@ before(async () => {
   Request = require('../models/Requests');
   Shop = require('../../selling/models/Shops');
   Product = require('../../catalog/models/Products');
-  Order = require('../../fulfillment/models/Orders');
+  Order = require('../../orders/models/Orders');
   await Promise.all([
     Request.deleteMany({}), Shop.deleteMany({}), Product.deleteMany({}), Order.deleteMany({}),
   ]);
@@ -381,7 +381,7 @@ describe('Requests · conversion', () => {
 
   it('every stock operation skips agreement lines', async () => {
     const { product } = await createOpenRequest();
-    const orderService = require('../../fulfillment/services/orders.service');
+    const orderService = require('../../orders/services/orders.service');
     const line = { name: 'Negotiated item', quantity: 5, stockManaged: false };
 
     assert.strictEqual((await orderService.reserveInventory([line], null, [])).length, 0);

@@ -11,7 +11,7 @@
 // credential can never be used to mint or verify user tokens.
 'use strict';
 
-const { verifyInternalRequest, loadCredentials } = require('../shared/internal-auth');
+const { verifyInternalRequest, loadCredentials } = require('@packages/internal-auth');
 
 const credentials = loadCredentials(process.env);
 

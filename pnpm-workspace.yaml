@@ -1,0 +1,6 @@
+packages:
+  - 'packages/*'
+  - 'api-gateway'
+  - 'commerce-service'
+  - 'delivery-service'
+  - 'identity-service'

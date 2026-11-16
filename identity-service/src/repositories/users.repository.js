@@ -103,7 +103,7 @@ async function updateFields(opts) {
 }
 
 async function updatePassword(opts) {
-  return updateFields({ id: opts.id, fields: { password_hash: opts.hash } });
+  return updateFields({ id: opts.id, fields: { password_hash: opts.hash }, client: opts.client });
 }
 
 async function updateAvatar(opts) {

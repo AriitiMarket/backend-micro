@@ -4,8 +4,11 @@ FROM node:20-bookworm-slim AS deps
 
 WORKDIR /app
 
-# Copy root manifest and shared internal monorepo packages first
-COPY package*.json ./
+# Enable pnpm via corepack for workspace support
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy root manifest, workspace definition and shared internal monorepo packages first
+COPY package*.json pnpm-workspace.yaml* ./
 COPY packages/ ./packages/
 
 # Copy package manifests for each microservice
@@ -14,11 +17,8 @@ COPY commerce-service/package*.json ./commerce-service/
 COPY delivery-service/package*.json ./delivery-service/
 COPY api-gateway/package*.json ./api-gateway/
 
-# Install ONLY production dependencies (--omit=dev) for minimal image footprint
-RUN npm --prefix identity-service ci --omit=dev --no-audit --prefer-offline && \
-    npm --prefix commerce-service ci --omit=dev --no-audit --prefer-offline && \
-    npm --prefix delivery-service ci --omit=dev --no-audit --prefer-offline && \
-    npm --prefix api-gateway ci --omit=dev --no-audit --prefer-offline
+# Install ONLY production dependencies (--prod) for minimal image footprint
+RUN pnpm install --prod --no-frozen-lockfile --ignore-scripts
 
 # Stage 2: Production runner base
 FROM node:20-bookworm-slim AS runner
@@ -41,20 +41,30 @@ RUN mkdir -p \
     && chown -R node:node /app
 
 # Copy root manifest and shared internal monorepo packages
-COPY --chown=node:node package*.json ./
+COPY --chown=node:node package*.json pnpm-workspace.yaml* ./
 COPY --chown=node:node packages/ ./packages/
-
-# Copy pruned production dependencies from deps stage
-COPY --chown=node:node --from=deps /app/identity-service/node_modules ./identity-service/node_modules
-COPY --chown=node:node --from=deps /app/commerce-service/node_modules ./commerce-service/node_modules
-COPY --chown=node:node --from=deps /app/delivery-service/node_modules ./delivery-service/node_modules
-COPY --chown=node:node --from=deps /app/api-gateway/node_modules ./api-gateway/node_modules
 
 # Copy service application code
 COPY --chown=node:node identity-service/ ./identity-service/
 COPY --chown=node:node commerce-service/ ./commerce-service/
 COPY --chown=node:node delivery-service/ ./delivery-service/
 COPY --chown=node:node api-gateway/ ./api-gateway/
+
+# Copy pruned production dependencies from deps stage
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node --from=deps /app/identity-service/node_modules ./identity-service/node_modules
+COPY --chown=node:node --from=deps /app/commerce-service/node_modules ./commerce-service/node_modules
+COPY --chown=node:node --from=deps /app/delivery-service/node_modules ./delivery-service/node_modules
+COPY --chown=node:node --from=deps /app/api-gateway/node_modules ./api-gateway/node_modules
+
+# Ensure internal monorepo packages are resolvable across all packages and services
+RUN mkdir -p /app/node_modules/@packages && \
+    for pkg in /app/packages/*; do \
+      [ -d "$pkg" ] && ln -sf "$pkg" "/app/node_modules/@packages/$(basename "$pkg")"; \
+    done && \
+    chown -R node:node /app/node_modules/@packages
+
+ENV NODE_PATH=/app/node_modules
 
 # Switch to non-root user
 USER node

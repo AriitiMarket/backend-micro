@@ -15,6 +15,11 @@ const authController = require('../controllers/auth.controller');
 const authenticate = require('../middleware/authenticate');
 const { uploadUserFile } = require('../config/upload');
 const {
+  loginLimiter,
+  tokenRefreshLimiter,
+  passwordResetLimiter,
+} = require('../middleware/rateLimiter');
+const {
   validateAuthorize,
   validateRegister,
   validateLogin,
@@ -53,7 +58,7 @@ router.get('/.well-known/jwks.json', jwksHandler);
 
 // ─ OAuth 2.1 authorization endpoint ───────────────────────────────────────
 // Direct-credential variant for first-party SPAs (returns a one-time code).
-router.post('/auth/authorize', validateAuthorize, validateLogin, authController.authorizeWithCredentials);
+router.post('/auth/authorize', loginLimiter, validateAuthorize, validateLogin, authController.authorizeWithCredentials);
 // Consent/step-up variant for an already-authenticated principal.
 router.get('/auth/authorize', validateAuthorize, authController.authorize);
 // Registration → one-time code (no tokens).
@@ -63,14 +68,14 @@ router.post('/auth/register/:role', uploadUserFile, validateAuthorize, validateR
 
 // ── OAuth 2.1 token endpoint (the ONLY token issuer) ───────────────────────
 router.post('/auth/token', authController.tokenExchange);
-router.post('/auth/refresh', authController.refreshToken);
+router.post('/auth/refresh', tokenRefreshLimiter, authController.refreshToken);
 router.post('/auth/revoke', authController.revokeToken);
 
 // ── Password Reset & Account Recovery ──────────────────────────────────────
-router.post('/auth/forgot-password', authController.forgotPassword);
+router.post('/auth/forgot-password', passwordResetLimiter, authController.forgotPassword);
 router.get('/auth/verify-reset-token', authController.verifyResetToken);
 router.post('/auth/verify-reset-token', authController.verifyResetToken);
-router.post('/auth/reset-password', authController.resetPassword);
+router.post('/auth/reset-password', passwordResetLimiter, authController.resetPassword);
 
 // ─ Resource endpoints ─────────────────────────────────────────────────────
 router.get('/user/getuser', authenticate, authController.getCurrentUser);

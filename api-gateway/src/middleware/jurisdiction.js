@@ -94,4 +94,25 @@ function checkJurisdiction(req) {
   return { ok: true };
 }
 
-module.exports = { checkJurisdiction, jurisdictionOf, LOCATION_PARAMS };
+function jurisdictionMiddleware(req, res, next) {
+  const result = checkJurisdiction(req);
+  if (!result.ok) {
+    return res.status(403).json({
+      success: false,
+      code: 'JURISDICTION_DENIED',
+      message: `Access denied: requested ${result.param} '${result.value}' is outside your administrative jurisdiction`,
+      errors: [],
+    });
+  }
+  if (result.injectedUrl) {
+    req.url = result.injectedUrl;
+  }
+  return next();
+}
+
+module.exports = {
+  checkJurisdiction,
+  jurisdictionOf,
+  LOCATION_PARAMS,
+  jurisdictionMiddleware,
+};

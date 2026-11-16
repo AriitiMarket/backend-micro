@@ -69,3 +69,30 @@ test('a connect failure propagates without leaking a client', async () => {
   const pool = { async connect() { throw new Error('pool exhausted'); } };
   await assert.rejects(() => withTransaction(async () => 1, { pool }), /pool exhausted/);
 });
+
+test('reuses active client when passed directly (nested transaction)', async () => {
+  const { client } = fakePool();
+  const result = await withTransaction(async (c) => {
+    assert.equal(c, client);
+    await c.query('SELECT 1');
+    return 'nested-ok';
+  }, client);
+
+  assert.equal(result, 'nested-ok');
+  assert.deepEqual(client.calls, ['SELECT']);
+  assert.equal(client.released, false); // Caller manages lifecycle
+});
+
+test('reuses active client when passed via options.client', async () => {
+  const { client } = fakePool();
+  const result = await withTransaction(async (c) => {
+    assert.equal(c, client);
+    await c.query('SELECT 2');
+    return 'options-client-ok';
+  }, { client });
+
+  assert.equal(result, 'options-client-ok');
+  assert.deepEqual(client.calls, ['SELECT']);
+  assert.equal(client.released, false);
+});
+

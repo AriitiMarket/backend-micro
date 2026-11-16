@@ -1,14 +1,11 @@
 {
-  "name": "@aritii/authz",
+  "name": "@packages/authz",
   "version": "1.0.0",
   "description": "Role-based authorization for Aritii microservices",
   "main": "src/index.js",
   "files": [
     "src/"
   ],
-  "scripts": {
-    "test": "jest"
-  },
   "keywords": [
     "aritii",
     "authorization",

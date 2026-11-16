@@ -30,6 +30,7 @@ const { ROLES, normalizeRole } = require('../models/Role');
 const BUYER_ROLE = 'BUYER';
 const { resolveAdminAuthorization } = require('./adminAuthorization.service');
 const { withTransaction } = require('../config/transaction');
+const { auditAuth } = require('./auditLog.service');
 const env = require('../config/env');
 
 const ACCESS_TOKEN_EXPIRES_IN_SEC = env.accessTokenExpiresInSec;
@@ -356,66 +357,71 @@ async function exchangeAuthorizationCode(code, codeVerifier, redirectUri) {
 
 // Token endpoint: refresh_token grant (rotation + reuse detection).
 async function refreshTokens(oldRefreshToken) {
-  const record = await refreshTokensRepo.findRefreshToken(oldRefreshToken);
-  if (!record) {
-    const err = new Error('Invalid refresh token');
-    err.statusCode = 401;
-    throw err;
-  }
+  return withTransaction(async (client) => {
+    const record = await refreshTokensRepo.findRefreshToken(oldRefreshToken, client);
+    if (!record) {
+      const err = new Error('Invalid refresh token');
+      err.statusCode = 401;
+      throw err;
+    }
 
-  // Reuse detection — a revoked token presented again means the family leaked.
-  if (record.revoked_at) {
-    await refreshTokensRepo.revokeFamily(record.family_id);
-    const err = new Error('Refresh token reuse detected. All sessions revoked.');
-    err.statusCode = 401;
-    throw err;
-  }
+    // Reuse detection — a revoked token presented again means the family leaked.
+    if (record.revoked_at) {
+      await refreshTokensRepo.revokeAllForUser(record.user_id, client);
+      auditAuth.tokenReuseDetected(record.user_id, { familyId: record.family_id });
+      const err = new Error('Refresh token reuse detected. All sessions revoked.');
+      err.statusCode = 401;
+      throw err;
+    }
 
-  if (record.expires_at && new Date(record.expires_at).getTime() <= Date.now()) {
-    await refreshTokensRepo.revokeFamily(record.family_id);
-    const err = new Error('Refresh token expired');
-    err.statusCode = 401;
-    throw err;
-  }
+    if (record.expires_at && new Date(record.expires_at).getTime() <= Date.now()) {
+      await refreshTokensRepo.revokeFamily(record.family_id, client);
+      const err = new Error('Refresh token expired');
+      err.statusCode = 401;
+      throw err;
+    }
 
-  const user = await usersRepository.findById(record.user_id);
-  if (!user || user.status !== 'active') {
-    await refreshTokensRepo.revokeAllForUser(record.user_id);
-    const err = new Error('User not found or inactive');
-    err.statusCode = 401;
-    throw err;
-  }
+    const user = await usersRepository.findById(record.user_id, { client });
+    if (!user || user.status !== 'active') {
+      await refreshTokensRepo.revokeAllForUser(record.user_id, client);
+      const err = new Error('User not found or inactive');
+      err.statusCode = 401;
+      throw err;
+    }
 
-  // Rotate atomically: revoke the presented token and insert its successor in
-  // one transaction, so a concurrent replay can never mint two live tokens.
-  const newRefreshToken = generateRefreshToken();
-  const rotated = await refreshTokensRepo.rotateRefreshToken({
-    oldTokenHash: hashToken(oldRefreshToken),
-    userId: user.id,
-    familyId: record.family_id,
-    newToken: newRefreshToken,
-    expiresInDays: env.refreshTokenExpiresInDays,
+    // Rotate atomically: revoke the presented token and insert its successor in
+    // one transaction, so a concurrent replay can never mint two live tokens.
+    const newRefreshToken = generateRefreshToken();
+    const rotated = await refreshTokensRepo.rotateRefreshToken({
+      oldTokenHash: hashToken(oldRefreshToken),
+      userId: user.id,
+      familyId: record.family_id,
+      newToken: newRefreshToken,
+      expiresInDays: env.refreshTokenExpiresInDays,
+      client,
+    });
+
+    if (!rotated) {
+      await refreshTokensRepo.revokeAllForUser(record.user_id, client);
+      auditAuth.tokenReuseDetected(record.user_id, { familyId: record.family_id });
+      const err = new Error('Refresh token reuse detected. All sessions revoked.');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    // Preserve the account's active actor role across rotation: without this, a
+    // deliberate switch would silently revert to the primary role as soon as the
+    // access token was refreshed.
+    const sessionUser = withActiveRole(user);
+    const authorization = await resolveAdminAuthorization(sessionUser);
+
+    return {
+      accessToken: signAccessToken(sessionUser, authorization),
+      idToken: signIdToken(sessionUser),
+      refreshToken: newRefreshToken,
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN_SEC,
+    };
   });
-
-  if (!rotated) {
-    await refreshTokensRepo.revokeFamily(record.family_id);
-    const err = new Error('Refresh token reuse detected. All sessions revoked.');
-    err.statusCode = 401;
-    throw err;
-  }
-
-  // Preserve the account's active actor role across rotation: without this, a
-  // deliberate switch would silently revert to the primary role as soon as the
-  // access token was refreshed.
-  const sessionUser = withActiveRole(user);
-  const authorization = await resolveAdminAuthorization(sessionUser);
-
-  return {
-    accessToken: signAccessToken(sessionUser, authorization),
-    idToken: signIdToken(sessionUser),
-    refreshToken: newRefreshToken,
-    expiresIn: ACCESS_TOKEN_EXPIRES_IN_SEC,
-  };
 }
 
 async function revokeRefreshToken(token) {

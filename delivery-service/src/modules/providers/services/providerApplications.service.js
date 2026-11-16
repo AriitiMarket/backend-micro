@@ -10,8 +10,8 @@
 // therefore needs no "copy application -> provider" step; it flips the status
 // and provisions the account role.
 const providersRepo = require('../repositories/providers.repository');
-const auditClient = require('../../../shared/utils/audit-client');
-const identityClient = require('../../../shared/utils/identity-client');
+const auditClient = require('../../../app/clients/audit.client');
+const identityClient = require('../../../app/clients/identity.client');
 
 // Mirrors the Provider schema enums — keep in sync with models/Provider.js.
 const PROVIDER_TYPES = ['individual_rider', 'delivery_business', 'logistics_partner'];

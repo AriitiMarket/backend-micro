@@ -29,7 +29,7 @@ module.exports = function attachSocket(server, corsOrigins) {
             return callback(null, false);
           },
       methods: ['GET', 'POST'],
-      credentials: false,
+      credentials: true,
     },
   });
   registry.setIo(io);
@@ -42,8 +42,15 @@ module.exports = function attachSocket(server, corsOrigins) {
     if (!token) return next(new Error('unauthorized'));
     try {
       const payload = await verifyToken(token);
-      socket.data.userId = payload.sub;
+      socket.data.userId = payload.sub || payload.userId || null;
       socket.data.role = payload.role || null;
+      socket.data.roles = Array.isArray(payload.roles)
+        ? payload.roles
+        : (payload.role ? [payload.role] : []);
+      socket.data.shopId = payload.shopId || null;
+      socket.data.providerId = payload.providerId || null;
+
+      if (!socket.data.userId) return next(new Error('unauthorized'));
       return next();
     } catch (err) {
       return next(new Error('unauthorized'));
@@ -73,12 +80,21 @@ module.exports = function attachSocket(server, corsOrigins) {
   io.on('connection', (socket) => {
     // Sender identity always comes from the verified token, never the client.
     const authenticatedUserId = socket.data.userId;
+    registry.registerSocket(authenticatedUserId, socket.id);
     console.log('[gateway-socket] user connected:', authenticatedUserId);
 
     // Every socket sits in its own user-room, so request events addressed to
     // this user always reach them — the client never picks a room itself.
     const userRoom = `user:${authenticatedUserId}`;
     socket.join(userRoom);
+
+    // Auto-join permitted shop or provider rooms if associated in verified token
+    if (socket.data.shopId) {
+      socket.join(`shop:${socket.data.shopId}`);
+    }
+    if (socket.data.providerId) {
+      socket.join(`provider:${socket.data.providerId}`);
+    }
 
     /**
      * Opt-in per-request rooms: a workspace page tells the gateway which
@@ -97,6 +113,28 @@ module.exports = function attachSocket(server, corsOrigins) {
         .filter((value) => typeof value === 'string' && REQUEST_ID_PATTERN.test(value))
         .slice(0, MAX_SUBSCRIBED_REQUESTS);
       ids.forEach((id) => socket.leave(`request:${id}`));
+    });
+
+    // Enforce authorization checks on shop room subscription
+    socket.on('shop:subscribe', (payload = {}) => {
+      const shopId = payload && payload.shopId;
+      const isAdmin = socket.data.roles?.includes('admin') || socket.data.role === 'admin';
+      if (!shopId || (socket.data.shopId !== shopId && !isAdmin)) {
+        return socket.emit('error', { message: 'Unauthorized room subscription' });
+      }
+      socket.join(`shop:${shopId}`);
+      socket.emit('shop:subscribed', { shopId });
+    });
+
+    // Enforce authorization checks on provider room subscription
+    socket.on('provider:subscribe', (payload = {}) => {
+      const providerId = payload && payload.providerId;
+      const isAdmin = socket.data.roles?.includes('admin') || socket.data.role === 'admin';
+      if (!providerId || (socket.data.providerId !== providerId && !isAdmin)) {
+        return socket.emit('error', { message: 'Unauthorized room subscription' });
+      }
+      socket.join(`provider:${providerId}`);
+      socket.emit('provider:subscribed', { providerId });
     });
 
     socket.on('addUser', () => {
@@ -126,6 +164,7 @@ module.exports = function attachSocket(server, corsOrigins) {
     });
 
     socket.on('disconnect', () => {
+      registry.unregisterSocket(socket.id);
       removeUser(socket.id);
       io.emit('getUsers', users);
     });
