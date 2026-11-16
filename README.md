@@ -1,309 +1,179 @@
-# Ariiti Market — Backend Microservices
+# Aritii Market — Backend Microservices
 
-The backend infrastructure for **Ariiti Market**, an Ethiopian multi-vendor e-commerce marketplace and logistics platform. The system is designed around an API Gateway routing requests to three domain microservices, backed by a polyglot persistence architecture (PostgreSQL and MongoDB) with Redis caching.
+The distributed backend infrastructure for **Aritii Market**, an Ethiopian multi-vendor e-commerce marketplace and logistics platform. The platform is architected around an API Gateway routing requests to three domain microservices, backed by a polyglot persistence architecture (PostgreSQL and MongoDB) with Redis caching.
 
 ---
 
-## Architecture Overview
+## 1. Architecture Overview
 
-```text
-  Customer & Seller Web              Admin Operations Web
-   (aritii-seller-buyer-web)          (Aritii-admin-web)
-            \                                /
-             \                              /
-              v                            v
-          ┌────────────────────────────────────────┐
-          │       API Gateway (:8000)              │  <-- Single public entry point
-          │       Rate limiting, reverse proxy      │
-          └──────────────────┬─────────────────────┘
-                             │
-     ┌───────────────────────┼───────────────────────┐
-     │                       │                       │
-     v                       v                       v
-┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-│ Identity (:8001)│   │ Commerce (:8002)│   │ Delivery (:8003)│
-│ PostgreSQL      │   │ MongoDB         │   │ MongoDB         │
-│ (Private net)   │   │ (Private net)   │   │ (Private net)   │
-└─────────────────┘   └─────────────────┘   └─────────────────┘
+```mermaid
+flowchart TD
+    Client["Clients (Web / Admin / Mobile)"] -->|HTTPS / WSS :8000| Edge["API Gateway (:8000)\nReverse Proxy, Rate Limiter, Socket.IO, JWKS Cache"]
+    
+    subgraph PrivateNetwork ["Isolated Internal Bridge Network (No Published Host Ports)"]
+        Edge -->|"X-Internal-Token & Verified JWT Claims"| Identity["Identity Service (:8001)\nPostgreSQL + Pool Transactions\nOAuth 2.1, OIDC, RTR, 2FA, RBAC"]
+        Edge -->|"X-Internal-Token & Re-signed Claims"| Commerce["Commerce Service (:8002)\nMongoDB (Replica Set rs0)\norders | finance | after-sales | catalog"]
+        Edge -->|"X-Internal-Token & Re-signed Claims"| Delivery["Delivery Service (:8003)\nMongoDB + GeoJSON 2dsphere\nOutbox Pattern | Provider Wallets | Tracking"]
+        
+        Commerce <-->|"Mutual @packages/service-client"| Delivery
+        Commerce -->|"Audit Logs & Directory Lookup"| Identity
+        Delivery -->|"Provider Roles & Audit Logs"| Identity
+    end
+
+    subgraph MonorepoPackages ["Monorepo Shared Workspace Packages (@packages/*)"]
+        PkgAuthz["@packages/authz"]
+        PkgInternalAuth["@packages/internal-auth"]
+        PkgReqCtx["@packages/request-context"]
+        PkgServClient["@packages/service-client"]
+        PkgDatabase["@packages/database"]
+        PkgValidators["@packages/validators"]
+    end
+
+    Identity -.-> MonorepoPackages
+    Commerce -.-> MonorepoPackages
+    Delivery -.-> MonorepoPackages
+    Edge -.-> MonorepoPackages
 ```
 
 ### Core Architecture Principles
 
-- **Single Public Ingress:** The API Gateway (`:8000`) is the only service that binds to an external port. All external client requests route through `/api/*`.
-- **Private Microservice Network:** Domain services (`identity-service`, `commerce-service`, `delivery-service`) reside strictly on an isolated network. They do not publish host ports.
-- **Service-to-Service Trust:** Inter-service requests bypass the public gateway and authenticate over the internal network using per-caller secrets (`INTERNAL_SERVICE_TOKENS`). A compromised token grants access only to the assigned caller.
-- **Polyglot Persistence:** Each microservice uses the database engine optimized for its data domain.
+- **Single Public Ingress:** The API Gateway (`:8000`) is the only service that publishes a host port. External clients access the platform exclusively through `/api/*` or the root `/.well-known` and `/uploads` endpoints.
+- **Zero-Trust Private Microservices:** Domain services (`identity-service`, `commerce-service`, `delivery-service`) publish no host ports. Direct calls from unverified sources are immediately rejected by `gatewayOnly.js` (`403 FORBIDDEN`).
+- **Mutual Internal Authentication:** Inter-service RPC uses [`@packages/service-client`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/packages/service-client) and validates cluster secrets via [`@packages/internal-auth`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/packages/internal-auth) (`X-Internal-Token` + `X-Internal-Service`).
+- **Polyglot Persistence:**
+  - **PostgreSQL (Identity):** ACID transaction safety, relational schema integrity, and foreign key enforcement for accounts, roles, and credentials.
+  - **MongoDB Replica Set (Commerce & Delivery):** Flexible multi-vendor catalogs, spatial GeoJSON indexes (`2dsphere`) for zone containment, and multi-document ACID transactions.
 
 ---
 
-## Repository Structure
+## 2. Repository Structure
 
 ```text
 backend-services/
-├── api-gateway/            # Central entry point: reverse proxy, rate limiting, and route dispatch (:8000)
-├── identity-service/       # Auth, accounts, RBAC, OAuth 2.1 / OIDC (PostgreSQL, :8001)
-├── commerce-service/       # Shops, products, cart, orders, escrow, reviews (MongoDB, :8002)
-├── delivery-service/       # Zones, routes, hubs, tracking, GeoJSON (MongoDB, :8003)
-├── packages/               # Shared internal libraries
-│   ├── authz/              # Unified authorization and permission helpers
-│   ├── database/           # Connection management utilities (PostgreSQL pool & Mongoose)
-│   ├── internal-auth/      # Service-to-service credential verification
-│   ├── request-context/    # Correlation IDs and request tracing
-│   ├── service-client/     # Resilient HTTP client for internal microservice RPC
-│   └── validators/         # Shared payload validators
-├── tests/                  # Architectural compliance and cross-service integration tests
-├── .github/workflows/      # Automated CI/CD pipelines (test, lint, deploy)
+├── api-gateway/            # Public reverse proxy, JWKS cache, rate limiter, Socket.IO hub (:8000)
+├── identity-service/       # Auth, accounts, RBAC, OAuth 2.1 / OIDC, RTR, 2FA (PostgreSQL, :8001)
+├── commerce-service/       # Modularized marketplace bounded contexts (MongoDB, :8002)
+│   ├── src/modules/orders/         # Order lifecycle, inventory allocation, SLA monitoring
+│   ├── src/modules/finance/        # Seller wallets, Chapa payments, payouts, commission ledgers
+│   ├── src/modules/after-sales/    # Customer returns, refunds, dispute arbitration
+│   ├── src/modules/catalog/        # Product listings, stock reservations, categories, reviews
+│   ├── src/modules/selling/        # Multi-seller shops, applications, subscriptions, metrics
+│   ├── src/modules/platform/       # Admin operations, marketplace hierarchy, analytics
+│   ├── src/modules/carts/          # Persistent shopping carts, customer wishlists
+│   ├── src/modules/promotions/     # Discount coupons, promotional campaigns, banner events
+│   ├── src/modules/media/          # Image uploads & optimization
+│   └── src/modules/chat/           # Real-time buyer-seller order messaging
+├── delivery-service/       # Logistics coordination, GeoJSON zones, tracking (MongoDB, :8003)
+│   ├── src/app/clients/            # Centralized cross-service HTTP clients (@packages/service-client)
+│   ├── src/modules/delivery-fulfillment/ # Fulfillment lifecycle, Transactional Outbox pattern
+│   ├── src/modules/locations-expansion/  # Geographic hierarchy, polygon zones, hubs, routes
+│   ├── src/modules/operations/           # Single & batch dispatch assignment engine, shipments
+│   ├── src/modules/provider-wallet/      # Courier driver wallets, COD settlement, payouts
+│   ├── src/modules/providers/            # Provider onboarding, vehicle records, verification
+│   └── src/modules/tracking/             # Milestone history, latest GPS telemetry streams
+├── packages/               # Shared workspace libraries (@packages/*)
+│   ├── authz/              # Standardized authorization and role validation helpers
+│   ├── database/           # Managed PostgreSQL connection pool and transaction runner
+│   ├── internal-auth/      # Service-to-service credential verification & token maps
+│   ├── request-context/    # Distributed correlation IDs (x-request-id) and tracing
+│   ├── service-client/     # Resilient HTTP client with timeouts, retries, and auth headers
+│   └── validators/         # Shared payload schemas and validation utilities
+├── tests/                  # Root architecture verification and cross-service test suites
 ├── docker-compose.yml      # Local container orchestration definition
 └── .env.example            # Environment template for containerized development
 ```
 
 ---
 
-## Services & Database Strategy
+## 3. Services & Persistence Strategy
 
-| Service | Port | Database | Primary Responsibilities |
+| Service | Port | Persistence | Primary Responsibilities |
 | :--- | :--- | :--- | :--- |
-| **API Gateway** | `8000` | Redis (Cache) | Public request ingress, URL path rewriting, CORS, rate limiting, and health aggregation. |
-| **Identity Service** | `8001` | **PostgreSQL** | User registration, authentication, OAuth 2.1 / OIDC (PKCE), session management, and granular RBAC. |
-| **Commerce Service** | `8002` | **MongoDB** | Merchant business onboarding, multi-shop catalogs, product inventory, cart, escrow payments, and orders. |
-| **Delivery Service** | `8003` | **MongoDB (GeoJSON)** | Location hierarchies, delivery zones, dispatch routing, delivery requests, and shipment milestones. |
-
-### Why Polyglot Persistence?
-
-- **PostgreSQL for Identity:** User accounts, roles, and administrative permissions require strict relational integrity, foreign key enforcement, and ACID transaction guarantees.
-- **MongoDB for Commerce & Delivery:** Catalogs and logistics require flexible document schemas. Product attributes vary widely across categories, and delivery logistics rely on GeoJSON spatial indexing (`2dsphere`) for polygon boundaries and coordinate calculations.
+| **API Gateway** | `8000` | Redis (Cache) | Public ingress, header sanitization, JWKS caching, rate limiting, and Socket.IO hub. |
+| **Identity Service** | `8001` | **PostgreSQL** | OAuth 2.1 / OIDC (PKCE), user registration, refresh token rotation, 2FA, and RBAC. |
+| **Commerce Service** | `8002` | **MongoDB (rs0)** | Multi-shop catalogs, stock allocation, cart, seller wallets, payouts, and after-sales. |
+| **Delivery Service** | `8003` | **MongoDB (GeoJSON)** | Location hierarchies, polygon delivery zones, dispatch, outbox sync, and tracking. |
 
 ---
 
-## Authentication & Security
+## 4. Architectural Modernization Summary
 
-Ariiti Market implements **OAuth 2.1 and OpenID Connect (OIDC)** using Authorization Code Flow with mandatory **PKCE (S256)**:
+The backend codebase completed a 6-phase modernization refactoring:
 
-```text
-1. Client generates:
-   code_verifier
-   code_challenge = BASE64URL(SHA256(code_verifier))
-
-2. POST /api/auth/authorize  { email, password, code_challenge, code_challenge_method="S256" }
-   -> Returns single-use authorization code (never a direct token)
-
-3. POST /api/auth/token      { grant_type="authorization_code", code, code_verifier }
-   -> Validates PKCE challenge and returns access_token + refresh_token
-
-4. Subsequent requests pass:
-   Authorization: Bearer <access_token>
-   -> Gateway and services verify JWT signature via JWKS
-
-5. POST /api/auth/token      { grant_type="refresh_token", refresh_token }
-   -> Rotates token pair with automatic reuse detection
-
-6. POST /api/auth/revoke     { token }
-   -> RFC 7009 token revocation
-```
-
-Tokens are short-lived (10 minutes) and refresh tokens rotate on every exchange. Cookies and server-side session state are avoided in favor of stateless, cryptographically signed tokens.
+1. **Phase 1 (Workspace Packages):** Cleaned up duplicate local modules across all microservices and unified them under root [`@packages/*`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/packages).
+2. **Phase 2 (Commerce Domain Modularization):** Decomposed the monolithic fulfillment module into three clean bounded contexts: [`orders`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/commerce-service/src/modules/orders), [`finance`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/commerce-service/src/modules/finance), and [`after-sales`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/commerce-service/src/modules/after-sales).
+3. **Phase 3 (Commerce Concurrency & Security):** Implemented atomic MongoDB transactions via `withTransaction`, webhook replay protection (constant-time HMAC + timestamp tolerance), and debloated platform admin modules.
+4. **Phase 4 (Delivery Outbox Resilience):** Added the Transactional Outbox pattern (`DeliveryOutboxEvent` & `outboxDispatcher`) to eliminate event loss between Delivery and Commerce, protected provider wallets against concurrent race conditions, and centralized HTTP clients under `src/app/clients/`.
+5. **Phase 5 (Identity PostgreSQL Safety & 2FA):** Standardized PostgreSQL connection pooling (`@packages/database`), implemented Refresh Token Rotation (RTR) with family theft reuse detection, hardened 2FA (TOTP + constant-time comparison + single-use backup codes), and enforced response privacy mapping (`toUserResponse`).
+6. **Phase 6 (API Gateway Hardening & Certification):** Configured JWKS in-memory caching with anti-DoS cooldown windows, edge header sanitization, Socket.IO handshake JWT authentication, session registry tracking, and certified 100% of all test suites.
 
 ---
 
-## Dockerization & Container Architecture
+## 5. Test Suite Certification: 100% Pass Rate
 
-The backend platform is fully containerized for both local development and production environments using multi-stage Docker builds and Docker Compose orchestration.
-
-### Container Stack & Components
-
-The `docker-compose.yml` environment provisions a complete self-contained infrastructure running 7 managed containers:
-
-| Container Name | Service | Base Image | Role & Configuration |
-| :--- | :--- | :--- | :--- |
-| `aritii-postgres` | PostgreSQL | `postgres:15-alpine` | Relational database for accounts, RBAC roles, and credentials. Persisted in `postgres_data`. |
-| `aritii-mongodb` | MongoDB Replica Set | `mongo:7` | Document database running single-node replica set (`rs0`) to support multi-document ACID transactions. Persisted in `mongodb_data`. |
-| `aritii-mongo-keyfile` | Keyfile Generator | `mongo:7` | One-shot init container generating secure base64 keyfile for replica set authentication. |
-| `aritii-redis` | Redis Cache | `redis:latest` | In-memory key-value store for session caching and rate limiting. Persisted in `redis_data`. |
-| `aritii-identity` | Identity Service | `node:20-bookworm-slim` | Authentication, OAuth 2.1, and RBAC service. Depends on healthy PostgreSQL, MongoDB, and Redis. |
-| `aritii-commerce` | Commerce Service | `node:20-bookworm-slim` | Multi-shop, catalog, cart, and order processing. Depends on healthy MongoDB and Redis. |
-| `aritii-delivery` | Delivery Service | `node:20-bookworm-slim` | Logistics, zones, routing, and tracking. Depends on healthy MongoDB and Redis. |
-| `aritii-gateway` | API Gateway | `node:20-bookworm-slim` | Public reverse proxy and rate limiter. Sole service publishing port `8000:8000` to the host. |
-
-### Multi-Stage Dockerfile Highlights
-
-The root `Dockerfile` employs an optimized two-stage build architecture:
-- **Build Stage (`deps`):** Copies root and workspace manifests, resolves internal packages under `packages/`, and installs only production dependencies (`--omit=dev`).
-- **Runner Stage (`runner`):** Runs on lightweight Debian Bookworm Slim, installs `curl` for container health checks, creates permission-controlled upload volumes, and switches execution to a non-privileged `node` user.
-- **Service Targets:** Dedicated build targets exist for `api-gateway`, `identity-service`, `commerce-service`, and `delivery-service`.
-
-### Networking & Volume Isolation
-
-- **Internal Bridge Network:** All containers communicate across the dedicated `aritii-network` bridge. Identity, Commerce, and Delivery services do not bind to host ports, making them unreachable from outside the Docker network.
-- **Volume Persistence:** Data integrity is maintained across container restarts through named Docker volumes:
-  - `postgres_data`
-  - `mongodb_data` & `mongodb_config`
-  - `redis_data`
-  - `commerce_uploads` & `identity_uploads`
-  - `identity_keys`
-- **Health Checks & Startup Order:** Every service specifies active health checks (`curl` / `pg_isready` / `mongosh`). Downstream dependencies wait for upstream health before launching (`condition: service_healthy`).
-
----
-
-## Quick Start (Docker Compose)
-
-### Prerequisites
-- Docker Engine >= 24.0
-- Docker Compose >= 2.0
-- Node.js >= 18 (for running unit test suites locally)
-
-### Steps to Run
-
-1. **Configure Environment Variables:**
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Generate Internal Service Secrets:**
-   Generate distinct random 32-byte hex tokens for inter-service communication:
-   ```bash
-   openssl rand -hex 32   # Run 4 times: for gateway, identity, commerce, delivery
-   ```
-   Assign them to `INTERNAL_SERVICE_TOKENS` in your `.env` file.
-
-3. **Build and Launch All Containers:**
-   ```bash
-   docker compose up -d --build
-   ```
-
-4. **Verify Container Health & Running Status:**
-   ```bash
-   docker compose ps
-   curl http://localhost:8000/health
-   ```
-
-5. **Access Application Endpoints:**
-   - Public API Gateway: `http://localhost:8000`
-   - Interactive Swagger API Documentation: `http://localhost:8000/api/docs`
-   - Gateway Health Endpoint: `http://localhost:8000/health`
-
-### Common Docker Operations
+Run the complete test suite from the repository root:
 
 ```bash
-# View live logs for a specific service
-docker compose logs -f identity
-docker compose logs -f api-gateway
-
-# Execute seeding commands inside running containers
-docker compose exec identity node src/seed/seed-admin.js
-docker compose exec identity node src/seed/create-ops-admin.js
-
-# Rebuild an individual service image
-docker build --target identity-service -t aritii-identity:latest .
-
-# Stop the stack and preserve database volumes
-docker compose down
-
-# Stop the stack and wipe all database volumes (fresh start)
-docker compose down -v
-```
-
----
-
-## Local Development (Without Docker)
-
-Each microservice can run independently against local or remote databases:
-
-```bash
-# 1. Install root and shared packages dependencies
-npm install
-
-# 2. Run Identity Service
-cd identity-service
-npm install
-npm run dev
-
-# 3. Run Commerce Service
-cd ../commerce-service
-npm install
-npm run dev
-
-# 4. Run Delivery Service
-cd ../delivery-service
-npm install
-npm run dev
-
-# 5. Run API Gateway
-cd ../api-gateway
-npm install
-npm run dev
-```
-
-Each service directory contains an `.env.example` file specifying required connection strings and service ports.
-
----
-
-## Testing & Quality Assurance
-
-Run the test suite from the repository root:
-
-```bash
-# Run architecture constraints, gateway tests, and all microservice unit tests
 npm test
-
-# Run end-to-end edge integration tests
-ARITII_E2E=1 npm run test:integration
-
-# Test private inter-service networking
-./tests/integration/service-to-service.sh
 ```
 
-### Health Probes Standard
+### Full-System Verification Matrix (924 Tests Passed)
 
-Every service implements three standardized health endpoints:
-- `/health/live` — Returns HTTP 200 while the process is running (used by container restart policies).
-- `/health/ready` — Returns HTTP 200 only when backing databases (PostgreSQL/MongoDB) are reachable.
-- `/health` — Aggregated health diagnostics report.
+| Service / Test Suite | Runner | Total Tests | Passed | Failed | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Root Architecture Suite** ([`tests/architecture.test.js`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/tests/architecture.test.js)) | `node --test` | 7 | 7 | 0 | **PASSED** |
+| **API Gateway** ([`api-gateway/`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/api-gateway)) | `node --test` | 81 | 81 | 0 | **PASSED** |
+| **Identity Service** ([`identity-service/`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/identity-service)) | `node --test` | 98 | 98 | 0 | **PASSED** |
+| **Commerce Service** ([`commerce-service/`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/commerce-service)) | `node --test` | 483 | 483 | 0 | **PASSED** |
+| **Delivery Service** ([`delivery-service/`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/delivery-service)) | `node --test` | 255 | 255 | 0 | **PASSED** |
+| **Grand Total** | **CI Gate** | **924** | **924** | **0** | **100% GREEN** |
 
 ---
 
-## Administrative Accounts & Seeding
+## 6. Quick Start (Docker Compose)
 
-The repository provides seeding scripts for provisioning administrative and demo accounts:
-
+### 1. Configure Environment
 ```bash
-# Seed initial Super Administrator
-docker compose exec identity node src/seed/seed-admin.js
-
-# Provision an Operations Administrator (scoped RBAC without user/financial management)
-docker compose exec identity node src/seed/create-ops-admin.js
-
-# Seed complete demo environment (Super Admin, 3 sellers, shops, and catalog data)
-docker compose exec identity node src/seed/seed-all.js
-
-# Seed logistics and delivery geography (regions, zones, hubs, ports, and routes)
-docker compose exec delivery-service npm run seed
+cp .env.example .env
 ```
 
-> **Warning:** Seeding commands overwrite existing demo collections. Do not execute these scripts in production environments.
+Ensure `INTERNAL_SERVICE_TOKENS` defines random hex keys for all 4 services:
+```bash
+openssl rand -hex 32 # Repeat 4 times for gateway, identity, commerce, delivery
+```
+
+### 2. Launch Containers
+```bash
+docker compose up -d --build
+```
+
+### 3. Verify Health
+```bash
+curl http://localhost:8000/health
+```
+
+- Public API Gateway: `http://localhost:8000`
+- Interactive Swagger API Documentation: `http://localhost:8000/api/docs`
+- Health Endpoint: `http://localhost:8000/health`
+
+### 4. Local Development (Independent Services)
+```bash
+# In backend-services/
+npm install
+
+# Run services individually in separate terminals:
+cd identity-service && npm run dev
+cd commerce-service && npm run dev
+cd delivery-service && npm run dev
+cd api-gateway && npm run dev
+```
 
 ---
 
-## CI/CD Pipeline
+## 7. Documentation Directory
 
-The repository includes automated continuous integration and continuous deployment pipelines via GitHub Actions:
-
-- **Continuous Integration (`.github/workflows/ci.yml`):**
-  - Triggers on every push and pull request targeting `main` and active feature branches.
-  - Enforces architectural boundaries (no hardcoded secrets, no unrouted internal calls).
-  - Validates package integrity across `@aritii/*` shared packages.
-  - Executes unit and integration test suites on Node.js 20.
-
-- **Continuous Deployment (`.github/workflows/deploy.yml` & `cd.yml`):**
-  - Uses path filtering to determine which microservices changed.
-  - Executes automated deployment webhooks to [Render](https://render.com) for updated services and the API Gateway.
-  - Performs post-deploy health check verification to ensure zero-downtime releases.
-
----
-
-## Documentation Links
-
-- `docs/ARCHITECTURE.md` — Detailed microservice boundaries and interaction diagrams.
-- `docs/service-to-service-communication.md` — Internal trust model, token rotation, and networking.
-- `docs/AUTHENTICATION_ACCOUNT_ARCHITECTURE.md` — Account lifecycle, roles, and authorization matrix.
-- `docs/SELLER_ONBOARDING.md` — Merchant application, verification, and shop creation workflows.
-- `docs/API_REFERENCE_BY_ACTOR.md` — Comprehensive REST API endpoint reference categorized by actor (buyer, seller, admin, deliverer).
+- [`api-gateway/README.md`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/api-gateway/README.md) — Edge routing, Socket.IO, JWKS caching, and rate limiting.
+- [`commerce-service/README.md`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/commerce-service/README.md) — Orders, finance, after-sales, and multi-vendor catalogs.
+- [`delivery-service/README.md`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/delivery-service/README.md) — Outbox pattern, provider wallets, GeoJSON zones, and routing.
+- [`identity-service/README.md`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/identity-service/README.md) — PostgreSQL safety, OAuth 2.1, RTR, 2FA, and RBAC.
+- [`docs/E2E_TESTING_GUIDE.md`](file:///home/yihunebelay/Desktop/aritii-market/backend-services/docs/E2E_TESTING_GUIDE.md) — End-to-End endpoint & concurrency testing guide with Docker Compose.

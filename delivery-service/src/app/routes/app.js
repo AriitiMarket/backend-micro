@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const env = require('../config/env');
 const gatewayOnly = require('../middleware/gatewayOnly');
-const { requestId } = require('../../shared/request-context');
+const { requestId } = require('@packages/request-context');
 const { notFound, errorHandler } = require('../middleware/errorHandler');
 
 const locationRoutes = require('../../modules/locations-expansion/routes/locations.routes');

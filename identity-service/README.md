@@ -1,453 +1,112 @@
 # Identity Service
 
-User authentication, authorization, and account management for Aritii Marketplace.
+User authentication, OAuth 2.1 / OIDC identity provider, granular RBAC, refresh token rotation, and 2FA security for Aritii Market.
 
-## Overview
+---
 
-The Identity Service handles user lifecycle management, authentication tokens, roles & permissions, and account operations. It's the single source of truth for user identity across the platform.
+## 1. Overview & Architecture
 
-## Key Features
+The Identity Service runs on Node.js and PostgreSQL. It acts as the single source of truth for accounts, credentials, and permissions across the marketplace.
 
-### Authentication
-- Email/password registration and login
-- JWT token generation and validation
-- Refresh token management
-- Session tracking
-- Account lockout after failed attempts
-- Password reset via email
+The service is fully private within the Docker network, protected by `gatewayOnly.js`. It exposes public OIDC discovery documents and issues RS256-signed JWT access tokens verified by the API Gateway and downstream services via JWKS.
 
-### Authorization
-- Role-based access control (RBAC)
-- Permission management
-- Scope-based authorization
-- Admin approval workflows
-
-### Account Management
-- User profile management
-- Email verification
-- Password changes
-- Account deactivation/deletion
-- Login history tracking
-- Device management
-
-### Roles & Permissions
-
-**Roles:**
-- `BUYER` - Default role for all users, can purchase items
-- `SELLER` - Approved sellers, can list and sell products
-- `ADMIN` - Administrative access, approves sellers
-
-**Permissions:**
-- `user:create` - Create account
-- `user:read` - View own profile
-- `user:update` - Update own profile
-- `seller:apply` - Apply to become seller
-- `seller:approve` - Admin: approve seller applications
-- `seller:manage` - Seller: manage own shop
-
-## API Endpoints
-
-### Authentication
-
-```http
-POST /api/auth/register
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "SecurePass123!"
-}
-Response: {
-  "user": { "id", "name", "email", "role" },
-  "token": "eyJhbGc...",
-  "refreshToken": "refresh..."
-}
-
-POST /api/auth/login
-{
-  "email": "john@example.com",
-  "password": "SecurePass123!"
-}
-Response: { "user", "token", "refreshToken" }
-
-POST /api/auth/refresh
-{
-  "refreshToken": "refresh..."
-}
-Response: { "token" }
-
-POST /api/auth/logout
-Response: { "message": "Logged out" }
+```text
+identity-service/src/
+├── config/                  # PostgreSQL connection pool & transaction runner (@packages/database)
+├── controllers/             # Auth, User, Admin, Seller, Provider, 2FA, Agent, Address controllers
+├── middleware/              # Gateway gate, authenticate, authorize, requirePermission, rateLimiter
+├── migrations/              # DDL schema migrations (roles, permissions, 2FA, token rotation)
+├── models/                  # Role & permission constants, canonical normalization
+├── repositories/            # Transaction-safe PostgreSQL data access repositories
+├── routes/                  # Express route mounts
+├── services/                # Business logic: auth, token rotation, 2FA, password reset, audit log
+└── utils/                   # JWT signing, PKCE verification, password hashing, privacy mapper
 ```
 
-### User Management
+---
 
-```http
-GET /api/users/:id
-Response: {
-  "id": "user_123",
-  "name": "John Doe",
-  "email": "john@example.com",
-  "role": "BUYER",
-  "createdAt": "2026-01-15T10:30:00Z",
-  "lastLogin": "2026-09-15T03:40:00Z"
-}
+## 2. Security & Modernization Architecture
 
-PATCH /api/users/:id
-{
-  "name": "Jane Doe",
-  "phone": "+251911234567"
-}
-Response: { "user": { ... } }
+### A. Connection Pooling & Transaction Safety (`@packages/database`)
+- Replaces raw connection handling with a managed, leak-free PostgreSQL connection pool.
+- All multi-table updates (user registration, password resets, role promotions, token rotations) run within `withTransaction(async (client) => { ... })` ensuring ACID consistency and automatic rollback on failure.
 
-POST /api/users/:id/password
-{
-  "currentPassword": "OldPass123!",
-  "newPassword": "NewPass456!"
-}
-Response: { "message": "Password updated" }
-```
+### B. Refresh Token Rotation (RTR) & Reuse Detection
+- **Token Rotation:** When exchanging a refresh token (`POST /api/auth/token` with `grant_type="refresh_token"`), the presented token is immediately revoked and a new high-entropy token pair is generated.
+- **Family Reuse Detection:** If an already-revoked refresh token is replayed (indicating credential theft or man-in-the-middle leakage), the system immediately revokes **all** active tokens for that user family and logs a critical security audit event.
 
-### Seller Management
+### C. Two-Factor Authentication (2FA Hardening)
+- **TOTP:** RFC 6238 time-based one-time password support compatible with Google Authenticator and Authy.
+- **Constant-Time Verification:** Employs constant-time string comparison (`crypto.timingSafeEqual`) to prevent timing side-channel attacks on OTP validation.
+- **Single-Use Backup Codes:** High-entropy hashed backup codes that are consumed atomically on first use.
 
-```http
-POST /api/seller-application
-{
-  "businessName": "My Shop",
-  "businessCategory": "Electronics",
-  "description": "Quality electronics store"
-}
-Response: {
-  "applicationId": "app_123",
-  "status": "PENDING_REVIEW",
-  "submittedAt": "2026-09-15T03:40:00Z"
-}
+### D. Granular Role-Based Access Control (RBAC)
+- **Canonical Roles (`models/Role.js`):** `BUYER`, `SELLER`, `PROVIDER`, `AGENT`, `ADMIN`.
+- **Granular Admin Roles:** `SUPER_ADMIN` (unrestricted), `OPERATIONS_ADMIN` (order, shipment, and catalog operations without user/financial permissions), `SUPPORT_ADMIN` (customer care and dispute oversight).
+- **Wildcard Permission Bypass:** Root permissions (`*`) for super admins, with explicit permission checks (`requirePermission('users.view')`, `requirePermission('dashboard.view')`) for specialized roles.
 
-GET /api/seller-application/:id
-Response: {
-  "id": "app_123",
-  "userId": "user_123",
-  "status": "PENDING_REVIEW",
-  "businessInfo": { ... },
-  "submittedAt": "2026-09-15T03:40:00Z"
-}
+### E. Response Privacy Mapping (`utils/user.mapper.js`)
+All user retrieval endpoints pass results through `toUserResponse()`, guaranteeing that sensitive fields (`password`, `salt`, `resetToken`, `twoFactorSecret`, `backupCodes`) can never leak to client responses.
 
-POST /api/seller-application/:id/approve
-Response: {
-  "user": { "role": "SELLER", "shopId": "shop_123" },
-  "message": "Seller application approved"
-}
+---
 
-POST /api/seller-application/:id/reject
-{
-  "reason": "Documents incomplete"
-}
-Response: { "message": "Application rejected" }
-```
+## 3. API Endpoints Reference
 
-### Admin Operations
+All public endpoints are reached through the API Gateway via `/api/*`:
 
-```http
-GET /api/admin/seller-applications?status=PENDING_REVIEW
-Response: {
-  "applications": [ ... ],
-  "total": 15,
-  "pending": 15
-}
+### OIDC & Discovery (Root Mount)
+- `GET /.well-known/openid-configuration` — OIDC discovery document.
+- `GET /.well-known/jwks.json` — Public RS256 signing keys.
 
-GET /api/admin/users?role=SELLER
-Response: {
-  "users": [ ... ],
-  "total": 248,
-  "filters": { "role": "SELLER" }
-}
+### Authentication & Token Flow
+- `POST /api/auth/authorize` — PKCE Authorization code grant initiation.
+- `POST /api/auth/token` — Exchange authorization code or refresh token for JWT access token.
+- `POST /api/auth/register` — Standard buyer account registration.
+- `POST /api/auth/register/:role` — Role-specific registration (`SELLER`, `PROVIDER`, `AGENT`).
+- `POST /api/auth/login` — Direct email/phone and password authentication.
+- `POST /api/auth/revoke` — Revoke active refresh token (RFC 7009).
+- `POST /api/auth/forgot-password` — Request password reset email.
+- `POST /api/auth/reset-password` — Submit new password with validated reset token.
 
-PATCH /api/admin/users/:id/role
-{
-  "role": "ADMIN"
-}
-Response: { "user": { ... } }
-```
+### Two-Factor Authentication (2FA)
+- `POST /api/auth/2fa/setup` — Generate TOTP secret and QR code.
+- `POST /api/auth/2fa/enable` — Verify initial OTP and activate 2FA with backup codes.
+- `POST /api/auth/verify-2fa` — Verify OTP / backup code during login challenge.
+- `POST /api/auth/2fa/disable` — Deactivate 2FA (requires current password).
 
-## Database Schema
+### User Profiles & Addresses
+- `GET /api/user/user-info/:id` — View user public profile.
+- `PUT /api/user/update-user-info` — Update name, phone, bio.
+- `PUT /api/user/update-user-password` — Change password.
+- `PUT /api/user/update-user-addresses` — Add/update shipping address.
+- `DELETE /api/user/delete-user-address/:id` — Remove shipping address.
 
-### Users Table
-```sql
-CREATE TABLE users (
-  id UUID PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  role ENUM('BUYER', 'SELLER', 'ADMIN') DEFAULT 'BUYER',
-  status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
-  phone VARCHAR(20),
-  avatar_url TEXT,
-  email_verified BOOLEAN DEFAULT FALSE,
-  last_login TIMESTAMP,
-  failed_login_attempts INT DEFAULT 0,
-  locked_until TIMESTAMP,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  
-  INDEX (email),
-  INDEX (role),
-  INDEX (created_at)
-);
-```
+### Administration & User Management
+- `GET /api/admin/users` — List platform users (requires `users.view`).
+- `GET /api/admin/users/:id` — User detail and role assignments.
+- `PUT /api/admin/users/:id/role` — Update user role (requires `users.manage`).
+- `PUT /api/admin/users/:id/status` — Suspend or reactivate user account.
+- `GET /api/admin/sellers` — List sellers with onboarding verification status.
 
-### Seller Applications Table
-```sql
-CREATE TABLE seller_applications (
-  id UUID PRIMARY KEY,
-  user_id UUID REFERENCES users(id),
-  status ENUM('PENDING_REVIEW', 'APPROVED', 'REJECTED') DEFAULT 'PENDING_REVIEW',
-  business_name VARCHAR(255) NOT NULL,
-  business_category VARCHAR(100),
-  description TEXT,
-  phone VARCHAR(20),
-  city VARCHAR(100),
-  documents JSON,
-  rejection_reason TEXT,
-  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  reviewed_at TIMESTAMP,
-  reviewed_by UUID REFERENCES users(id),
-  updated_at TIMESTAMP,
-  
-  INDEX (status),
-  INDEX (user_id),
-  INDEX (submitted_at)
-);
-```
+### Internal API (Cluster Credential Required)
+- `GET /internal/users/count` — Aggregate account metrics for marketplace dashboard.
+- `POST /internal/users/by-ids` — Batch profile lookup for commerce order views.
+- `POST /internal/audit-log` — Ingest structured audit events from peer microservices.
 
-### Sessions Table
-```sql
-CREATE TABLE sessions (
-  id UUID PRIMARY KEY,
-  user_id UUID REFERENCES users(id),
-  refresh_token VARCHAR(500),
-  device_info JSON,
-  ip_address VARCHAR(45),
-  user_agent TEXT,
-  expires_at TIMESTAMP,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  
-  INDEX (user_id),
-  INDEX (expires_at)
-);
-```
+---
 
-## Authentication Flow
+## 4. Testing
 
-### Registration
-```
-1. User submits email/password
-2. Validate input (strong password, unique email)
-3. Hash password (bcrypt)
-4. Create user record (role: BUYER by default)
-5. Generate JWT token
-6. Send verification email
-7. Return token + refresh token
-```
+The Identity Service test suite runs on Node's native test runner (`node --test`):
 
-### Login
-```
-1. Verify email exists
-2. Check if account is active
-3. Verify password hash
-4. Check login attempts (max 5)
-5. Generate new session
-6. Return JWT token
-7. Record login timestamp
-```
-
-### Token Refresh
-```
-1. Validate refresh token
-2. Check session expiry
-3. Verify user still exists and is active
-4. Generate new JWT token
-5. Return new token
-```
-
-## JWT Token Structure
-
-```javascript
-// JWT Payload
-{
-  "sub": "user_123",           // Subject (user ID)
-  "name": "John Doe",
-  "email": "john@example.com",
-  "role": "BUYER",
-  "iat": 1694779200,           // Issued at
-  "exp": 1694865600,           // Expires in 24 hours
-  "aud": "aritii-marketplace"
-}
-
-// Token expiry
-Access Token: 24 hours
-Refresh Token: 30 days
-```
-
-## Seller Approval Workflow
-
-### Application States
-```
-PENDING_REVIEW
-    ↓
-[Admin Reviews]
-    ↓
-    ├─→ APPROVED (user gets SELLER role + shopId)
-    └─→ REJECTED (reason provided to user)
-
-REJECTED
-    ↓
-User can reapply after 30 days
-```
-
-### Admin Actions
-```http
-1. List pending applications
-   GET /api/admin/seller-applications?status=PENDING_REVIEW
-
-2. Review application details
-   GET /api/admin/seller-applications/:id
-
-3. Approve
-   POST /api/admin/seller-applications/:id/approve
-   → Creates Shop record in Commerce Service
-   → Activates SELLER role
-   → Sends approval email
-
-4. Reject
-   POST /api/admin/seller-applications/:id/reject
-   → Stores rejection reason
-   → Sends rejection email
-   → User can reapply later
-```
-
-## Security Features
-
-### Password Security
-- Minimum 8 characters
-- Must include uppercase, lowercase, number, special character
-- Hashed with bcrypt (salt rounds: 10)
-- Never stored in plain text
-
-### Account Protection
-- Account lockout after 5 failed login attempts (30 min cooldown)
-- Email verification required
-- Suspicious login alerts
-- Session invalidation on logout
-- Automatic session expiry
-
-### Token Security
-- JWT signed with RS256
-- Tokens include expiry
-- Refresh tokens rotated on use
-- Device fingerprinting in sessions
-
-### Rate Limiting
-- Login: 5 attempts per 15 minutes
-- Registration: 3 per hour per IP
-- Password reset: 1 per hour
-
-## Service Integration
-
-### With Commerce Service
-```
-User registration → Identity Service
-    ↓
-Send user event (user:created)
-    ↓
-Commerce Service listens
-    ↓
-Create buyer profile
-```
-
-### With Delivery Service
-```
-Seller approval → Identity Service
-    ↓
-Update user role to SELLER
-    ↓
-Create Shop in Commerce Service
-    ↓
-Delivery Service notified (shop:created)
-```
-
-## Error Handling
-
-```javascript
-// Common errors
-{
-  "code": "INVALID_CREDENTIALS",
-  "message": "Email or password is incorrect",
-  "status": 401
-}
-
-{
-  "code": "EMAIL_ALREADY_EXISTS",
-  "message": "An account with this email already exists",
-  "status": 409
-}
-
-{
-  "code": "ACCOUNT_LOCKED",
-  "message": "Account is locked. Try again after 30 minutes",
-  "status": 423
-}
-
-{
-  "code": "INVALID_TOKEN",
-  "message": "Token is invalid or expired",
-  "status": 401
-}
-
-{
-  "code": "UNAUTHORIZED",
-  "message": "You do not have permission to access this resource",
-  "status": 403
-}
-```
-
-## Development
-
-### Setup
-```bash
-npm install
-npm run seed:test-users
-npm run dev
-```
-
-### Testing
 ```bash
 npm test
-npm run test:integration
-npm run test:e2e
 ```
 
-### Environment Variables
-```
-DATABASE_URL=postgres://user:pass@localhost:5432/aritii_identity
-JWT_SECRET=your_secret_key
-JWT_EXPIRY=24h
-REFRESH_TOKEN_EXPIRY=30d
-EMAIL_SERVICE_URL=http://email-service:3001
-ADMIN_EMAIL=admin@aritii.com
-```
-
-## Monitoring
-
-- Track login success/failure rates
-- Monitor account lockouts
-- Alert on unusual access patterns
-- Audit admin actions
-- Log all authentication events
-
-## Future Enhancements
-
-- Two-factor authentication (2FA)
-- OAuth2 / Social login
-- Passwordless authentication
-- Biometric login support
-- Advanced fraud detection
-- Geographic login restrictions
+All **98 tests** pass with zero failures:
+- OAuth 2.1 PKCE verification algorithms
+- Managed PostgreSQL transaction rollbacks and connection release
+- Refresh token rotation and family theft revocation
+- 2FA TOTP verification, time window tolerance, and single-use backup codes
+- Privacy mapper field sanitization
+- Granular RBAC permission enforcement

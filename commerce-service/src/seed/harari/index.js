@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Sector = require('../../modules/selling/models/Sectors');
 const Shop = require('../../modules/selling/models/Shops');
-const Order = require('../../modules/fulfillment/models/Orders');
+const Order = require('../../modules/orders/models/Orders');
 const { seedShops } = require('./shops.data');
 const { seedOrders } = require('./orders.data');
 const locationResolver = require('../../shared/utils/locationResolver');

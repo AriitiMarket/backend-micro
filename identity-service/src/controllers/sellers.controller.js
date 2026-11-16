@@ -2,6 +2,7 @@
 const sellersService = require('../services/sellers.service');
 const auditService = require('../services/audit.service');
 const { ok, created } = require('../utils/response');
+const { toUserResponse } = require('../utils/user.mapper');
 
 async function createSeller(req, res, next) {
   try {
@@ -10,7 +11,7 @@ async function createSeller(req, res, next) {
       email: req.body.email,
       password: req.body.password,
     });
-    return created(res, result, 'Seller created');
+    return created(res, toUserResponse(result), 'Seller created');
   } catch (err) {
     return next(err);
   }
@@ -19,7 +20,7 @@ async function createSeller(req, res, next) {
 async function linkShopId(req, res, next) {
   try {
     const result = await sellersService.linkShopId({ userId: req.body.userId, shopId: req.body.shopId });
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -28,7 +29,7 @@ async function linkShopId(req, res, next) {
 async function findUserById(req, res, next) {
   try {
     const result = await sellersService.findUserById({ userId: req.params.id });
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -37,7 +38,7 @@ async function findUserById(req, res, next) {
 async function grantSellerRole(req, res, next) {
   try {
     const result = await sellersService.grantSellerRole({ userId: req.body.userId });
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -53,7 +54,7 @@ async function suspendSeller(req, res, next) {
     const adminName = req.user?.name || req.user?.email || 'Admin';
     const result = await sellersService.suspendSeller({ userId: req.body.userId });
     await auditService.logSellerSuspended(adminId, adminName, req.body.userId, req.body.reason || null, req);
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -69,7 +70,7 @@ async function reactivateSeller(req, res, next) {
     const adminName = req.user?.name || req.user?.email || 'Admin';
     const result = await sellersService.reactivateSeller({ userId: req.body.userId });
     await auditService.logSellerReactivated(adminId, adminName, req.body.userId, req);
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -82,7 +83,7 @@ async function reactivateSeller(req, res, next) {
 async function getSellerStatus(req, res, next) {
   try {
     const result = await sellersService.getSellerStatus({ userId: req.body.userId });
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }
@@ -105,7 +106,7 @@ async function setSellerStatus(req, res, next) {
     } else if (status === 'rejected') {
       await auditService.logSellerRejected(adminId, adminName, userId, req.body.reason || null, req);
     }
-    return ok(res, result);
+    return ok(res, toUserResponse(result));
   } catch (err) {
     return next(err);
   }

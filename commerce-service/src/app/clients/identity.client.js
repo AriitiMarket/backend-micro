@@ -7,7 +7,7 @@
 // the cluster credential (per-service secrets, `x-internal-service` naming the
 // caller) and never by a user JWT. User identity is carried separately in
 // gateway-injected headers, and a service call deliberately has none.
-const { createInternalClient } = require('../../shared/internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../config/services');
 
 const client = createInternalClient({

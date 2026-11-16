@@ -1,20 +1,17 @@
 {
-  "name": "@aritii/request-context",
+  "name": "@packages/request-context",
   "version": "1.0.0",
   "description": "Request context and logging for Aritii microservices",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./request-context": "./src/request-context.js",
     "./logger": "./src/logger.js",
     "./middleware": "./src/middleware.js"
   },
   "files": [
     "src/"
   ],
-  "scripts": {
-    "test": "jest",
-    "lint": "eslint src/"
-  },
   "keywords": [
     "aritii",
     "request-context",

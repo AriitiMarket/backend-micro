@@ -6,7 +6,9 @@ const env = require('../config/env');
 
 let cachedKeys = null;
 let cacheExpiry = 0;
-const CACHE_TTL_MS = 60 * 60 * 1000;
+let lastRefetchAttempt = 0;
+const CACHE_TTL_MS = Number(process.env.JWKS_CACHE_TTL_MS) || 60 * 60 * 1000;
+const REFETCH_COOLDOWN_MS = Number(process.env.JWKS_COOLDOWN_MS) || 10 * 1000; // 10s anti-DoS cooldown
 
 function fetchJWKS() {
   const url = `${env.identityServiceUrl}/.well-known/jwks.json`;
@@ -138,6 +140,12 @@ async function refreshKeys() {
   } catch (e) {
     console.error('[jwks] Failed to fetch JWKS:', e.message);
     initPromise = null;
+    // Stale-key grace period: keep serving with existing keys if identity-service is restarting
+    if (Object.keys(pemCache).length > 0) {
+      console.warn('[jwks] Serving with stale cached keys during temporary identity-service unavailability');
+      cacheExpiry = Date.now() + 60 * 1000; // 1-minute grace window
+      return true;
+    }
     return false;
   }
 }
@@ -155,7 +163,11 @@ async function verifyToken(token) {
 
   // Try to refresh if cache expired
   if (Date.now() > cacheExpiry) {
-    await refreshKeys();
+    const now = Date.now();
+    if (now - lastRefetchAttempt > REFETCH_COOLDOWN_MS) {
+      lastRefetchAttempt = now;
+      await refreshKeys();
+    }
   }
 
   const decoded = jwt.decode(token, { complete: true });
@@ -165,10 +177,14 @@ async function verifyToken(token) {
 
   let pem = pemCache[decoded.header.kid];
   if (!pem) {
-    // Key not found in current cache: force an on-demand refresh (e.g. Identity restarted with new key)
-    console.warn(`[jwks] Key ${decoded.header.kid} not in cache; triggering on-demand refresh`);
-    await refreshKeys();
-    pem = pemCache[decoded.header.kid];
+    // Key not found in current cache: trigger on-demand refresh only if outside cooldown window (anti-DoS)
+    const now = Date.now();
+    if (now - lastRefetchAttempt > REFETCH_COOLDOWN_MS) {
+      lastRefetchAttempt = now;
+      console.warn(`[jwks] Key ${decoded.header.kid} not in cache; triggering on-demand refresh`);
+      await refreshKeys();
+      pem = pemCache[decoded.header.kid];
+    }
   }
 
   if (!pem) {
@@ -188,8 +204,12 @@ async function verifyToken(token) {
   } catch (verifyErr) {
     // If signature verification failed, try refreshing the key once in case of recent rotation
     if (verifyErr.name === 'JsonWebTokenError' && verifyErr.message && verifyErr.message.includes('signature')) {
-      console.warn('[jwks] Signature verification failed; refreshing key and retrying once');
-      await refreshKeys();
+      const now = Date.now();
+      if (now - lastRefetchAttempt > REFETCH_COOLDOWN_MS) {
+        lastRefetchAttempt = now;
+        console.warn('[jwks] Signature verification failed; refreshing key and retrying once');
+        await refreshKeys();
+      }
       const freshPem = pemCache[decoded.header.kid] || pem;
       payload = jwt.verify(token, freshPem, {
         algorithms: ['RS256'],
@@ -207,4 +227,26 @@ async function verifyToken(token) {
   return payload;
 }
 
-module.exports = { verifyToken, fetchJWKS, ensureKeys, refreshKeys };
+function _resetCache() {
+  cachedKeys = null;
+  cacheExpiry = 0;
+  lastRefetchAttempt = 0;
+  pemCache = {};
+  initialized = false;
+  initPromise = null;
+}
+
+function _setPemCache(mockPems) {
+  pemCache = { ...mockPems };
+  initialized = true;
+  cacheExpiry = Date.now() + CACHE_TTL_MS;
+}
+
+module.exports = {
+  verifyToken,
+  fetchJWKS,
+  ensureKeys,
+  refreshKeys,
+  _resetCache,
+  _setPemCache,
+};

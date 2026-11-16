@@ -10,6 +10,11 @@
     "test": "node --test --test-force-exit"
   },
   "dependencies": {
+    "@packages/database": "workspace:*",
+    "@packages/internal-auth": "workspace:*",
+    "@packages/request-context": "workspace:*",
+    "@packages/service-client": "workspace:*",
+    "@packages/validators": "workspace:*",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",

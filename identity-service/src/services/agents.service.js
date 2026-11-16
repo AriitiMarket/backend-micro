@@ -1,24 +1,28 @@
 // Agent business logic.
 const usersRepository = require('../repositories/users.repository');
 const agentsRepository = require('../repositories/agents.repository');
+const { withTransaction } = require('../config/transaction');
 
 async function createAgent(payload) {
-  const user = await usersRepository.findById(payload.userId);
-  if (!user) {
-    const err = new Error('User not found');
-    err.statusCode = 404;
-    throw err;
-  }
-  const existing = await agentsRepository.findByUserId(payload.userId);
-  if (existing) {
-    const err = new Error('Agent record already exists for this user');
-    err.statusCode = 409;
-    throw err;
-  }
-  return agentsRepository.create({
-    userId: payload.userId,
-    sectorId: payload.sectorId || null,
-    commissionRate: payload.commissionRate,
+  return withTransaction(async (client) => {
+    const user = await usersRepository.findById(payload.userId, { client });
+    if (!user) {
+      const err = new Error('User not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    const existing = await agentsRepository.findByUserId(payload.userId, client);
+    if (existing) {
+      const err = new Error('Agent record already exists for this user');
+      err.statusCode = 409;
+      throw err;
+    }
+    return agentsRepository.create({
+      userId: payload.userId,
+      sectorId: payload.sectorId || null,
+      commissionRate: payload.commissionRate,
+      client,
+    });
   });
 }
 
@@ -47,20 +51,28 @@ async function listAgents() {
 }
 
 async function verifyAgent(payload) {
-  const agent = await getAgent(payload.agentId);
-  const status = payload.verificationStatus || agent.verificationStatus;
-  if (!['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
-    const err = new Error('Invalid verification status');
-    err.statusCode = 400;
-    throw err;
-  }
-  // A verified agent becomes active by default in the verification workflow.
-  return agentsRepository.updateFields({
-    id: agent.id,
-    fields: {
-      verification_status: status,
-      is_active: status === 'APPROVED',
-    },
+  return withTransaction(async (client) => {
+    const agent = await agentsRepository.findById(payload.agentId, client);
+    if (!agent) {
+      const err = new Error('Agent not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    const status = payload.verificationStatus || agent.verificationStatus;
+    if (!['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+      const err = new Error('Invalid verification status');
+      err.statusCode = 400;
+      throw err;
+    }
+    // A verified agent becomes active by default in the verification workflow.
+    return agentsRepository.updateFields({
+      id: agent.id,
+      fields: {
+        verification_status: status,
+        is_active: status === 'APPROVED',
+      },
+      client,
+    });
   });
 }
 

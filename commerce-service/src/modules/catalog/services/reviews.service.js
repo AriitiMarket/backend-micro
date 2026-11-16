@@ -1,6 +1,12 @@
-const reviewRepository = require('../repositories/reviews.repository');
-const { PUBLIC_STATUS } = require('../repositories/reviews.repository');
-const productService = require('./products.service');
+'use strict';
+
+/**
+ * Reviews Service
+ * Handles review creation, verified purchaser checking, pending review listing, and moderation.
+ */
+
+const productRepository = require('../repositories/products.repository');
+const orderRepository = require('../../orders/repositories/orders.repository');
 
 class ApiError extends Error {
   constructor(message, statusCode) {
@@ -10,161 +16,216 @@ class ApiError extends Error {
 }
 
 /**
- * Minimal author shape.
- *
- * The stored `reviews.user` object is whatever identity was trusted at write
- * time and may carry an email or a role, so it is never returned verbatim. The
- * id is exposed only on the author's OWN list (they already know who they are);
- * public listings get a display name only.
+ * Public rating = mean of APPROVED reviews only. Returns 0 when nothing has been
+ * approved, so an unmoderated product never advertises a rating.
  */
-function authorOf(review, { withId = false } = {}) {
-  const user = (review && review.user) || {};
-  // Never surface a raw email as the public display name (buyers' emails were
-  // rendering as review author names). Own lists may still see their email
-  // because they already know it; everyone else gets a generic label.
-  const name = user.name || (withId ? user.email : null) || 'Aritii customer';
-  const author = { name };
-  if (withId) author.id = String(user._id || user.id || '') || null;
-  return author;
+function averageApprovedRating(reviews = []) {
+  const approved = reviews.filter(
+    (rev) => rev.moderationStatus === 'approved' && Number.isFinite(Number(rev.rating))
+  );
+  if (!approved.length) return 0;
+  const total = approved.reduce((sum, rev) => sum + Number(rev.rating), 0);
+  return Math.round((total / approved.length) * 10) / 10;
 }
 
 /**
- * One review, shaped identically for every caller (public, buyer, admin), so no
- * screen can receive a differently-shaped record for the same review.
+ * The author id of a candidate review.
+ * Accepts `id`, `sub`, and `_id`.
  */
-function reviewDto(product, review, { withAuthorId = false } = {}) {
+function resolveReviewerId(user) {
+  if (!user) return null;
+  const raw = user.id || user.sub || user._id;
+  return raw ? String(raw) : null;
+}
+
+/** Author id for an author already stored on an embedded review. */
+function reviewAuthorId(review) {
+  const user = (review && review.user) || null;
+  if (!user) return null;
+  const raw = user._id || user.id || user.sub;
+  return raw ? String(raw) : null;
+}
+
+/** Single review DTO shared by the pending list and the moderation responses */
+function toReviewDto(product, review) {
+  if (!review) return null;
   return {
-    _id: String(review._id),
+    reviewId: String(review._id),
     productId: String(product._id),
     productName: product.name || null,
-    shop: product.shop
-      ? { _id: String(product.shop._id || product.shopId || ''), name: product.shop.name || null }
-      : null,
-    rating: Number(review.rating) || 0,
-    comment: review.comment || '',
+    rating: review.rating,
+    comment: review.comment,
+    user: review.user,
     status: review.moderationStatus || 'pending',
-    createdAt: review.createdAt || null,
-    author: authorOf(review, { withId: withAuthorId }),
-  };
-}
-
-/** Newest first; `createdAt` is missing on very old documents. */
-function byNewest(a, b) {
-  return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-}
-
-/** Clamp paging input to something the database and the client can both trust. */
-function pageOf(list, { page = 1, limit = 50 } = {}) {
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
-  const safePage = Math.max(Number(page) || 1, 1);
-  const start = (safePage - 1) * safeLimit;
-  return {
-    reviews: list.slice(start, start + safeLimit),
-    total: list.length,
-    page: safePage,
-    limit: safeLimit,
+    createdAt: review.createdAt,
+    moderatedAt: review.moderatedAt,
+    moderatedBy: review.moderatedBy,
   };
 }
 
 class ReviewsService {
-  /** Approved reviews of one product. Public. */
-  async getProductReviews(productId, opts = {}) {
-    const product = await reviewRepository.findProductById(productId);
+  /**
+   * Submit (or update) the caller's review of a product.
+   */
+  async createReview({ productId, orderId, user, rating, comment }) {
+    const product = await productRepository.findById(productId);
     if (!product) throw new ApiError('Product not found', 404);
 
-    const approved = (product.reviews || [])
-      .filter((review) => review.moderationStatus === PUBLIC_STATUS)
-      .sort(byNewest)
-      .map((review) => reviewDto(product, review));
+    const reviewerId = resolveReviewerId(user);
+    if (!reviewerId) throw new ApiError('Authentication required', 401);
+    const ratingValue = Number(rating);
 
-    return pageOf(approved, opts);
-  }
+    if (!Number.isFinite(ratingValue) || ratingValue < 1 || ratingValue > 5) {
+      throw new ApiError('Rating must be between 1 and 5', 400);
+    }
+    if (comment !== undefined && comment !== null && String(comment).length > 2000) {
+      throw new ApiError('Review comment must be at most 2000 chars', 400);
+    }
 
-  /** Approved reviews across every product of a shop. Public. */
-  async getShopReviews(shopId, opts = {}) {
-    const products = await reviewRepository.findProductsWithReviewsByShop(shopId);
+    if (product.shop && product.shop.ownerId && String(product.shop.ownerId) === reviewerId) {
+      throw new ApiError('You cannot review your own product', 403);
+    }
+    const purchased = await orderRepository.existsOwnedOrder(reviewerId, productId);
+    if (!purchased) {
+      throw new ApiError('Only verified purchasers can review this product', 403);
+    }
 
-    const approved = products
-      .flatMap((product) =>
-        (product.reviews || [])
-          .filter((review) => review.moderationStatus === PUBLIC_STATUS)
-          .map((review) => reviewDto(product, review))
-      )
-      .sort(byNewest);
+    const review = {
+      user,
+      rating: ratingValue,
+      comment: comment !== undefined && comment !== null ? String(comment) : '',
+      productId,
+      moderationStatus: 'pending',
+      moderatedAt: null,
+      moderatedBy: null,
+      rejectionReason: null,
+    };
+    const existing = (product.reviews || []).find(
+      (rev) => reviewAuthorId(rev) === reviewerId
+    );
 
-    return pageOf(approved, opts);
+    if (existing) {
+      existing.rating = review.rating;
+      existing.comment = review.comment;
+      existing.user = user;
+      existing.moderationStatus = 'pending';
+      existing.moderatedAt = null;
+      existing.moderatedBy = null;
+      existing.rejectionReason = null;
+    } else {
+      product.reviews.push(review);
+    }
+    product.ratings = averageApprovedRating(product.reviews);
+    await product.save({ validateBeforeSave: false });
+    if (orderId) {
+      const ownsOrder = await orderRepository.ownsOrderContaining(orderId, reviewerId, productId);
+      if (ownsOrder) {
+        await orderRepository.findByIdAndUpdate(orderId, {
+          $set: { 'cart.$[elem].isReviewed': true },
+        }, {
+          arrayFilters: [{ $or: [{ 'elem._id': productId }, { 'elem.productId': productId }] }],
+        });
+      }
+    }
+    return { message: 'Review submitted for moderation' };
   }
 
   /**
-   * The caller's own reviews, in EVERY moderation state.
-   *
-   * An author must be able to see the review they just submitted is awaiting
-   * moderation, so this is the one read that is not limited to approved reviews.
+   * Reviews awaiting moderation, newest product first.
    */
-  async getMyReviews(userId, opts = {}) {
-    if (!userId) throw new ApiError('Authentication required', 401);
+  async listPendingReviews({ page = 1, limit = 10 } = {}) {
+    const safePage = Math.max(parseInt(page, 10) || 1, 1);
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
 
-    const products = await reviewRepository.findProductsReviewedBy(userId);
-    const mine = [];
+    const pendingMatch = {
+      $or: [
+        { 'reviews.moderationStatus': 'pending' },
+        { 'reviews.moderationStatus': { $exists: false } },
+        { 'reviews.moderationStatus': null },
+      ],
+    };
 
-    for (const product of products) {
-      for (const review of product.reviews || []) {
-        const authorId = String((review.user && (review.user._id || review.user.id)) || '');
-        if (!authorId || authorId !== String(userId)) continue;
-        mine.push(reviewDto(product, review, { withAuthorId: true }));
-      }
+    const [result] = await productRepository.aggregate([
+      { $unwind: '$reviews' },
+      { $match: pendingMatch },
+      { $sort: { createdAt: -1, 'reviews._id': 1 } },
+      {
+        $facet: {
+          items: [
+            { $skip: (safePage - 1) * safeLimit },
+            { $limit: safeLimit },
+            {
+              $project: {
+                _id: 0,
+                reviewId: { $toString: '$reviews._id' },
+                productId: { $toString: '$_id' },
+                productName: '$name',
+                rating: '$reviews.rating',
+                comment: '$reviews.comment',
+                user: '$reviews.user',
+                status: { $ifNull: ['$reviews.moderationStatus', 'pending'] },
+                createdAt: '$reviews.createdAt',
+              },
+            },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ]);
+
+    const items = (result && result.items) || [];
+    const total = (result && result.total && result.total[0] && result.total[0].count) || 0;
+
+    return {
+      reviews: items,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit) || 0,
+    };
+  }
+
+  /**
+   * Approves or rejects one review and recomputes the product's public rating.
+   */
+  async moderateReview(productId, reviewId, options) {
+    if (options === undefined && reviewId && typeof reviewId === 'object') {
+      options = reviewId;
+      reviewId = productId;
+      productId = undefined;
+    }
+    const { action, reason, adminId } = options || {};
+    if (!['approve', 'reject'].includes(action)) {
+      throw new ApiError('action must be "approve" or "reject"', 400);
+    }
+    if (action === 'reject' && !String(reason || '').trim()) {
+      throw new ApiError('A rejection reason is required', 400);
     }
 
-    return pageOf(mine.sort(byNewest), opts);
-  }
-
-  /** FIX #5: Admin - Get all pending reviews across all products */
-  async getPendingReviews(opts = {}) {
-    // ProductService owns the canonical embedded-review query and pagination.
-    return productService.listPendingReviews(opts);
-  }
-
-  /** FIX #5: Admin - Get all reviews for a product (all statuses) */
-  async getProductAllReviews(productId, opts = {}) {
-    const product = await reviewRepository.findProductById(productId);
-    if (!product) throw new ApiError('Product not found', 404);
-
-    const allReviews = (product.reviews || [])
-      .sort(byNewest)
-      .map((review) => reviewDto(product, review, { withAuthorId: true }));
-
-    return pageOf(allReviews, opts);
-  }
-
-  /** FIX #5: Admin - Approve a review by product and review ID */
-  async approveReview(productId, reviewId, adminId) {
-    const product = await reviewRepository.findProductById(productId);
-    if (!product) throw new ApiError('Product not found', 404);
-    if (!(product.reviews || []).some((review) => String(review._id) === String(reviewId))) {
-      throw new ApiError('Review not found', 404);
-    }
-    // Reuse the canonical writer: it loads a writable document, updates
-    // moderation fields and recomputes the product's approved-only rating.
-    return (await productService.moderateReview(productId, reviewId, { action: 'approve', adminId })).review;
-  }
-
-  /** FIX #5: Admin - Reject a review with optional reason */
-  async rejectReview(productId, reviewId, reason = '', adminId) {
-    const product = await reviewRepository.findProductById(productId);
-    if (!product) throw new ApiError('Product not found', 404);
-    if (!(product.reviews || []).some((review) => String(review._id) === String(reviewId))) {
-      throw new ApiError('Review not found', 404);
-    }
-    return (await productService.moderateReview(productId, reviewId, {
-      action: 'reject',
+    const product = await productRepository.updateReviewModeration(reviewId, {
+      productId,
+      status: action === 'approve' ? 'approved' : 'rejected',
+      moderatedBy: adminId,
       reason,
-      adminId,
-    })).review;
+    });
+    if (!product) throw new ApiError('Review not found', 404);
+
+    product.ratings = averageApprovedRating(product.reviews);
+    await product.save({ validateBeforeSave: false });
+
+    const review = product.reviews.id
+      ? product.reviews.id(reviewId)
+      : (product.reviews || []).find((rev) => String(rev._id) === String(reviewId));
+
+    return {
+      review: toReviewDto(product, review),
+      ratings: product.ratings,
+    };
   }
 }
 
-
 module.exports = new ReviewsService();
-module.exports.reviewDto = reviewDto;
-module.exports.authorOf = authorOf;
-module.exports.ApiError = ApiError;
+module.exports.averageApprovedRating = averageApprovedRating;
+module.exports.resolveReviewerId = resolveReviewerId;
+module.exports.reviewAuthorId = reviewAuthorId;
+module.exports.toReviewDto = toReviewDto;

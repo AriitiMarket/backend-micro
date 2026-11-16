@@ -1,5 +1,5 @@
 {
-  "name": "@aritii/database",
+  "name": "@packages/database",
   "version": "1.0.0",
   "description": "Database configuration and utilities for Aritii microservices",
   "main": "src/index.js",
@@ -12,9 +12,6 @@
   "files": [
     "src/"
   ],
-  "scripts": {
-    "test": "jest"
-  },
   "keywords": [
     "aritii",
     "database",

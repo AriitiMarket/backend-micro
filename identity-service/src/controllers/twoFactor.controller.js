@@ -9,6 +9,7 @@ const usersRepository = require('../repositories/users.repository');
 const { comparePassword } = require('../utils/password');
 const { ok, fail } = require('../utils/response');
 const { audit2FA } = require('../services/auditLog.service');
+const { withTransaction } = require('../config/database');
 
 /**
  * Setup 2FA - Generate secret and QR code
@@ -81,51 +82,51 @@ async function verify2FASetup(req, res, next) {
       return fail(res, 'Code is required.', 400, 'INVALID_CODE');
     }
 
-    const pool = await require('../config/database').getPool();
-
-    const pending = await twoFactorService.getPending2FA(pool, userId);
-    if (!pending) {
-      return fail(res, 'No pending 2FA setup. Start setup first.', 400, 'NO_PENDING_SETUP');
-    }
-
-    const method = pending.method;
-    let verified = false;
-    let secretToStore = pending.secret;
-    let backupCodes = twoFactorService.generateBackupCodes();
-
-    if (method === 'TOTP') {
-      if (!/^\d{6}$/.test(code)) {
-        return fail(res, 'Invalid code format. Must be 6 digits.', 400, 'INVALID_CODE');
+    return await withTransaction(async (client) => {
+      const pending = await twoFactorService.getPending2FA(client, userId);
+      if (!pending) {
+        return fail(res, 'No pending 2FA setup. Start setup first.', 400, 'NO_PENDING_SETUP');
       }
-      verified = twoFactorService.verifyTOTP(pending.secret, code);
-    } else {
-      const result = twoFactorService.verifyOTP(pending.otp, code, new Date(pending.expiresAt));
-      verified = result.valid;
-      // For EMAIL/SMS, don't store OTP as permanent secret; store null
-      secretToStore = null;
-    }
 
-    if (!verified) {
-      audit2FA.setupVerificationFailed(userId, method, 'invalid_code');
-      return fail(res, 'Invalid code. Please try again.', 400, 'INVALID_CODE');
-    }
+      const method = pending.method;
+      let verified = false;
+      let secretToStore = pending.secret;
+      let backupCodes = twoFactorService.generateBackupCodes();
 
-    // Enable 2FA
-    const user = await twoFactorService.enable2FA(
-      pool, userId, method, secretToStore, backupCodes,
-      method === 'SMS' ? pending.phoneNumber : null,
-      pending.phoneNumber
-    );
-    await twoFactorService.clearPending2FA(pool, userId);
+      if (method === 'TOTP') {
+        if (!/^\d{6}$/.test(code)) {
+          return fail(res, 'Invalid code format. Must be 6 digits.', 400, 'INVALID_CODE');
+        }
+        verified = twoFactorService.verifyTOTP(pending.secret, code);
+      } else {
+        const result = twoFactorService.verifyOTP(pending.otp, code, new Date(pending.expiresAt));
+        verified = result.valid;
+        // For EMAIL/SMS, don't store OTP as permanent secret; store null
+        secretToStore = null;
+      }
 
-    audit2FA.enabled(userId, method);
-    audit2FA.setupVerified(userId, method);
+      if (!verified) {
+        audit2FA.setupVerificationFailed(userId, method, 'invalid_code');
+        return fail(res, 'Invalid code. Please try again.', 400, 'INVALID_CODE');
+      }
 
-    return ok(res, {
-      enabled: true,
-      backupCodes: backupCodes,
-      message: 'Save these backup codes in a safe place. Each can only be used once.',
-    }, '2FA enabled successfully');
+      // Enable 2FA atomically (clearing pending 2FA columns)
+      await twoFactorService.enable2FA(
+        client, userId, method, secretToStore, backupCodes,
+        method === 'SMS' ? pending.phoneNumber : null,
+        pending.phoneNumber
+      );
+      await twoFactorService.clearPending2FA(client, userId);
+
+      audit2FA.enabled(userId, method);
+      audit2FA.setupVerified(userId, method);
+
+      return ok(res, {
+        enabled: true,
+        backupCodes: backupCodes,
+        message: 'Save these backup codes in a safe place. Each can only be used once.',
+      }, '2FA enabled successfully');
+    });
   } catch (err) {
     return next(err);
   }

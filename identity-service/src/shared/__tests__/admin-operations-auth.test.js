@@ -139,3 +139,42 @@ test('RBAC: operations admin is restricted from users, settings, transactions an
     adminRolesRepo.getUserRoles = original;
   }
 });
+
+test('middleware/authorize: accepts SUPPORT_ADMIN for authorize("ADMIN")', () => {
+  const gate = authorize('ADMIN');
+  let nextCalled = false;
+  const req = {
+    user: {
+      id: 'support-admin-1',
+      role: 'SUPPORT_ADMIN',
+    },
+  };
+  const res = {
+    status() { return this; },
+    json() { return this; },
+  };
+
+  gate(req, res, () => { nextCalled = true; });
+  assert.equal(nextCalled, true, 'SUPPORT_ADMIN must be authorized for ADMIN endpoints');
+});
+
+test('middleware/requirePermission: enforces required permissions and wildcard bypass', () => {
+  const requirePermission = require('../../middleware/requirePermission');
+  const gate = requirePermission(['orders.view', 'delivery.view']);
+
+  // Case 1: user with wildcard
+  let nextWildcard = false;
+  gate({ user: { role: 'ADMIN', permissions: ['*'] } }, {}, () => { nextWildcard = true; });
+  assert.equal(nextWildcard, true, 'Wildcard permission must pass');
+
+  // Case 2: user with matching permissions
+  let nextExact = false;
+  gate({ user: { role: 'OPERATIONS_ADMIN', permissions: ['orders.view', 'delivery.view', 'dashboard.view'] } }, {}, () => { nextExact = true; });
+  assert.equal(nextExact, true, 'Exact permissions matching must pass');
+
+  // Case 3: user missing a permission
+  let errorSent = null;
+  gate({ user: { role: 'BUYER', permissions: ['orders.view'] } }, {}, (err) => { errorSent = err; });
+  assert.ok(errorSent, 'Missing required permission must reject');
+  assert.equal(errorSent.statusCode, 403);
+});

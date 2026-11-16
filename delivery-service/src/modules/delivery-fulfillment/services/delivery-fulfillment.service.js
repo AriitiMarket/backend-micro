@@ -2,7 +2,7 @@ const deliveriesRepo = require('../repositories/delivery.repository');
 const assignmentsRepo = require('../../operations/repositories/assignments.repository');
 const trackingRepo = require('../../tracking/repositories/tracking.repository');
 const providersService = require('../../providers/services/providers.service');
-const { commerceClient } = require('../../../integrations/commerce/client');
+const { commerceClient } = require('../../../app/clients/commerce.client');
 const { VALID_TRANSITIONS, BLOCKED_DELIVERY_STATUSES } = require('../../../shared/constants');
 const validators = require('../validators');
 

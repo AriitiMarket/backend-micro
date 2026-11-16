@@ -233,3 +233,45 @@ test('forwards full multipart body from stream even when express.json defaults r
   assert.equal(lastUpstreamBody, multipartData, 'Upstream must receive the full multipart form data, not an empty JSON object');
 });
 
+test('downstream service connection failure returns standardized 503 SERVICE_UNAVAILABLE and strips spoofed headers', async () => {
+  availability.reset();
+  const nonExistentUrl = 'http://127.0.0.1:49999/test-endpoint';
+
+  let statusCode = 0;
+  let responseData = null;
+  const mockRes = {
+    writeHead(status) {
+      statusCode = status;
+      return this;
+    },
+    end(body) {
+      responseData = JSON.parse(body);
+    },
+    headersSent: false,
+    writableEnded: false,
+  };
+
+  const mockReq = {
+    url: '/api/delivery/test',
+    method: 'GET',
+    headers: {
+      'x-internal-token': 'spoofed-client-token',
+      'x-user-id': 'spoofed-user-id',
+      'x-gateway-verified': 'true',
+    },
+    body: {},
+    rawBody: Buffer.alloc(0),
+    readableEnded: true,
+  };
+
+  forward(mockReq, mockRes, nonExistentUrl);
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(statusCode, 503);
+  assert.equal(responseData.code, 'SERVICE_UNAVAILABLE');
+  assert.equal(mockReq.headers['x-internal-token'], undefined, 'spoofed x-internal-token must be stripped');
+  assert.equal(mockReq.headers['x-user-id'], undefined, 'spoofed x-user-id must be stripped');
+  assert.equal(mockReq.headers['x-gateway-verified'], undefined, 'spoofed x-gateway-verified must be stripped');
+});
+

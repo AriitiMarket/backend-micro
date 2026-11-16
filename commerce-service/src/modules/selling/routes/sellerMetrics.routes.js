@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const sellerMetricsController = require('../controllers/sellerMetrics.controller');
-const { requireShopOwner } = require('../../../middleware/requireShopOwner');
+const { requireShopOwner } = require('../middleware/requireShopOwner');
 const { authenticate } = require('../../../app/middleware/authenticate');
 
 router.use(authenticate);

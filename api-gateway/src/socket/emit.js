@@ -21,6 +21,9 @@ const TYPE_PATTERN = /^request\.[a-z_]+(?:\.[a-z_]+)*$/;
 const ID_PATTERN = /^[0-9a-zA-Z_-]{1,64}$/;
 
 function readBody(req) {
+  if (req.body && typeof req.body === 'object') {
+    return Promise.resolve(JSON.stringify(req.body));
+  }
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -50,7 +53,8 @@ function invalid(res, message) {
 async function emitRequestEvent(req, res) {
   let payload;
   try {
-    payload = JSON.parse((await readBody(req)) || '{}');
+    const raw = await readBody(req);
+    payload = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
   } catch (err) {
     if (err.statusCode === 413) {
       return res.status(413).json({ success: false, code: 'PAYLOAD_TOO_LARGE', message: err.message, errors: [] });
@@ -58,15 +62,31 @@ async function emitRequestEvent(req, res) {
     return invalid(res, 'Body must be valid JSON');
   }
 
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return invalid(res, 'Body must be a JSON object');
+  }
+
   const type = typeof payload.type === 'string' ? payload.type : '';
   const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
   if (!TYPE_PATTERN.test(type)) return invalid(res, 'type must look like "request.<domain>.<verb>"');
   if (!ID_PATTERN.test(requestId)) return invalid(res, 'requestId is missing or malformed');
 
+  if (payload.recipients !== undefined && !Array.isArray(payload.recipients)) {
+    return invalid(res, 'recipients must be an array');
+  }
+
   const recipients = (Array.isArray(payload.recipients) ? payload.recipients : [])
     .filter((value) => typeof value === 'string' && ID_PATTERN.test(value))
-    .slice(0, 10);
+    .slice(0, 50);
+
+  if (payload.actorId !== undefined && payload.actorId !== null && (typeof payload.actorId !== 'string' || !ID_PATTERN.test(payload.actorId))) {
+    return invalid(res, 'actorId is malformed');
+  }
   const actorId = typeof payload.actorId === 'string' && ID_PATTERN.test(payload.actorId) ? payload.actorId : null;
+
+  if (payload.data !== undefined && (typeof payload.data !== 'object' || payload.data === null || Array.isArray(payload.data))) {
+    return invalid(res, 'data must be an object');
+  }
   const data = payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data) ? payload.data : {};
 
   const io = registry.getIo();
@@ -83,9 +103,14 @@ async function emitRequestEvent(req, res) {
 
   // Room per request (explicit subscription) + one room per participant.
   // `io.to([...])` broadcasts to the UNION of the rooms, so a socket that is
-  // in both (it always is) still receives exactly one copy per event.
+  // in both still receives exactly one copy per event.
   const rooms = recipients.map((userId) => `user:${userId}`);
   rooms.push(`request:${requestId}`);
+
+  if (payload.roomId && typeof payload.roomId === 'string' && ID_PATTERN.test(payload.roomId)) {
+    rooms.push(payload.roomId);
+  }
+
   if (rooms.length) io.to(rooms).emit('request:event', event);
 
   return res.status(200).json({ success: true, code: 'EMITTED', rooms: rooms.length, recipients });

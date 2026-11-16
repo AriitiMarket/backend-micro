@@ -1,4 +1,6 @@
 // PostgreSQL connection pool and schema bootstrap for Identity Service.
+'use strict';
+
 const { Pool } = require('pg');
 const env = require('./env');
 const { initSchema } = require('./schema');
@@ -29,17 +31,11 @@ function resolveSSL(databaseUrl) {
 function createPool() {
   const poolConfig = {
     connectionString: env.databaseUrl,
-    // Abort a *single* connection attempt after this long (default 30s). The old
-    // hard-coded 5s was shorter than a cold-boot DNS/TCP handshake, which is what
-    // produced "Connection terminated due to connection timeout" during startup.
     connectionTimeoutMillis: env.dbConnectTimeoutMs,
-    // Client-side guard so a wedged socket cannot hang a request forever.
     query_timeout: env.dbQueryTimeoutMs,
-    // Server-side guard against transactions left idle by a crashed worker.
     idle_in_transaction_session_timeout: env.dbIdleInTransactionTimeoutMs,
     idleTimeoutMillis: env.dbIdleTimeoutMs,
     max: env.dbPoolMax,
-    // The HTTP listener owns the event loop; never let an idle pool exit on us.
     allowExitOnIdle: false,
   };
 
@@ -50,10 +46,6 @@ function createPool() {
 
   const p = new Pool(poolConfig);
 
-  // CRITICAL: a pg Pool emits 'error' when a client breaks while idle (postgres
-  // restart, network partition). With no listener, Node promotes that to an
-  // uncaught exception and kills the process — a premature crash that would
-  // abort the startup retry loop before it can ever finish.
   p.on('error', (err) => {
     console.error('[identity] unexpected PostgreSQL pool error:', err.message);
   });
@@ -70,8 +62,6 @@ async function initPool() {
   if (initPromise) return initPromise;
   const p = getPoolInstance();
 
-  // Single-flight: the startup probe and concurrent /health calls share one
-  // attempt instead of each building (and leaking) their own pool.
   initPromise = (async () => {
     await p.query('SELECT 1');
     await initSchema(p);
@@ -81,16 +71,66 @@ async function initPool() {
   try {
     return await initPromise;
   } catch (err) {
-    // Drop the cached attempt so the caller's retry loop can try again on the
-    // same, still-usable pool (pg-pool evicts the dead client itself).
     initPromise = null;
     throw err;
   }
 }
 
-
 async function getPool() {
   return initPool();
 }
 
-module.exports = { getPool };
+function setPool(customPool) {
+  pool = customPool;
+  initPromise = customPool ? Promise.resolve(customPool) : null;
+}
+
+async function query(text, params) {
+  const p = await getPool();
+  return p.query(text, params);
+}
+
+async function getClient() {
+  const p = await getPool();
+  return p.connect();
+}
+
+/**
+ * Run `fn` inside a database transaction, committing on success and
+ * rolling back on any error. Supports client-passed and nested transactions.
+ */
+async function withTransaction(fn, options = {}) {
+  // If an active client is passed directly as options, reuse it (nested transaction)
+  if (options && typeof options.query === 'function' && typeof options.release === 'function') {
+    return fn(options);
+  }
+  if (options && options.client && typeof options.client.query === 'function') {
+    return fn(options.client);
+  }
+
+  const p = (options && options.pool) || (await getPool());
+  const client = await p.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_rollbackErr) {
+      // Original error takes precedence.
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  getPool,
+  setPool,
+  query,
+  getClient,
+  withTransaction,
+};

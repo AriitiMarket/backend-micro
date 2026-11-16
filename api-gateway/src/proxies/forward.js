@@ -39,6 +39,23 @@ function extractIdentityFromHeader(authHeader) {
 }
 
 function forward(req, res, targetUrl) {
+  // Strip client-spoofed internal headers from external requests immediately
+  const SENSITIVE_HEADERS = [
+    'x-internal-token',
+    'x-internal-service',
+    'x-user-id',
+    'x-user-roles',
+    'x-user-role',
+    'x-user-capabilities',
+    'x-gateway-verified',
+    'x-jurisdiction',
+  ];
+  if (req.headers) {
+    for (const h of SENSITIVE_HEADERS) {
+      delete req.headers[h];
+    }
+  }
+
   // Which service owns this upstream? Used for availability tracking and for
   // attributing failures in the structured error body. Null for the media proxy,
   // which fans out across two services and therefore has no single owner.
@@ -159,6 +176,20 @@ function forward(req, res, targetUrl) {
       // Forward the original Authorization header so Identity Service can verify the token.
       if (req.headers['authorization']) headers['Authorization'] = req.headers['authorization'];
 
+      // Forward payment webhook signatures and timestamps for Chapa / payment provider verification
+      const WEBHOOK_HEADERS = [
+        'x-chapa-signature',
+        'chapa-signature',
+        'x-payment-signature',
+        'x-webhook-signature',
+        'x-chapa-timestamp',
+        'x-payment-timestamp',
+        'x-webhook-timestamp',
+      ];
+      for (const wh of WEBHOOK_HEADERS) {
+        if (req.headers[wh]) headers[wh] = req.headers[wh];
+      }
+
       // Identity is rebuilt from the verified token — client-supplied x-user-*
       // headers are deliberately ignored.
       //
@@ -173,11 +204,18 @@ function forward(req, res, targetUrl) {
         headers['x-user-id'] = identity.id;
         if (identity.email) headers['x-user-email'] = identity.email;
         if (identity.role) headers['x-user-role'] = identity.role;
+        headers['x-user-roles'] = identity.capabilities && identity.capabilities.length > 0
+          ? identity.capabilities.join(',')
+          : (identity.role || '');
         if (identity.capabilities && identity.capabilities.length > 0) {
           headers['x-user-capabilities'] = identity.capabilities.join(',');
         }
         if (identity.roleStatuses && Object.keys(identity.roleStatuses).length > 0) {
           headers['x-user-role-statuses'] = JSON.stringify(identity.roleStatuses);
+        }
+        headers['x-gateway-verified'] = 'true';
+        if (req.token && req.token.admin_scope) {
+          headers['x-jurisdiction'] = JSON.stringify(req.token.admin_scope);
         }
       }
 
@@ -217,19 +255,19 @@ function forward(req, res, targetUrl) {
       proxyReq.on('error', (err) => {
         if (res.headersSent || res.writableEnded) return;
         try {
-          const timedOut = err.code === 'ETIMEDOUT';
-          const status = timedOut ? 504 : 502;
+          const timedOut = err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT';
+          const status = timedOut ? 504 : 503;
           const code = timedOut ? 'SERVICE_TIMEOUT' : 'SERVICE_UNAVAILABLE';
           const message = timedOut
             ? 'Upstream service timed out'
-            : 'Bad Gateway: ' + err.message;
+            : (targetService ? `${targetService} is currently unavailable` : 'Service unavailable');
           // Remember the failure briefly so the next queued request fails fast
           // instead of opening another doomed connection.
           availability.markDown(targetService, code);
           res.writeHead(status, {
             'Content-Type': 'application/json',
             'Retry-After': '2',
-            'X-Request-ID': req.id || '',
+            'X-Request-ID': traceId || '',
           });
           res.end(JSON.stringify({ success: false, code, message, service: targetService, errors: [] }));
         } catch (writeErr) {

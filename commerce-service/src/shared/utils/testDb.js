@@ -32,4 +32,33 @@ function testDbUri(databaseName, fallback = DEFAULT_BASE) {
   return `${scheme}${authority}/${databaseName}${query ? `?${query}` : ''}`;
 }
 
-module.exports = { testDbUri, DEFAULT_BASE };
+/**
+ * Ensures that if tests run against a standalone MongoDB instance (which rejects
+ * multi-document transactions), the session methods degrade gracefully instead of
+ * throwing MongoServerError: "Transaction numbers are only allowed on a replica set member".
+ * When connected to a real replica set (production or Docker rs0), real transactions run untouched.
+ */
+function enableStandaloneSessionFallback(mongoose) {
+  if (!mongoose || mongoose.__standaloneSessionShimInstalled) return;
+  mongoose.__standaloneSessionShimInstalled = true;
+
+  const origStartSession = mongoose.startSession.bind(mongoose);
+  mongoose.startSession = async function (...args) {
+    const session = await origStartSession(...args);
+    const setName = mongoose.connection.client?.topology?.description?.setName;
+    const isReplica = Boolean(
+      setName ||
+      mongoose.connection.client?.topology?.description?.type === 'ReplicaSetWithPrimary'
+    );
+    if (!isReplica) {
+      session.startTransaction = () => {};
+      session.commitTransaction = async () => {};
+      session.abortTransaction = async () => {};
+      session.inTransaction = () => false;
+      session.withTransaction = async (fn) => fn(session);
+    }
+    return session;
+  };
+}
+
+module.exports = { testDbUri, DEFAULT_BASE, enableStandaloneSessionFallback };

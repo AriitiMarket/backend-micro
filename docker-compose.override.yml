@@ -10,17 +10,19 @@
 
 services:
   # Expose database ports for local management (pgAdmin, Compass, redis-cli)
+  # Uses non-colliding host ports (5434, 27019, 6381) by default so they do not
+  # conflict with host daemons.
   postgres:
     ports:
-      - "5432:5432"
+      - "${DEV_POSTGRES_PORT:-5434}:5432"
 
   mongodb:
     ports:
-      - "27017:27017"
+      - "${DEV_MONGO_PORT:-27019}:27017"
 
   redis:
     ports:
-      - "6379:6379"
+      - "${DEV_REDIS_PORT:-6381}:6379"
 
   commerce-service:
     environment:
@@ -32,7 +34,7 @@ services:
       - ./packages:/app/packages
       - /app/node_modules
     ports:
-      - "3001:3001"
+      - "${DEV_COMMERCE_PORT:-3011}:3001"
 
   delivery-service:
     environment:
@@ -43,7 +45,7 @@ services:
       - ./packages:/app/packages
       - /app/node_modules
     ports:
-      - "3002:3002"
+      - "${DEV_DELIVERY_PORT:-3012}:3002"
 
   identity:
     environment:
@@ -55,7 +57,7 @@ services:
       - ./packages:/app/packages
       - /app/node_modules
     ports:
-      - "3003:3003"
+      - "${DEV_IDENTITY_PORT:-3013}:3003"
 
   api-gateway:
     environment:

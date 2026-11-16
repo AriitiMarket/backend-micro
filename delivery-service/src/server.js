@@ -2,7 +2,7 @@ const app = require('./app/routes/app');
 const env = require('./app/config/env');
 const { connectDatabase } = require('./app/config/database');
 const { describeServices } = require('./app/config/services');
-const { loadCredentials, describeCredentials } = require('./shared/internal-auth');
+const { loadCredentials, describeCredentials } = require('@packages/internal-auth');
 
 const MAX_ATTEMPTS = parseInt(process.env.DB_CONNECT_MAX_ATTEMPTS || '10', 10);
 const RETRY_DELAY_MS = parseInt(process.env.DB_CONNECT_RETRY_DELAY_MS || '3000', 10);

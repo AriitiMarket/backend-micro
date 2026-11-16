@@ -11,6 +11,12 @@
   "author": "Aritii Market",
   "license": "ISC",
   "dependencies": {
+    "@packages/authz": "workspace:*",
+    "@packages/database": "workspace:*",
+    "@packages/internal-auth": "workspace:*",
+    "@packages/request-context": "workspace:*",
+    "@packages/service-client": "workspace:*",
+    "@packages/validators": "workspace:*",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.3",
     "cloudinary": "^1.41.3",

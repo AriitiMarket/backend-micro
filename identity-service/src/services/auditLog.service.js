@@ -154,7 +154,34 @@ const audit2FA = {
     },
 };
 
+const auditAuth = {
+    /**
+     * Log refresh token reuse attempt (critical security event)
+     */
+    tokenReuseDetected: (userId, metadata = {}) => {
+        log('REFRESH_TOKEN_REUSE_DETECTED', {
+            userId,
+            action: 'refresh_token_reuse',
+            status: 'critical_security_event',
+            ...metadata,
+        });
+    },
+
+    /**
+     * Log successful password reset
+     */
+    passwordResetSuccess: (userId, metadata = {}) => {
+        log('PASSWORD_RESET_SUCCESS', {
+            userId,
+            action: 'password_reset',
+            status: 'success',
+            ...metadata,
+        });
+    },
+};
+
 module.exports = {
     audit2FA,
+    auditAuth,
     log,
 };

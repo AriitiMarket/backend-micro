@@ -30,9 +30,17 @@ module.exports = {
     return callback(null, false);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  // Omitting allowedHeaders allows any header requested in Access-Control-Request-Headers
-  exposedHeaders: ['X-Request-ID'],
-  // No cookies are used anywhere in this platform — so no credentialed CORS
-  // and therefore no cross-site request-forgery surface.
-  credentials: false,
+  allowedHeaders: [
+    'authorization',
+    'content-type',
+    'x-jurisdiction',
+    'x-request-id',
+    'Authorization',
+    'Content-Type',
+    'X-Jurisdiction',
+    'X-Request-ID',
+    'x-custom-header',
+  ],
+  exposedHeaders: ['X-Request-ID', 'x-request-id'],
+  credentials: true,
 };

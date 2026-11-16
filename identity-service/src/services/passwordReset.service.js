@@ -4,6 +4,8 @@ const usersRepository = require('../repositories/users.repository');
 const passwordResetsRepo = require('../repositories/passwordResets.repository');
 const refreshTokensRepo = require('../repositories/refreshTokens.repository');
 const { hashPassword } = require('../utils/password');
+const { withTransaction } = require('../config/database');
+const { auditAuth } = require('./auditLog.service');
 const env = require('../config/env');
 
 let nodemailer = null;
@@ -167,27 +169,32 @@ async function resetPassword({ token, newPassword, confirmPassword }) {
   }
 
   const tokenHash = hashToken(token);
-  const record = await passwordResetsRepo.findValidReset(tokenHash);
-  if (!record) {
-    const err = new Error('This password reset link is invalid or has expired');
-    err.statusCode = 400;
-    throw err;
-  }
 
-  // Hash new password and update user in database
-  const passwordHash = await hashPassword(newPassword);
-  await usersRepository.updatePassword({ id: record.user_id, hash: passwordHash });
+  return withTransaction(async (client) => {
+    const record = await passwordResetsRepo.findValidReset(tokenHash, client);
+    if (!record) {
+      const err = new Error('This password reset link is invalid or has expired');
+      err.statusCode = 400;
+      throw err;
+    }
 
-  // Mark token as consumed
-  await passwordResetsRepo.markUsed(record.id);
+    // Hash new password and update user in database
+    const passwordHash = await hashPassword(newPassword);
+    await usersRepository.updatePassword({ id: record.user_id, hash: passwordHash, client });
 
-  // Invalidate all active sessions & refresh tokens
-  await refreshTokensRepo.revokeAllForUser(record.user_id);
+    // Mark token as consumed
+    await passwordResetsRepo.markUsed(record.id, client);
 
-  return {
-    success: true,
-    message: 'Password has been reset successfully. Please sign in with your new password.',
-  };
+    // Invalidate all active sessions & refresh tokens
+    await refreshTokensRepo.revokeAllForUser(record.user_id, client);
+
+    auditAuth.passwordResetSuccess(record.user_id, { email: record.email });
+
+    return {
+      success: true,
+      message: 'Password has been reset successfully. Please sign in with your new password.',
+    };
+  });
 }
 
 module.exports = {

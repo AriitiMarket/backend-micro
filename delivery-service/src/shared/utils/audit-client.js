@@ -1,3 +1,5 @@
+'use strict';
+
 // Audit client — sends audit log entries from delivery-service to
 // identity-service.
 //
@@ -9,7 +11,7 @@
 // using the shared internal client, so the caller is attributed as `delivery`
 // rather than `gateway`, and every dependency in the platform shares one
 // timeout/trace/logging policy.
-const { createInternalClient } = require('../internal-client');
+const { createInternalClient } = require('@packages/service-client');
 const { services } = require('../../app/config/services');
 
 const client = createInternalClient({
@@ -69,8 +71,6 @@ async function sendAudit(opts) {
   });
 
   if (!res.ok) {
-    // Never thrown: an audit failure must not fail the business action it
-    // describes. The internal client has already logged the call itself.
     console.error('[AUDIT] send failed:', res.status, res.error || res.code);
   }
   return null;
@@ -84,9 +84,6 @@ function getAdminFromReq(req) {
   };
 }
 
-// The actor behind a request — recorded on every delivery lifecycle event so
-// history answers "who did this" (user id, display name, role) without the
-// domain layer ever reading the HTTP request itself.
 function getActorFromReq(req) {
   const { adminId, adminName, ipAddress } = getAdminFromReq(req);
   return {

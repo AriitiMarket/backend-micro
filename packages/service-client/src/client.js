@@ -2,7 +2,7 @@
  * Service-to-Service HTTP Client
  */
 
-const fetch = require('node-fetch');
+const fetch = typeof globalThis.fetch === 'function' ? globalThis.fetch : (() => { try { return require('node-fetch'); } catch (_) { return null; } })();
 const { ServiceCallError, ServiceTimeoutError, ServiceAuthError } = require('./errors');
 const RetryStrategy = require('./retry');
 

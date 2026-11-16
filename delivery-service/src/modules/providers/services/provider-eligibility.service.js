@@ -1,4 +1,9 @@
+'use strict';
+
 const providersRepo = require('../repositories/providers.repository');
+const availabilityService = require('./provider-availability.service');
+const capacityService = require('./provider-capacity.service');
+const coverageService = require('./provider-coverage.service');
 
 /**
  * Centralized eligibility rule check.
@@ -111,7 +116,23 @@ function findEligibleProviders(delivery = {}, providers = []) {
 }
 
 module.exports = {
+  // Eligibility logic
   isProviderEligible,
   checkEligibilityById,
   findEligibleProviders,
+
+  // Availability facade methods
+  setOnlineStatus: availabilityService.setOnlineStatus,
+  updateLocation: availabilityService.updateLocation,
+
+  // Capacity facade methods
+  incrementWorkload: capacityService.incrementWorkload,
+  decrementWorkload: capacityService.decrementWorkload,
+  completeDelivery: capacityService.completeDelivery,
+  syncAvailability: capacityService.syncAvailability,
+  availabilityForLoad: capacityService.availabilityForLoad,
+  reconcileAvailability: capacityService.reconcileAvailability,
+
+  // Coverage facade methods
+  updateCoverage: coverageService.updateCoverage,
 };

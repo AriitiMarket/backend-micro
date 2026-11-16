@@ -51,7 +51,7 @@ function orderDoc(overrides = {}) {
 
 before(async () => {
   await mongoose.connect(DB_URL);
-  Order = require('../../fulfillment/models/Orders');
+  Order = require('../../orders/models/Orders');
   Shop = require('../../selling/models/Shops');
   Product = require('../../catalog/models/Products');
   analyticsService = require('../services/analytics.service');

@@ -14,7 +14,7 @@
  */
 'use strict';
 
-const { loadCredentials, describeCredentials } = require('../shared/internal-auth');
+const { loadCredentials, describeCredentials, outboundCredentials } = require('@packages/internal-auth');
 
 function cleanUrl(value) {
   let raw = String(value == null ? '' : value).trim();
@@ -62,7 +62,7 @@ const services = {
 // request with its own per-service secret (falling back to the shared legacy
 // token when the per-service map is not configured).
 const credentials = loadCredentials(process.env, SELF);
-const outbound = require('../shared/internal-auth').outboundCredentials(credentials);
+const outbound = outboundCredentials(credentials);
 
 // host:port -> canonical service name, so the proxy can attribute a failure to
 // a service without the caller having to pass its name along.

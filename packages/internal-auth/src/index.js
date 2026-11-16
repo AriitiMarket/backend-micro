@@ -1,12 +1,17 @@
 /**
- * @aritii/internal-auth - Main Entry Point
+ * @packages/internal-auth - Main Entry Point
  */
+'use strict';
 
+const internalAuth = require('./internal-auth');
 const JWTHandler = require('./jwt');
 const CredentialsManager = require('./credentials');
 const RequestVerifier = require('./verification');
 
 module.exports = {
+  // Canonical service-to-service trust boundary
+  ...internalAuth,
+
   // JWT handling
   JWTHandler,
   createToken: (payload, secret, expiresIn) => 
@@ -15,20 +20,14 @@ module.exports = {
     JWTHandler.verify(token, secret),
   decodeToken: (token) => 
     JWTHandler.decode(token),
-  maskToken: (token) => 
-    JWTHandler.maskToken(token),
 
-  // Credentials
+  // Credentials Manager & RequestVerifier
   CredentialsManager,
-  loadCredentials: (serviceName) => 
-    CredentialsManager.loadCredentials(serviceName),
   loadAllCredentials: () => 
     CredentialsManager.loadAllCredentials(),
-
-  // Verification
   RequestVerifier,
   verifyRequest: (req, knownServices) => 
     RequestVerifier.verify(req, knownServices),
   createHeaders: (serviceName, token) => 
-    RequestVerifier.createHeaders(serviceName, token)
+    RequestVerifier.createHeaders(serviceName, token),
 };

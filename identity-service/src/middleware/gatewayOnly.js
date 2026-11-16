@@ -15,7 +15,7 @@
 //                    a user-facing route, and never a user identity.
 'use strict';
 
-const { verifyInternalRequest, loadCredentials } = require('../shared/internal-auth');
+const { verifyInternalRequest, loadCredentials } = require('@packages/internal-auth');
 
 const credentials = loadCredentials(process.env);
 

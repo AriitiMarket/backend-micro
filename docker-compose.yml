@@ -107,6 +107,8 @@ services:
       REDIS_URI: redis://:${REDIS_PASSWORD:-redis123}@redis:6379
       JWT_SECRET: ${JWT_SECRET:-your-jwt-secret}
       CLOUDINARY_URL: ${CLOUDINARY_URL:-}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-chapa_webhook_secret_test_key_123}
+      CHAPA_WEBHOOK_SECRET: ${CHAPA_WEBHOOK_SECRET:-chapa_webhook_secret_test_key_123}
       API_GATEWAY_URL: http://api-gateway:3000
       DELIVERY_SERVICE_URL: http://delivery-service:3002
       IDENTITY_SERVICE_URL: http://identity:3003
@@ -219,7 +221,7 @@ services:
     container_name: aritii-gateway
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${GATEWAY_PORT:-8000}:3000"
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000

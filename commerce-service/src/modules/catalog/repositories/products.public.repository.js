@@ -1,6 +1,6 @@
 const Product = require('../models/Products');
-const Order = require('../../fulfillment/models/Orders');
-const { ORDER_STATUSES } = require('../../fulfillment/constants/orderStatuses');
+const Order = require('../../orders/models/Orders');
+const { ORDER_STATUSES } = require('../../orders/constants/orderStatuses');
 const { inactiveProductCategoryTitles } = require('../../../shared/utils/categoryVisibility');
 
 /**

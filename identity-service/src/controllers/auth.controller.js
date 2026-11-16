@@ -11,6 +11,7 @@ const { resolveAdminAuthorization } = require('../services/adminAuthorization.se
 const { ok, created, fail } = require('../utils/response');
 const env = require('../config/env');
 const { resolveAvatar } = require('../config/imageRefs');
+const { toUserResponse } = require('../utils/user.mapper');
 
 // RFC 6749 style error for token/authorize failures, while keeping `message`
 // for the existing frontend envelope contract. `code` is the platform's
@@ -79,7 +80,7 @@ async function register(req, res, next) {
       code: code.code,
       state: req.body.state || null,
       expires_in: code.expiresIn,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: toUserResponse({ id: user.id, email: user.email, name: user.name, role: user.role }),
     }, 'User created successfully');
   } catch (err) {
     return next(err);
@@ -117,13 +118,13 @@ async function registerWithRole(req, res, next) {
       code: code.code,
       state: req.body.state || null,
       expires_in: code.expiresIn,
-      user: {
+      user: toUserResponse({
         id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
         registrationType
-      },
+      }),
       message: registrationType === 'BUYER'
         ? 'Buyer account created successfully'
         : `${registrationType} application submitted and pending approval`,
@@ -346,7 +347,7 @@ async function switchRole(req, res, next) {
       role: result.user.role,
       primary_role: result.user.primaryRole,
       capabilities: result.user.capabilities,
-      user: result.user,
+      user: toUserResponse(result.user),
     });
   } catch (err) {
     return next(err);
@@ -365,7 +366,7 @@ async function getCurrentUser(req, res, next) {
       role: user.role,
       adminScope: user.adminScope,
     });
-    return ok(res, { user: { ...user, ...authorization } });
+    return ok(res, { user: toUserResponse({ ...user, ...authorization }) });
   } catch (err) {
     return next(err);
   }

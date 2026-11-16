@@ -62,6 +62,66 @@ class ProductRepository {
     if (!isValidObjectId(id)) return Promise.resolve(null);
     return Product.findByIdAndDelete(id);
   }
+
+  /**
+   * Tenant-scoped lookup by ID and Seller (prevents IDOR)
+   */
+  findByIdAndSeller(id, sellerId, opts = {}) {
+    if (!isValidObjectId(id) || !sellerId) return Promise.resolve(null);
+    const sid = String(sellerId);
+    return Product.findOne({
+      _id: id,
+      $or: [
+        { sellerId: sid },
+        { shopId: sid },
+        { 'shop.ownerId': sid },
+      ],
+    }, null, opts);
+  }
+
+  /**
+   * Tenant-scoped lookup by ID and Shop (prevents IDOR)
+   */
+  findByIdAndShop(id, shopId, opts = {}) {
+    if (!isValidObjectId(id) || !shopId) return Promise.resolve(null);
+    return Product.findOne({ _id: id, shopId: String(shopId) }, null, opts);
+  }
+
+  /**
+   * Tenant-scoped update by ID and Seller (prevents IDOR)
+   */
+  updateByIdAndSeller(id, sellerId, data, opts = {}) {
+    if (!isValidObjectId(id) || !sellerId) return Promise.resolve(null);
+    const sid = String(sellerId);
+    return Product.findOneAndUpdate(
+      {
+        _id: id,
+        $or: [
+          { sellerId: sid },
+          { shopId: sid },
+          { 'shop.ownerId': sid },
+        ],
+      },
+      data,
+      { new: true, runValidators: true, ...opts }
+    );
+  }
+
+  /**
+   * Tenant-scoped delete by ID and Seller (prevents IDOR)
+   */
+  deleteByIdAndSeller(id, sellerId) {
+    if (!isValidObjectId(id) || !sellerId) return Promise.resolve(null);
+    const sid = String(sellerId);
+    return Product.findOneAndDelete({
+      _id: id,
+      $or: [
+        { sellerId: sid },
+        { shopId: sid },
+        { 'shop.ownerId': sid },
+      ],
+    });
+  }
   updateStock(productId, delta) {
     if (!isValidObjectId(productId)) return Promise.resolve(null);
     return Product.findByIdAndUpdate(productId, { $inc: { stock: delta } }, { new: true });
@@ -85,6 +145,24 @@ class ProductRepository {
    */
   incrementStock(productId, quantity) {
     return Product.findByIdAndUpdate(productId, { $inc: { stock: quantity, sold_out: -quantity } }, { new: true });
+  }
+
+  /**
+   * Atomically deduct stock only when sufficient stock exists (stock >= quantity).
+   * Prevents negative inventory under concurrent checkouts.
+   */
+  deductStock(productId, quantity, options = {}) {
+    const { session } = options;
+    return Product.findOneAndUpdate(
+      {
+        _id: productId,
+        stock: { $gte: quantity },
+      },
+      {
+        $inc: { stock: -quantity, sold_out: quantity },
+      },
+      { new: true, session }
+    );
   }
 
   /**
